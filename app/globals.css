@@ -960,7 +960,7 @@ button {
   letter-spacing: 0.1em;
 }
 
-.message > p {
+.message-content > p {
   margin: 0;
   color: #c9c7c1;
   font-size: 13px;
@@ -968,9 +968,94 @@ button {
   white-space: pre-wrap;
 }
 
-.message.human > p {
+.message.human .message-content > p {
   color: #e1e7cc;
   font-style: italic;
+}
+
+.message-content {
+  min-width: 0;
+}
+
+.reported-checks {
+  margin-top: 14px;
+  border: 1px solid #353740;
+  background: rgba(255, 255, 255, 0.018);
+}
+
+.reported-checks summary {
+  padding: 10px 12px;
+  color: #b8bac2;
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+}
+
+.reported-checks-note {
+  margin: 0;
+  padding: 0 12px 10px;
+  color: #777a84;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.reported-checks ul {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.reported-checks li {
+  border-left: 2px solid #747780;
+  background: #111217;
+  padding: 9px 10px;
+}
+
+.reported-checks li.check-passed {
+  border-left-color: #8cae70;
+}
+
+.reported-checks li.check-failed {
+  border-left-color: #d47f69;
+}
+
+.reported-checks li.check-blocked {
+  border-left-color: #c8a45d;
+}
+
+.reported-checks li > div {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 7px;
+  color: #777a84;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.reported-checks li strong {
+  color: #c8cbd2;
+  font-size: 8px;
+}
+
+.reported-checks code {
+  display: block;
+  color: #d8d4ca;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.reported-checks li p {
+  margin: 6px 0 0;
+  color: #94969e;
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .undelivered-steering {

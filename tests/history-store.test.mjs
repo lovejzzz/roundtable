@@ -66,6 +66,15 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
         body: "A private repository-derived observation.",
         at: "2026-07-29T12:01:00.000Z",
         round: 1,
+        checks: [
+          {
+            command: "npm test token=history-secret-value",
+            status: "passed",
+            summary: "Bearer history-bearer-secret completed.",
+            round: 1,
+            exitCode: 0,
+          },
+        ],
       },
     });
     await store.append(id, {
@@ -102,6 +111,8 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
     const snapshot = await store.get(id);
     assert.equal(snapshot.phase, "complete");
     assert.equal(snapshot.messages[0].body, "A private repository-derived observation.");
+    assert.match(snapshot.messages[0].checks[0].command, /token=\[redacted\]/);
+    assert.match(snapshot.messages[0].checks[0].summary, /Bearer \[redacted\]/);
     assert.equal(snapshot.outcome.decision, "Keep the archive local.");
 
     const directoryMode = (await stat(directory)).mode & 0o777;
@@ -109,8 +120,11 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
     assert.equal(directoryMode, 0o700);
     assert.equal(logMode, 0o600);
     const raw = await readFile(join(directory, `${id}.ndjson`), "utf8");
-    assert.doesNotMatch(raw, /Bearer|ticket|bridge key/i);
-    assert.doesNotMatch(raw, /bridge-token-secret|nested-secret|credential-secret/);
+    assert.doesNotMatch(raw, /"ticket"|bridge key/i);
+    assert.doesNotMatch(
+      raw,
+      /bridge-token-secret|nested-secret|credential-secret|history-secret-value|history-bearer-secret/,
+    );
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

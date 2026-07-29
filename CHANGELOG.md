@@ -4,6 +4,93 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.6] — 2026-07-29
+
+### Conversation
+
+Prompt: audit v0.0.0.5's new disposable test capability with focused checks when
+useful, compare test-evidence presentation, transcript navigation, prompt reuse,
+action follow-through, retry configuration, and runtime observability, then
+choose one bounded improvement with concrete UX, data, failure, privacy, and
+acceptance criteria.
+
+Across two rounds, Codex and Claude selected **first-class agent-reported check
+evidence**. Codex ran the isolated sandbox test successfully and found its
+loopback-dependent bridge tests environment-blocked. Claude's first Bash attempt
+exposed an overly broad home-folder write denial. Both agreed that passed,
+failed, and blocked must remain distinct; that the UI must say “Reported by
+Codex/Claude” rather than imply bridge verification; and that evidence must
+survive the entire transcript and archive pipeline. They also classified the
+copy cancellation, sibling isolation, stale cleanup, and Claude runtime issues as
+release-blocking corrections to v0.0.0.5 rather than competing features.
+
+### Added
+
+- A trailing, versioned `roundtable-checks` JSON transport for optional check
+  reports with command, closed passed/failed/blocked status, optional exit code,
+  concise summary, and server-assigned producing round.
+- All-or-nothing parsing after a successful agent attempt. A fully valid final
+  block becomes structured evidence and is removed from prose; an absent or
+  malformed block leaves the complete reply untouched.
+- Accessible native disclosure controls labeled **Reported by <agent>**, with
+  mixed-status counts and expanded status, round, exit code, command, and
+  summary rows.
+- An explicit notice that evidence is agent-reported rather than independently
+  verified and that each agent's disposable workspace is cumulative across its
+  turns.
+- Evidence propagation through subsequent-agent transcripts, Outcome synthesis,
+  SSE replay and snapshots, opted-in history reconstruction, same-tab reconnect,
+  copy, and Markdown export.
+
+### Privacy, provenance, and resilience
+
+- Caps reports at six checks and bounds command and summary lengths; accepts only
+  the closed status vocabulary and integer exit codes from 0 through 255.
+- Redacts credential-shaped strings before SSE or persistence, replaces known
+  disposable roots with `$SANDBOX`, and never captures raw stdout automatically.
+- Applies the same string redactor throughout local history in addition to
+  removing credential-shaped structural fields.
+- Preserves prose/evidence disagreement without silently reconciling it and
+  avoids any badge when no valid evidence was reported.
+- Keeps synthesis in a read-only Codex sandbox even though discussion turns may
+  run optional checks.
+
+### Sandbox corrections
+
+- Replaced the overlapping temporary prefix with
+  `roundtable-agent-sandbox-*`; reply-output directories now use a distinct
+  prefix.
+- Added 24-hour stale-root cleanup scoped to the dedicated sandbox prefix, so a
+  bridge restart cannot delete a concurrent room or pending reply.
+- Made project copying observe Stop and a two-minute preparation deadline, with
+  incomplete roots removed before agent startup.
+- Canonicalized temporary roots before generating OS profiles.
+- Allowed Claude's required `.claude` runtime state while denying writes to the
+  selected project and existing home entries, and denying both reads and writes
+  to Codex's sibling workspace.
+- Added an outer sibling-deny profile to later Codex turns and synthesis when
+  Claude's copy exists.
+- Replaced `sandbox-exec` presence detection with a real trivial-profile startup
+  probe; failed probes now keep Claude on the existing read-only path and surface
+  the reason in room context.
+
+### Verification
+
+- Twenty-two bridge, archive, parser, redaction, copy, stale-cleanup, and sandbox
+  tests, including a real macOS profile that permits Claude runtime state while
+  blocking the project and sibling copy. Nested managed environments skip only
+  that process-level assertion when the kernel refuses nested profiles.
+- Production build, lint, two rendered-page contract checks, and diff
+  validation.
+- The two-round Codex–Claude design review completed with a structured consensus
+  brief.
+- A separate one-round real-CLI smoke run had both agents invoke the focused
+  sandbox suite. Codex's evidence rendered as an expandable blocked report,
+  reached Claude's next-turn transcript with provenance intact, and was included
+  in the completion brief. Claude also emitted two structured results, proving
+  Bash startup and the end-to-end evidence transport; its nested-profile finding
+  led directly to the startup probe and nested-aware test behavior above.
+
 ## [v0.0.0.5] — 2026-07-29
 
 ### Direction

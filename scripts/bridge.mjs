@@ -1,14 +1,18 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { access, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { createBridge } from "./bridge-core.mjs";
 import { createHistoryStore } from "./history-store.mjs";
 import {
+  buildClaudeSandboxProfile,
+  buildSiblingDenyProfile,
   cleanupTestSandboxes,
   ensureTestSandbox,
+  getTestSandboxInfo,
+  sweepStaleTestSandboxes,
 } from "./test-sandbox.mjs";
 
 const host = "127.0.0.1";
@@ -42,10 +46,31 @@ function runSmallCommand(command, args) {
   });
 }
 
+function commandSucceeds(command, args) {
+  return new Promise((resolve) => {
+    if (!command) return resolve(false);
+    const child = spawn(command, args, { stdio: "ignore" });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
 const codexPath = await findExecutable("codex");
 const claudePath = await findExecutable("claude");
-const sandboxExecPath =
+const sandboxExecCandidate =
   process.platform === "darwin" ? await findExecutable("sandbox-exec") : "";
+const sandboxExecPath =
+  sandboxExecCandidate &&
+  (await commandSucceeds(sandboxExecCandidate, [
+    "-p",
+    "(version 1)(allow default)",
+    "/usr/bin/true",
+  ]))
+    ? sandboxExecCandidate
+    : "";
+const claudeHomeEntries = await readdir(homedir(), { withFileTypes: true })
+  .then((entries) => entries.map((entry) => entry.name))
+  .catch(() => []);
 const codexConfigText = await readFile(
   join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
   "utf8",
@@ -84,6 +109,11 @@ const health = {
   testSandbox: {
     codex: Boolean(codexPath),
     claude: Boolean(claudePath && sandboxExecPath),
+    claudeReason: sandboxExecPath
+      ? ""
+      : sandboxExecCandidate
+        ? "The macOS write guard could not apply a profile."
+        : "A supported OS write guard is unavailable.",
   },
   models: {
     codex: {
@@ -145,7 +175,14 @@ function terminateSessionProcess(session, reason) {
   return handle.closed;
 }
 
-function runManagedProcess(session, command, args, input, workingDirectory = session.projectPath) {
+function runManagedProcess(
+  session,
+  command,
+  args,
+  input,
+  workingDirectory = session.projectPath,
+  environment = {},
+) {
   if (session.stopRequested) {
     const error = new Error("Discussion stopped.");
     error.code = "USER_STOP";
@@ -158,7 +195,7 @@ function runManagedProcess(session, command, args, input, workingDirectory = ses
   const child = spawn(command, args, {
     cwd: workingDirectory,
     detached: process.platform !== "win32",
-    env: { ...process.env, CI: "1", NO_COLOR: "1", TERM: "dumb" },
+    env: { ...process.env, CI: "1", NO_COLOR: "1", TERM: "dumb", ...environment },
     stdio: ["pipe", "pipe", "pipe"],
   });
   const handle = {
@@ -220,9 +257,9 @@ function runManagedProcess(session, command, args, input, workingDirectory = ses
   });
 }
 
-async function runCodex(session, prompt) {
+async function runCodex(session, prompt, purpose) {
   const workingDirectory = await ensureTestSandbox(session, "codex");
-  const outputDirectory = await mkdtemp(join(tmpdir(), "roundtable-codex-"));
+  const outputDirectory = await mkdtemp(join(tmpdir(), "roundtable-agent-reply-"));
   const outputFile = join(outputDirectory, "last-message.txt");
   try {
     const args = [
@@ -234,7 +271,7 @@ async function runCodex(session, prompt) {
       "--cd",
       workingDirectory,
       "--sandbox",
-      "workspace-write",
+      purpose === "synthesis" ? "read-only" : "workspace-write",
       "--output-last-message",
       outputFile,
     ];
@@ -243,7 +280,19 @@ async function runCodex(session, prompt) {
       args.push("--config", `model_reasoning_effort="${session.codexEffort}"`);
     }
     args.push("-");
-    const stdout = await runManagedProcess(session, codexPath, args, prompt, workingDirectory);
+    const siblingRoot = getTestSandboxInfo(session, "claude")?.root || "";
+    const command = sandboxExecPath && siblingRoot ? sandboxExecPath : codexPath;
+    const processArgs =
+      sandboxExecPath && siblingRoot
+        ? ["-p", buildSiblingDenyProfile(siblingRoot), codexPath, ...args]
+        : args;
+    const stdout = await runManagedProcess(
+      session,
+      command,
+      processArgs,
+      prompt,
+      workingDirectory,
+    );
     return await readFile(outputFile, "utf8").catch(() => stdout);
   } finally {
     await rm(outputDirectory, { recursive: true, force: true });
@@ -273,16 +322,13 @@ async function runClaude(session, prompt) {
   if (session.claudeEffort) args.push("--effort", session.claudeEffort);
 
   if (sandboxExecPath) {
-    const escapedHomePath = homedir()
-      .replaceAll("\\", "\\\\")
-      .replaceAll('"', '\\"');
-    const escapedProjectPath = session.projectPath
-      .replaceAll("\\", "\\\\")
-      .replaceAll('"', '\\"');
-    const profile = `(version 1)
-(allow default)
-(deny file-write* (subpath "${escapedHomePath}"))
-(deny file-write* (subpath "${escapedProjectPath}"))`;
+    const siblingRoot = getTestSandboxInfo(session, "codex")?.root || "";
+    const profile = buildClaudeSandboxProfile({
+      home: homedir(),
+      homeEntries: claudeHomeEntries,
+      projectPath: session.projectPath,
+      siblingRoot,
+    });
     return runManagedProcess(
       session,
       sandboxExecPath,
@@ -295,8 +341,8 @@ async function runClaude(session, prompt) {
 }
 
 const agentRunner = {
-  run({ session, role, prompt }) {
-    return role === "codex" ? runCodex(session, prompt) : runClaude(session, prompt);
+  run({ session, role, prompt, purpose }) {
+    return role === "codex" ? runCodex(session, prompt, purpose) : runClaude(session, prompt);
   },
   stop(session, reason) {
     return terminateSessionProcess(session, reason);
@@ -306,6 +352,7 @@ const agentRunner = {
   },
 };
 
+await sweepStaleTestSandboxes();
 const historyStore = createHistoryStore();
 await historyStore.initialize();
 

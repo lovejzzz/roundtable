@@ -2,7 +2,7 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
-Current release: **v0.0.0.5**
+Current release: **v0.0.0.6**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -28,7 +28,8 @@ The command starts the local bridge and the web room, then opens the connected r
    project and read the same shared transcript. Every message records its model
    and reasoning effort.
 5. Each agent may optionally run focused existing tests, linters, type checks, or
-   builds before making a claim. Test artifacts stay in its private copy.
+   builds before making a claim. Test artifacts stay in its private copy, and a
+   structured result appears only when the agent reports one.
 6. Add a steering note at any time. It is added to the transcript before the next agent turn.
 7. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
@@ -85,17 +86,39 @@ an agent.
 
 Roundtable lazily creates a different temporary project copy for each agent.
 Codex receives workspace-write access only inside its CLI sandbox. On macOS,
-Claude receives Bash only behind an OS write guard that protects both the real
-project and the user's home folder; without that guard, Claude keeps its
-read-only Read, Glob, and Grep tool set. The copies omit repository metadata and
-generated build directories, reuse installed dependencies when present, and are
-deleted when the discussion ends.
+Claude receives Bash only after a real startup probe confirms the OS write guard
+can apply a profile. The guard protects the real project and the other agent's
+workspace while permitting Claude's required runtime state; without it, Claude
+keeps its read-only Read, Glob, and Grep tool set. The copies omit repository
+metadata and generated build directories, reuse installed dependencies when
+present, and are deleted when the discussion ends. Preparation responds to Stop
+and has a two-minute limit. Roots left by a crashed bridge use a dedicated prefix
+and are removed after they become stale without touching live or reply-output
+directories.
 
 Testing remains optional. The discussion prompt asks agents to run only focused,
 existing checks when evidence would improve a claim, to report the exact command
 and result, and not to intentionally edit source files. A generated artifact or
 an accidental edit in one copy cannot change the real project or the other
 agent's view.
+
+## Agent-reported check evidence
+
+When an agent runs a check, it may end its reply with a bounded, versioned
+`roundtable-checks` JSON block. Roundtable validates and removes that transport
+block, then shows an expandable disclosure such as **Reported by Codex · 1
+passed**. Results use explicit `passed`, `failed`, and `blocked` states and show
+the command, concise summary, producing round, and optional exit code.
+
+The label is deliberate: the bridge receives the agent's final report but does
+not independently observe its shell commands. Evidence is never described as
+verified, and a disagreement between prose and structured status remains
+visible. Valid evidence survives subsequent-agent prompts, completion synthesis,
+same-tab reconnect, opted-in local history, copy, and Markdown export. Malformed
+blocks stay untouched as ordinary reply text. Commands and summaries are
+length-bounded, secret-redacted, and normalized so temporary roots appear as
+`$SANDBOX`; raw command output is never captured automatically. Each agent's
+copy is cumulative across its turns, and the disclosure says so.
 
 The bridge binds only to `127.0.0.1` and requires a fresh random key on every run.
 

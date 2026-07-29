@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildOutcomeInput,
+  buildTranscript,
   createBridge,
   extractOutcomeJson,
+  extractReportedChecks,
 } from "../scripts/bridge-core.mjs";
 
 const token = "test-bridge-token";
@@ -223,6 +225,34 @@ test("builds coverage-aware outcome input and validates fenced JSON", () => {
   );
 });
 
+test("extracts bounded agent-reported checks without losing malformed replies", () => {
+  const sandbox = "/private/tmp/roundtable-agent-sandbox-codex-example/workspace";
+  const raw = `Evidence-backed recommendation.
+
+\`\`\`roundtable-checks
+{"version":1,"checks":[{"command":"npm test -- --root ${sandbox}","status":"blocked","summary":"token=super-secret-value could not listen","exitCode":1}]}
+\`\`\``;
+  const parsed = extractReportedChecks(raw, { sandboxPaths: [sandbox], round: 2 });
+  assert.equal(parsed.body, "Evidence-backed recommendation.");
+  assert.deepEqual(parsed.checks, [
+    {
+      command: "npm test -- --root $SANDBOX",
+      status: "blocked",
+      summary: "token=[redacted] could not listen",
+      round: 2,
+      exitCode: 1,
+    },
+  ]);
+  const transcript = buildTranscript([
+    { author: "Codex", body: parsed.body, checks: parsed.checks },
+  ]);
+  assert.match(transcript, /agent-reported, not bridge-verified/i);
+  assert.match(transcript, /\[BLOCKED\] npm test/);
+
+  const malformed = "Keep this whole reply.\n```roundtable-checks\n{\"version\":1}\n```";
+  assert.deepEqual(extractReportedChecks(malformed), { body: malformed, checks: [] });
+});
+
 test("a synthesis failure preserves the transcript and completes with an unavailable outcome", async () => {
   const agentRunner = {
     run: async ({ role, purpose }) => {
@@ -381,7 +411,12 @@ test("retries the same failed role and turn without changing its prompt or dupli
       if (role === "codex" && turnAttempts++ === 0) {
         throw new Error("529 Overloaded");
       }
-      return `${role} recovered reply`;
+      return role === "codex"
+        ? `codex recovered reply
+\`\`\`roundtable-checks
+{"version":1,"checks":[{"command":"npm test","status":"passed","summary":"Recovery check passed.","exitCode":0}]}
+\`\`\``
+        : `${role} recovered reply`;
     },
     stop: async () => {},
   };
@@ -439,6 +474,15 @@ test("retries the same failed role and turn without changing its prompt or dupli
     );
     assert.equal(completed.failedTurn, null);
     assert.equal(completed.outcome.status, "available");
+    assert.deepEqual(completed.messages[0].checks, [
+      {
+        command: "npm test",
+        status: "passed",
+        summary: "Recovery check passed.",
+        round: 1,
+        exitCode: 0,
+      },
+    ]);
   } finally {
     await bridge.close();
   }

@@ -1,15 +1,34 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { redactVisibleString } from "./redaction.mjs";
 
 export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interrupted"]);
 const OUTCOME_OWNERS = new Set(["You", "Codex", "Claude", "Unassigned"]);
+const CHECK_STATUSES = new Set(["passed", "failed", "blocked"]);
+const CHECK_FENCE = /(?:^|\n)```roundtable-checks\s*\n([\s\S]*?)\n```\s*$/;
+
+function reportedChecksText(message) {
+  if (!message.checks?.length) return "";
+  return [
+    `REPORTED CHECKS BY ${message.author.toUpperCase()} (agent-reported, not bridge-verified):`,
+    ...message.checks.map(
+      (check) =>
+        `- [${check.status.toUpperCase()}] ${check.command} — ${check.summary}` +
+        (Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""),
+    ),
+  ].join("\n");
+}
+
+function messageText(message) {
+  return [String(message.body || ""), reportedChecksText(message)].filter(Boolean).join("\n\n");
+}
 
 export function buildTranscript(messages, maxCharacters = 48_000) {
   const selected = [];
   let length = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    const block = `${message.author.toUpperCase()}:\n${message.body}`;
+    const block = `${message.author.toUpperCase()}:\n${messageText(message)}`;
     if (selected.length && length + block.length + 2 > maxCharacters) break;
     selected.unshift(block);
     length += block.length + 2;
@@ -30,7 +49,7 @@ export function buildOutcomeInput(topic, messages, maxCharacters = 96_000) {
     index,
     author: message.author,
     round: message.round ?? null,
-    body: String(message.body || ""),
+    body: messageText(message),
   }));
   const totalCharacters = normalized.reduce((sum, message) => sum + message.body.length, 0);
   const metadataLength = normalized.reduce(
@@ -111,7 +130,64 @@ export function extractOutcomeJson(raw) {
   };
 }
 
-function makeMessage(now, role, body, round, model, effort) {
+export function extractReportedChecks(raw, { sandboxPaths = [], round } = {}) {
+  const source = String(raw || "").trim();
+  const match = source.match(CHECK_FENCE);
+  if (!match) return { body: source, checks: [] };
+  let payload;
+  try {
+    payload = JSON.parse(match[1]);
+  } catch {
+    return { body: source, checks: [] };
+  }
+  if (
+    payload?.version !== 1 ||
+    !Array.isArray(payload.checks) ||
+    payload.checks.length < 1 ||
+    payload.checks.length > 6
+  ) {
+    return { body: source, checks: [] };
+  }
+  const normalizedPaths = sandboxPaths
+    .map((path) => String(path || ""))
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  const sanitize = (value, limit) => {
+    let visible = redactVisibleString(value, limit * 2);
+    for (const path of normalizedPaths) visible = visible.replaceAll(path, "$SANDBOX");
+    visible = visible.replace(
+      /\/(?:private\/)?var\/folders\/[^\s"'`]+\/roundtable-agent-sandbox-[^\s"'`]+/g,
+      "$SANDBOX",
+    );
+    return visible.trim().slice(0, limit);
+  };
+  const checks = [];
+  for (const candidate of payload.checks) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return { body: source, checks: [] };
+    }
+    const command = sanitize(candidate.command, 320);
+    const status = String(candidate.status || "").trim().toLowerCase();
+    const summary = sanitize(candidate.summary, 600);
+    if (!command || !summary || !CHECK_STATUSES.has(status)) {
+      return { body: source, checks: [] };
+    }
+    const check = { command, status, summary, ...(round ? { round } : {}) };
+    if (candidate.exitCode !== undefined) {
+      if (!Number.isInteger(candidate.exitCode) || candidate.exitCode < 0 || candidate.exitCode > 255) {
+        return { body: source, checks: [] };
+      }
+      check.exitCode = candidate.exitCode;
+    }
+    checks.push(check);
+  }
+  return {
+    body: source.slice(0, match.index).trim(),
+    checks,
+  };
+}
+
+function makeMessage(now, role, body, round, model, effort, checks = []) {
   return {
     id: randomUUID(),
     author: role === "codex" ? "Codex" : role === "claude" ? "Claude" : "You",
@@ -121,19 +197,13 @@ function makeMessage(now, role, body, round, model, effort) {
     ...(round ? { round } : {}),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
+    ...(checks.length ? { checks } : {}),
   };
 }
 
 function safeVisibleError(error) {
   const raw = error instanceof Error ? error.message : "An agent turn failed.";
-  return raw
-    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{8,}/gi, "Bearer [redacted]")
-    .replace(
-      /\b(authorization|api[_-]?key|bridge[_-]?key|credential|sse[_-]?ticket|ticket|token)\s*[:=]\s*[^\s,;]+/gi,
-      "$1=[redacted]",
-    )
-    .replace(/\b(?:sk-|art_v1_|api[_-]?key[:=]?)[A-Za-z0-9._-]{10,}\b/gi, "[redacted]")
-    .slice(0, 700);
+  return redactVisibleString(raw, 700);
 }
 
 function buildPrompt(session, role, turn) {
@@ -152,7 +222,14 @@ inspection and commands; never target the original absolute project path above. 
 focused existing tests, linters, type checks, or builds when they would validate a claim. This is
 optional, not a requirement. Do not intentionally edit source files. Generated test and build
 artifacts are allowed in this disposable copy and will be deleted after the discussion. If you run
-a check, report the command and its result accurately.
+a check, report the command and its result accurately. Only when you ran at least one check, end
+your reply with this versioned block (valid JSON, no text after the fence):
+\`\`\`roundtable-checks
+{"version":1,"checks":[{"command":"npm test","status":"passed","exitCode":0,"summary":"concise result, not raw output"}]}
+\`\`\`
+The only statuses are "passed", "failed", and "blocked". Use "blocked" only when the environment
+prevented a meaningful result. Omit exitCode when none exists. This is agent-reported evidence,
+not independent bridge verification.
 
 DISCUSSION GOAL
 ${session.topic}
@@ -375,8 +452,8 @@ export function createBridge({
           totalTurns: session.totalTurns,
           failedTurn: null,
         });
-        let body;
-        while (body === undefined) {
+        let replyText;
+        while (replyText === undefined) {
           if (session.stopRequested) break turnLoop;
           const prompt = buildPrompt(session, role, turn);
           try {
@@ -384,7 +461,7 @@ export function createBridge({
             if (!reply) {
               throw new Error(`${role === "codex" ? "Codex" : "Claude"} returned no text.`);
             }
-            body = reply;
+            replyText = reply;
           } catch (error) {
             if (
               session.phase === "stopping" ||
@@ -427,9 +504,16 @@ export function createBridge({
         session.failedTurn = null;
         const model = role === "codex" ? session.codexModel : session.claudeModel;
         const effort = role === "codex" ? session.codexEffort : session.claudeEffort;
+        const sandboxPaths = [...(session.testSandboxes?.values() || [])].flatMap(
+          ({ root, workspace }) => [root, workspace],
+        );
+        const { body, checks } = extractReportedChecks(replyText, {
+          sandboxPaths,
+          round,
+        });
         emit(session, {
           type: "message",
-          message: makeMessage(now, role, body, round, model, effort),
+          message: makeMessage(now, role, body, round, model, effort, checks),
         });
         session.completedTurns = turn + 1;
         emit(session, {

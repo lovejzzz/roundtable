@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { redactVisibleString } from "./redaction.mjs";
 
 const TERMINAL_HISTORY_STATUSES = new Set(["complete", "stopped", "error", "interrupted"]);
 const DEFAULT_MAX_RECORDS = 50;
@@ -46,6 +47,7 @@ function baseIndex() {
 }
 
 function sanitizeEventValue(value) {
+  if (typeof value === "string") return redactVisibleString(value);
   if (Array.isArray(value)) return value.map(sanitizeEventValue);
   if (!value || typeof value !== "object") return value;
   return Object.fromEntries(

@@ -23,6 +23,14 @@ import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "
 
 type Speaker = "codex" | "claude" | "human";
 
+type ReportedCheck = {
+  command: string;
+  status: "passed" | "failed" | "blocked";
+  summary: string;
+  exitCode?: number;
+  round?: number;
+};
+
 type Message = {
   id: string;
   author: string;
@@ -32,6 +40,7 @@ type Message = {
   round?: number;
   model?: string;
   effort?: string;
+  checks?: ReportedCheck[];
 };
 
 type OutcomeCoverage = {
@@ -77,6 +86,7 @@ type BridgeHealth = {
   testSandbox?: {
     codex: boolean;
     claude: boolean;
+    claudeReason?: string;
   };
 };
 
@@ -162,6 +172,15 @@ const SAMPLE_MESSAGES: Message[] = [
     at: "10:42",
     round: 1,
     body: "I mapped the request path and found one decision that should come first: keep the orchestration local, then expose only the discussion stream to the interface. That preserves access to the repository without turning the browser into a privileged process.",
+    checks: [
+      {
+        command: "npm run test:bridge",
+        status: "passed",
+        summary: "Focused bridge checks completed.",
+        exitCode: 0,
+        round: 1,
+      },
+    ],
   },
   {
     id: "sample-2",
@@ -230,6 +249,44 @@ function displayTime(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function reportedCheckCounts(checks: ReportedCheck[]) {
+  return (["passed", "failed", "blocked"] as const)
+    .map((status) => {
+      const count = checks.filter((check) => check.status === status).length;
+      return count ? `${count} ${status}` : "";
+    })
+    .filter(Boolean)
+    .join(" · ");
+}
+
+function ReportedChecks({ message }: { message: Message }) {
+  if (!message.checks?.length) return null;
+  return (
+    <details className="reported-checks">
+      <summary>
+        Reported by {message.author} · {reportedCheckCounts(message.checks)}
+      </summary>
+      <p className="reported-checks-note">
+        Agent-reported, not independently verified. This agent&apos;s disposable workspace is
+        cumulative across its turns.
+      </p>
+      <ul>
+        {message.checks.map((check, index) => (
+          <li className={`check-${check.status}`} key={`${check.command}-${index}`}>
+            <div>
+              <strong>{check.status}</strong>
+              {check.round && <span>Round {check.round}</span>}
+              {Number.isInteger(check.exitCode) && <span>Exit {check.exitCode}</span>}
+            </div>
+            <code>{check.command}</code>
+            <p>{check.summary}</p>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function OutcomeCard({
@@ -833,6 +890,21 @@ export default function Home() {
         message.body,
         "",
       );
+      if (message.checks?.length) {
+        lines.push(`### Agent-reported checks — ${message.author}`, "");
+        lines.push(
+          "> These results were reported by the agent, not independently verified. The agent workspace is cumulative across its turns.",
+          "",
+        );
+        message.checks.forEach((check) => {
+          lines.push(
+            `- **${check.status.toUpperCase()}** \`${check.command}\`${
+              Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""
+            }${check.round ? ` · Round ${check.round}` : ""} — ${check.summary}`,
+          );
+        });
+        lines.push("");
+      }
     }
     if (pendingSteering.length) {
       lines.push(
@@ -1289,7 +1361,10 @@ export default function Home() {
                     </small>
                   </div>
                 </div>
-                <p>{message.body}</p>
+                <div className="message-content">
+                  <p>{message.body}</p>
+                  <ReportedChecks message={message} />
+                </div>
               </article>
             ))}
             {pendingSteering.length > 0 && (
@@ -1470,10 +1545,11 @@ export default function Home() {
               <span className="safe-dot" />
               <p>
                 Agents work from separate disposable copies, never the selected project. Codex
-                writes only inside its sandbox. Claude stays read-only
+                writes only inside its sandbox. Claude&apos;s macOS guard protects the selected
+                project and Codex&apos;s workspace
                 {health?.projectWriteGuard
-                  ? " across the selected project and home folder under a macOS write guard"
-                  : " when an OS write guard is unavailable"}.
+                  ? " while allowing its own CLI runtime files"
+                  : "; without that guard, Claude stays read-only"}.
               </p>
             </div>
           </section>
@@ -1486,7 +1562,10 @@ export default function Home() {
                 Focused checks in separate disposable project copies are optional.
                 {health?.testSandbox?.codex && health?.testSandbox?.claude
                   ? " Both agents can use them, and generated files are deleted when the room ends."
-                  : " Codex can use them; Claude remains read-only because an OS write guard is unavailable."}
+                  : ` Codex can use them; Claude remains read-only. ${
+                      health?.testSandbox?.claudeReason ||
+                      "A supported OS write guard is unavailable."
+                    }`}
               </p>
             </div>
           </section>
