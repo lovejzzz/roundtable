@@ -4,6 +4,66 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.7] — 2026-07-29
+
+### Conversation
+
+Prompt: audit the tools Codex and Claude actually have in v0.0.0.6, run focused
+checks where useful, classify possible additions by necessity and risk, and
+converge on the smallest justified capability change.
+
+Across two rounds, both agents concluded that no new raw tool is justified:
+existing read/search plus sandboxed Bash already cover installed tests, builds,
+lint, type checks, coverage, artifacts, and local logs. Codex initially proposed
+precomputed Git status and diff context, but Claude demonstrated that automatic
+patch sharing exceeds the current redactor's privacy guarantees. Git content,
+network installs, browser automation, MCP/connectors, source editing, subagents,
+and dedicated test tools were therefore deferred.
+
+The live audit instead found two existing exposures. Claude's guarded Bash could
+read common host credential paths, and both CLI children inherited the same
+`ROUNDTABLE_BRIDGE_TOKEN` used to authenticate the local control plane. Claude
+also verified that simply adding `(deny network*)` would block its own model API
+transport because the macOS profile wraps the entire CLI.
+
+### Security hardening
+
+- Agent child environments now remove `ROUNDTABLE_BRIDGE_TOKEN` after all
+  inherited and per-call environment values are merged, while preserving the
+  variables required by each signed-in CLI.
+- Codex's native permission profiles and Claude's outer macOS profile now block
+  reads from common SSH, cloud, GitHub, Kubernetes, Docker, npm, netrc, Git
+  credential, and Python package credential locations while continuing to allow
+  the `.codex` and `.claude` runtime access required by their owning CLI. Each
+  agent content-denies the other CLI's auth/config directory, and Codex also
+  denies Claude's sibling `.claude.json` state file.
+- Claude home entries are refreshed before each spawn, and `.claude` writes are
+  narrowed to known runtime entries; existing settings and other non-runtime
+  state are write-denied.
+- The room now discloses that bridge credentials are not passed to agents and
+  that Claude's guarded shell still has network access because its model client
+  is inside the same OS profile.
+- Git patch sharing remains disabled. The existing regex redactor is not treated
+  as sufficient protection for arbitrary repository content.
+
+### Verification
+
+- Added a deterministic child-environment test proving inherited and override
+  bridge tokens are removed without dropping ordinary runtime variables.
+- Expanded the real Claude macOS Seatbelt test to probe every protected
+  credential path, restrict `.claude` settings writes, retain disposable
+  workspace writes, and preserve project/sibling isolation. Added deterministic
+  assertions for Codex's native workspace/read-only profiles and deny list.
+- Ran a live verification room after the first implementation. It confirmed
+  bridge-token removal and Claude's host-path denials, exposed the missing Codex
+  deny policy and overly broad `.claude` write carve-out, and drove the
+  refinements above before release. A second gate rejected nested Seatbelt for
+  Codex, so Codex now uses its native `:workspace` permission profile. The final
+  gate then confirmed both agents' environment, workspace, common credential,
+  and cross-CLI directory boundaries and caught the final `.claude.json` mirror
+  omission.
+- Added rendered-HTML assertions for the new security and network disclosure.
+
 ## [v0.0.0.6] — 2026-07-29
 
 ### Conversation

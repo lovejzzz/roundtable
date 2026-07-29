@@ -4,11 +4,12 @@ import { access, mkdtemp, readFile, readdir, realpath, rm, stat } from "node:fs/
 import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
+import { buildAgentEnvironment } from "./agent-environment.mjs";
 import { createBridge } from "./bridge-core.mjs";
 import { createHistoryStore } from "./history-store.mjs";
 import {
+  buildCodexPermissionArgs,
   buildClaudeSandboxProfile,
-  buildSiblingDenyProfile,
   cleanupTestSandboxes,
   ensureTestSandbox,
   getTestSandboxInfo,
@@ -68,9 +69,6 @@ const sandboxExecPath =
   ]))
     ? sandboxExecCandidate
     : "";
-const claudeHomeEntries = await readdir(homedir(), { withFileTypes: true })
-  .then((entries) => entries.map((entry) => entry.name))
-  .catch(() => []);
 const codexConfigText = await readFile(
   join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
   "utf8",
@@ -195,7 +193,7 @@ function runManagedProcess(
   const child = spawn(command, args, {
     cwd: workingDirectory,
     detached: process.platform !== "win32",
-    env: { ...process.env, CI: "1", NO_COLOR: "1", TERM: "dumb", ...environment },
+    env: buildAgentEnvironment(environment),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const handle = {
@@ -270,26 +268,25 @@ async function runCodex(session, prompt, purpose) {
       "--ephemeral",
       "--cd",
       workingDirectory,
-      "--sandbox",
-      purpose === "synthesis" ? "read-only" : "workspace-write",
       "--output-last-message",
       outputFile,
     ];
+    const siblingRoot = getTestSandboxInfo(session, "claude")?.root || "";
+    args.push(
+      ...buildCodexPermissionArgs({
+        readOnly: purpose === "synthesis",
+        siblingRoot,
+      }),
+    );
     if (session.codexModel) args.push("--model", session.codexModel);
     if (session.codexEffort) {
       args.push("--config", `model_reasoning_effort="${session.codexEffort}"`);
     }
     args.push("-");
-    const siblingRoot = getTestSandboxInfo(session, "claude")?.root || "";
-    const command = sandboxExecPath && siblingRoot ? sandboxExecPath : codexPath;
-    const processArgs =
-      sandboxExecPath && siblingRoot
-        ? ["-p", buildSiblingDenyProfile(siblingRoot), codexPath, ...args]
-        : args;
     const stdout = await runManagedProcess(
       session,
-      command,
-      processArgs,
+      codexPath,
+      args,
       prompt,
       workingDirectory,
     );
@@ -323,9 +320,18 @@ async function runClaude(session, prompt) {
 
   if (sandboxExecPath) {
     const siblingRoot = getTestSandboxInfo(session, "codex")?.root || "";
+    const [homeEntries, claudeHomeEntries] = await Promise.all([
+      readdir(homedir(), { withFileTypes: true })
+        .then((entries) => entries.map((entry) => entry.name))
+        .catch(() => []),
+      readdir(join(homedir(), ".claude"), { withFileTypes: true })
+        .then((entries) => entries.map((entry) => entry.name))
+        .catch(() => []),
+    ]);
     const profile = buildClaudeSandboxProfile({
       home: homedir(),
-      homeEntries: claudeHomeEntries,
+      homeEntries,
+      claudeHomeEntries,
       projectPath: session.projectPath,
       siblingRoot,
     });

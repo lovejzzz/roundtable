@@ -1545,11 +1545,11 @@ export default function Home() {
               <span className="safe-dot" />
               <p>
                 Agents work from separate disposable copies, never the selected project. Codex
-                writes only inside its sandbox. Claude&apos;s macOS guard protects the selected
-                project and Codex&apos;s workspace
+                writes only inside its native sandbox.
                 {health?.projectWriteGuard
-                  ? " while allowing its own CLI runtime files"
-                  : "; without that guard, Claude stays read-only"}.
+                  ? " Codex’s native permissions and Claude’s outer macOS guard also read-deny common host credential paths, isolate their workspaces, and keep each CLI operational with its required runtime access. Claude’s shell can still use the network because its guard also wraps the model client."
+                  : " Without a supported OS guard, Claude stays read-only."}
+                {" "}Bridge credentials are never passed to either agent process.
               </p>
             </div>
           </section>
@@ -1561,7 +1561,7 @@ export default function Home() {
               <p>
                 Focused checks in separate disposable project copies are optional.
                 {health?.testSandbox?.codex && health?.testSandbox?.claude
-                  ? " Both agents can use them, and generated files are deleted when the room ends."
+                  ? " Both agents can use them, generated files are deleted when the room ends, and results remain agent-reported rather than bridge-verified."
                   : ` Codex can use them; Claude remains read-only. ${
                       health?.testSandbox?.claudeReason ||
                       "A supported OS write guard is unavailable."

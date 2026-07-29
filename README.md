@@ -2,7 +2,7 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
-Current release: **v0.0.0.6**
+Current release: **v0.0.0.7**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -87,9 +87,16 @@ an agent.
 Roundtable lazily creates a different temporary project copy for each agent.
 Codex receives workspace-write access only inside its CLI sandbox. On macOS,
 Claude receives Bash only after a real startup probe confirms the OS write guard
-can apply a profile. The guard protects the real project and the other agent's
-workspace while permitting Claude's required runtime state; without it, Claude
-keeps its read-only Read, Glob, and Grep tool set. The copies omit repository
+can apply a profile. Codex's native permission profile and Claude's outer macOS
+guard protect the real project, isolate the agents' workspaces, and read-deny
+common host credential paths.
+Each CLI remains operational with the runtime/auth access it requires; Claude
+writes only to a bounded set of runtime entries while settings and other
+existing `.claude` state remain write-denied, and each agent is denied the other
+CLI's auth/config path. Bridge credentials are removed from both agent
+environments before either CLI starts. Home entries are refreshed for every
+Claude turn rather than being frozen at bridge startup. Without the OS guard,
+Claude keeps its read-only Read, Glob, and Grep tool set. The copies omit repository
 metadata and generated build directories, reuse installed dependencies when
 present, and are deleted when the discussion ends. Preparation responds to Stop
 and has a two-minute limit. Roots left by a crashed bridge use a dedicated prefix
@@ -101,6 +108,17 @@ existing checks when evidence would improve a claim, to report the exact command
 and result, and not to intentionally edit source files. A generated artifact or
 an accidental edit in one copy cannot change the real project or the other
 agent's view.
+
+Claude's guarded shell can still reach the network because the macOS profile
+wraps the Claude model client itself; denying network there would also prevent
+the turn from reaching Claude. Roundtable discloses this asymmetry instead of
+claiming offline parity. Network/package-install access is not a newly granted
+tool, and a future release must use a separate command-execution boundary to
+restrict it without breaking model transport. The same-process design also means
+each agent process necessarily retains some access to its own CLI
+authentication/runtime state; Roundtable does not describe the bounded
+host-path deny list as complete
+credential isolation.
 
 ## Agent-reported check evidence
 
