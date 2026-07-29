@@ -2,6 +2,13 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
+Current release: **v0.0.0.1**
+
+Roundtable uses four-part development versions. Each completed agent
+conversation plus its implemented improvement increments the final field:
+`v0.0.0.1`, `v0.0.0.2`, and so on. See [CHANGELOG.md](CHANGELOG.md) for the
+discussion outcome and implementation details behind every release.
+
 ## Start it
 
 Both CLIs must already be installed and signed in. From this folder:
