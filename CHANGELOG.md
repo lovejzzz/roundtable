@@ -4,6 +4,53 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.5] — 2026-07-29
+
+### Direction
+
+This user-directed capability release gives both participants an optional way to
+validate repository claims before presenting them. The boundary is intentionally
+evidence-oriented rather than autonomous implementation: agents can run existing
+checks, but their source project and one another's working state remain
+protected.
+
+### Added
+
+- Lazy, per-agent disposable project copies created under the operating system's
+  temporary directory and deleted when the discussion reaches a terminal state.
+- Workspace-write execution for Codex inside its own CLI sandbox, enabling
+  focused tests, lint, type checks, and builds without touching the selected
+  project.
+- Optional Bash access for Claude on macOS when `sandbox-exec` is available,
+  while retaining the prior read-only tool set on systems without an OS write
+  guard.
+- A visible **Test capability** status in the room explaining whether both
+  agents or only Codex can run checks.
+- Discussion instructions that make validation optional, prohibit intentional
+  source edits and destructive commands, and require accurate command/result
+  reporting when an agent chooses to test.
+
+### Safety and reliability
+
+- Creates distinct Codex and Claude copies so generated artifacts and accidental
+  edits cannot leak between participants or into the selected project.
+- Excludes `.git`, `.next`, `.wrangler`, and `dist` from copies while retaining
+  installed dependencies for practical offline checks.
+- Keeps Codex under its native `workspace-write` sandbox and, on macOS, protects
+  both the selected project and the user's home folder from Claude writes.
+- Cleans both temporary roots from the bridge's terminal-session lifecycle,
+  including completion, stop, expiry, and unrecovered error paths.
+- Preserves failed-turn retry semantics by reusing the same agent copy throughout
+  a live room and deleting it only after that room ends.
+
+### Verification
+
+- Eighteen bridge and archive tests, including copy isolation, cache reuse,
+  generated-directory exclusion, dependency availability, original-project
+  immutability, cross-agent isolation, and terminal cleanup.
+- Rendered-HTML assertions for the visible optional test capability.
+- Production build, lint, and diff validation.
+
 ## [v0.0.0.4] — 2026-07-29
 
 ### Conversation

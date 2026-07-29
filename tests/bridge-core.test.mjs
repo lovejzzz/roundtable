@@ -133,6 +133,7 @@ test("queues steering after the active reply and includes it once in the next pr
 });
 
 test("restores snapshots and closes terminal SSE streams after replay", async () => {
+  let cleanupCalls = 0;
   const agentRunner = {
     run: async ({ role, purpose }) =>
       purpose === "synthesis"
@@ -141,6 +142,9 @@ test("restores snapshots and closes terminal SSE streams after replay", async ()
 \`\`\``
         : `${role} reply`,
     stop: async () => {},
+    cleanup: async () => {
+      cleanupCalls += 1;
+    },
   };
   const bridge = await startTestBridge(agentRunner);
 
@@ -183,6 +187,7 @@ test("restores snapshots and closes terminal SSE streams after replay", async ()
       replay.indexOf('"type":"session.outcome"') < replay.indexOf('"status":"complete"'),
       "the persisted outcome replays before terminal status",
     );
+    await waitFor(async () => (cleanupCalls === 1 ? true : null));
   } finally {
     await bridge.close();
   }

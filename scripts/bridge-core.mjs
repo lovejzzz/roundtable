@@ -146,6 +146,14 @@ function buildPrompt(session, role, turn) {
 PROJECT FOLDER
 ${session.projectPath}
 
+DISPOSABLE TEST SANDBOX
+Your CLI is running in a disposable copy of the project. Use the current working directory for
+inspection and commands; never target the original absolute project path above. You may run
+focused existing tests, linters, type checks, or builds when they would validate a claim. This is
+optional, not a requirement. Do not intentionally edit source files. Generated test and build
+artifacts are allowed in this disposable copy and will be deleted after the discussion. If you run
+a check, report the command and its result accurately.
+
 DISCUSSION GOAL
 ${session.topic}
 
@@ -153,7 +161,7 @@ SHARED TRANSCRIPT
 ${transcript || "(No prior turns.)"}
 
 YOUR TURN
-Inspect the project as needed, then advance the discussion. Respond directly to the strongest point in the transcript, identify concrete evidence from the repository, and make a useful recommendation or challenge. Keep this to roughly 250–500 words. Do not edit, create, delete, or rename files. Do not run destructive commands. This is discussion-only mode. Write only your contribution to the roundtable—no preamble about being an AI and no hidden reasoning.
+Inspect the project as needed, then advance the discussion. Respond directly to the strongest point in the transcript, identify concrete evidence from the repository, and make a useful recommendation or challenge. Keep this to roughly 250–500 words. Do not intentionally edit, create, delete, or rename source files. Do not run destructive commands. This is discussion-only mode. Write only your contribution to the roundtable—no preamble about being an AI and no hidden reasoning.
 
 This is turn ${turn + 1} of ${session.totalTurns}.`;
 }
@@ -510,6 +518,7 @@ export function createBridge({
       }
     } finally {
       await session.historyWriteChain;
+      await agentRunner.cleanup?.(session).catch(() => {});
       for (const client of session.clients) client.end();
       session.clients.clear();
       scheduleEviction(session);

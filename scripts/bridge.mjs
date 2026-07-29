@@ -6,6 +6,10 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { createBridge } from "./bridge-core.mjs";
 import { createHistoryStore } from "./history-store.mjs";
+import {
+  cleanupTestSandboxes,
+  ensureTestSandbox,
+} from "./test-sandbox.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
@@ -77,6 +81,10 @@ const [codexVersion, claudeVersion, codexHelp, claudeHelp] = await Promise.all([
 
 const health = {
   projectWriteGuard: Boolean(sandboxExecPath),
+  testSandbox: {
+    codex: Boolean(codexPath),
+    claude: Boolean(claudePath && sandboxExecPath),
+  },
   models: {
     codex: {
       configured: codexConfiguredModel,
@@ -137,7 +145,7 @@ function terminateSessionProcess(session, reason) {
   return handle.closed;
 }
 
-function runManagedProcess(session, command, args, input) {
+function runManagedProcess(session, command, args, input, workingDirectory = session.projectPath) {
   if (session.stopRequested) {
     const error = new Error("Discussion stopped.");
     error.code = "USER_STOP";
@@ -148,7 +156,7 @@ function runManagedProcess(session, command, args, input) {
     resolveClosed = resolve;
   });
   const child = spawn(command, args, {
-    cwd: session.projectPath,
+    cwd: workingDirectory,
     detached: process.platform !== "win32",
     env: { ...process.env, CI: "1", NO_COLOR: "1", TERM: "dumb" },
     stdio: ["pipe", "pipe", "pipe"],
@@ -213,6 +221,7 @@ function runManagedProcess(session, command, args, input) {
 }
 
 async function runCodex(session, prompt) {
+  const workingDirectory = await ensureTestSandbox(session, "codex");
   const outputDirectory = await mkdtemp(join(tmpdir(), "roundtable-codex-"));
   const outputFile = join(outputDirectory, "last-message.txt");
   try {
@@ -223,9 +232,9 @@ async function runCodex(session, prompt) {
       "--skip-git-repo-check",
       "--ephemeral",
       "--cd",
-      session.projectPath,
+      workingDirectory,
       "--sandbox",
-      "read-only",
+      "workspace-write",
       "--output-last-message",
       outputFile,
     ];
@@ -234,7 +243,7 @@ async function runCodex(session, prompt) {
       args.push("--config", `model_reasoning_effort="${session.codexEffort}"`);
     }
     args.push("-");
-    const stdout = await runManagedProcess(session, codexPath, args, prompt);
+    const stdout = await runManagedProcess(session, codexPath, args, prompt, workingDirectory);
     return await readFile(outputFile, "utf8").catch(() => stdout);
   } finally {
     await rm(outputDirectory, { recursive: true, force: true });
@@ -242,37 +251,47 @@ async function runCodex(session, prompt) {
 }
 
 async function runClaude(session, prompt) {
+  const workingDirectory = await ensureTestSandbox(session, "claude");
+  const testToolsAvailable = Boolean(sandboxExecPath);
   const args = [
     "--print",
     "--output-format",
     "text",
     "--permission-mode",
-    "plan",
+    testToolsAvailable ? "dontAsk" : "plan",
     "--no-session-persistence",
     "--no-chrome",
     "--safe-mode",
     "--strict-mcp-config",
     "--tools",
-    "Read,Glob,Grep",
+    testToolsAvailable ? "Read,Glob,Grep,Bash" : "Read,Glob,Grep",
   ];
+  if (testToolsAvailable) {
+    args.push("--allowedTools", "Read", "Glob", "Grep", "Bash");
+  }
   if (session.claudeModel) args.push("--model", session.claudeModel);
   if (session.claudeEffort) args.push("--effort", session.claudeEffort);
 
   if (sandboxExecPath) {
+    const escapedHomePath = homedir()
+      .replaceAll("\\", "\\\\")
+      .replaceAll('"', '\\"');
     const escapedProjectPath = session.projectPath
       .replaceAll("\\", "\\\\")
       .replaceAll('"', '\\"');
     const profile = `(version 1)
 (allow default)
+(deny file-write* (subpath "${escapedHomePath}"))
 (deny file-write* (subpath "${escapedProjectPath}"))`;
     return runManagedProcess(
       session,
       sandboxExecPath,
       ["-p", profile, claudePath, ...args],
       prompt,
+      workingDirectory,
     );
   }
-  return runManagedProcess(session, claudePath, args, prompt);
+  return runManagedProcess(session, claudePath, args, prompt, workingDirectory);
 }
 
 const agentRunner = {
@@ -281,6 +300,9 @@ const agentRunner = {
   },
   stop(session, reason) {
     return terminateSessionProcess(session, reason);
+  },
+  cleanup(session) {
+    return cleanupTestSandboxes(session);
   },
 };
 

@@ -74,6 +74,10 @@ type BridgeHealth = {
     available: boolean;
     retention: { maxRecords: number; maxDays: number };
   };
+  testSandbox?: {
+    codex: boolean;
+    claude: boolean;
+  };
 };
 
 type FailedTurn = {
@@ -1465,11 +1469,24 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Codex runs in a read-only sandbox. Claude runs in safe mode with only Read, Glob,
-                and Grep
+                Agents work from separate disposable copies, never the selected project. Codex
+                writes only inside its sandbox. Claude stays read-only
                 {health?.projectWriteGuard
-                  ? ", plus a macOS guard that denies writes inside the selected project"
-                  : ""}.
+                  ? " across the selected project and home folder under a macOS write guard"
+                  : " when an OS write guard is unavailable"}.
+              </p>
+            </div>
+          </section>
+
+          <section className="context-block">
+            <span className="context-label">TEST CAPABILITY</span>
+            <div className="safety-note">
+              <span className="safe-dot" />
+              <p>
+                Focused checks in separate disposable project copies are optional.
+                {health?.testSandbox?.codex && health?.testSandbox?.claude
+                  ? " Both agents can use them, and generated files are deleted when the room ends."
+                  : " Codex can use them; Claude remains read-only because an OS write guard is unavailable."}
               </p>
             </div>
           </section>
