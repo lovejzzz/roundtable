@@ -2,7 +2,7 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
-Current release: **v0.0.0.7**
+Current release: **v0.0.0.8**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -27,9 +27,11 @@ The command starts the local bridge and the web room, then opens the connected r
 4. Codex and Claude alternate turns from separate disposable copies of the same
    project and read the same shared transcript. Every message records its model
    and reasoning effort.
-5. Each agent may optionally run focused existing tests, linters, type checks, or
-   builds before making a claim. Test artifacts stay in its private copy, and a
-   structured result appears only when the agent reports one.
+5. Codex may optionally run focused existing tests, linters, type checks, or
+   builds before making a claim. Claude remains on Read, Glob, and Grep until
+   checks can run outside its model-client process. Test artifacts stay in
+   Codex's private copy, and a structured result appears only when Codex reports
+   one.
 6. Add a steering note at any time. It is added to the transcript before the next agent turn.
 7. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
@@ -85,40 +87,42 @@ an agent.
 ## Optional test sandboxes
 
 Roundtable lazily creates a different temporary project copy for each agent.
-Codex receives workspace-write access only inside its CLI sandbox. On macOS,
-Claude receives Bash only after a real startup probe confirms the OS write guard
-can apply a profile. Codex's native permission profile and Claude's outer macOS
-guard protect the real project, isolate the agents' workspaces, and read-deny
-common host credential paths.
+Codex receives workspace-write access only inside its CLI sandbox. Claude always
+uses plan mode with only Read, Glob, and Grep; it never receives Bash.
+Codex's native permission profile and Claude's outer macOS guard protect the real
+project, isolate the agents' workspaces, and read-deny common host credential
+paths.
 Each CLI remains operational with the runtime/auth access it requires; Claude
 writes only to a bounded set of runtime entries while settings and other
 existing `.claude` state remain write-denied, and each agent is denied the other
 CLI's auth/config path. Bridge credentials are removed from both agent
 environments before either CLI starts. Home entries are refreshed for every
-Claude turn rather than being frozen at bridge startup. Without the OS guard,
-Claude keeps its read-only Read, Glob, and Grep tool set. The copies omit repository
-metadata and generated build directories, reuse installed dependencies when
-present, and are deleted when the discussion ends. Preparation responds to Stop
-and has a two-minute limit. Roots left by a crashed bridge use a dedicated prefix
-and are removed after they become stale without touching live or reply-output
-directories.
+Claude turn rather than being frozen at bridge startup. The copies omit
+repository metadata and generated build directories, reuse installed
+dependencies when present, preserve safe relative symlinks inside the copy, and
+reject absolute, dangling, external, or relocation-unsafe symlinks. Every copied
+link is checked again before an agent starts, and Codex's native profile also
+denies the original project path as defense in depth. The copies are deleted
+when the discussion ends. Preparation responds to Stop and has a two-minute
+limit. Roots left by a crashed bridge use a dedicated prefix and are removed
+after they become stale without touching live or reply-output directories.
+Links into intentionally omitted generated trees also fail closed rather than
+silently changing meaning in the copy.
 
-Testing remains optional. The discussion prompt asks agents to run only focused,
-existing checks when evidence would improve a claim, to report the exact command
-and result, and not to intentionally edit source files. A generated artifact or
-an accidental edit in one copy cannot change the real project or the other
-agent's view.
+Testing remains optional and currently belongs to Codex. Its discussion prompt
+asks it to run only focused, existing checks when evidence would improve a claim,
+to report the exact command and result, and not to intentionally edit source
+files. Claude's prompt explicitly discloses its read-only tool set and tells it
+not to claim test execution. A generated artifact or an accidental edit in the
+Codex copy cannot change the real project or Claude's view.
 
-Claude's guarded shell can still reach the network because the macOS profile
-wraps the Claude model client itself; denying network there would also prevent
-the turn from reaching Claude. Roundtable discloses this asymmetry instead of
-claiming offline parity. Network/package-install access is not a newly granted
-tool, and a future release must use a separate command-execution boundary to
-restrict it without breaking model transport. The same-process design also means
-each agent process necessarily retains some access to its own CLI
-authentication/runtime state; Roundtable does not describe the bounded
-host-path deny list as complete
-credential isolation.
+The v0.0.0.7 audit showed that wrapping Claude and Bash in one outer macOS profile
+cannot isolate shell execution from Claude's required network and runtime
+access. Nested Seatbelt profiles also cannot be applied from that already
+sandboxed client. Roundtable therefore fails closed instead of treating a
+command allowlist or disclosure as containment. A future Claude check capability
+must use a separately tracked, no-network brokered runner with bridge-owned
+provenance; it must not fall back to Bash when unavailable.
 
 ## Agent-reported check evidence
 

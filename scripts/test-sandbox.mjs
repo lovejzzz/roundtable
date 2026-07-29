@@ -1,7 +1,16 @@
 import { constants } from "node:fs";
-import { cp, mkdtemp, readdir, realpath, rm, stat } from "node:fs/promises";
+import {
+  cp,
+  lstat,
+  mkdtemp,
+  readdir,
+  readlink,
+  realpath,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 const GENERATED_DIRECTORIES = new Set([".git", ".next", ".wrangler", "dist"]);
 export const TEST_SANDBOX_PREFIX = "roundtable-agent-sandbox-";
@@ -41,11 +50,63 @@ const CODEX_PROTECTED_PATHS = Object.freeze([
   ".claude.json",
 ]);
 
-function shouldCopy(projectPath, sourcePath) {
+function pathIsInside(root, candidate) {
+  const relativePath = relative(root, candidate);
+  return (
+    !relativePath ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !relativePath.startsWith(sep))
+  );
+}
+
+function unsafeSymlinkError(relativePath) {
+  const error = new Error(
+    `Project contains a symlink that cannot stay inside its disposable copy: ${relativePath}`,
+  );
+  error.code = "UNSAFE_SYMLINK";
+  return error;
+}
+
+async function shouldCopy(projectPath, workspace, sourcePath, destinationPath) {
   const relativePath = relative(projectPath, sourcePath);
   if (!relativePath) return true;
   const [topLevel] = relativePath.split(sep);
-  return !GENERATED_DIRECTORIES.has(topLevel);
+  if (GENERATED_DIRECTORIES.has(topLevel)) return false;
+  const metadata = await lstat(sourcePath);
+  if (!metadata.isSymbolicLink()) return true;
+  const [linkTarget, resolvedSourceTarget] = await Promise.all([
+    readlink(sourcePath).catch(() => ""),
+    realpath(sourcePath).catch(() => ""),
+  ]);
+  const copiedTarget = linkTarget
+    ? resolve(dirname(destinationPath), linkTarget)
+    : "";
+  if (
+    !linkTarget ||
+    isAbsolute(linkTarget) ||
+    !resolvedSourceTarget ||
+    !pathIsInside(projectPath, resolvedSourceTarget) ||
+    !pathIsInside(workspace, copiedTarget)
+  ) {
+    throw unsafeSymlinkError(relativePath);
+  }
+  return true;
+}
+
+async function validateCopiedSymlinks(workspace, directory = workspace) {
+  const entries = await readdir(directory, { withFileTypes: true });
+  for (const entry of entries) {
+    const entryPath = join(directory, entry.name);
+    if (entry.isSymbolicLink()) {
+      const target = await realpath(entryPath).catch(() => "");
+      if (!target || !pathIsInside(workspace, target)) {
+        throw unsafeSymlinkError(relative(workspace, entryPath));
+      }
+    } else if (entry.isDirectory()) {
+      await validateCopiedSymlinks(workspace, entryPath);
+    }
+  }
 }
 
 export async function ensureTestSandbox(
@@ -73,7 +134,9 @@ export async function ensureTestSandbox(
       recursive: true,
       preserveTimestamps: true,
       mode: constants.COPYFILE_FICLONE,
-      filter: (sourcePath) => {
+      dereference: false,
+      verbatimSymlinks: true,
+      filter: (sourcePath, destinationPath) => {
         if (session.stopRequested) {
           const error = new Error("Discussion stopped while preparing the test sandbox.");
           error.code = "USER_STOP";
@@ -84,9 +147,15 @@ export async function ensureTestSandbox(
           error.code = "TIMEOUT";
           throw error;
         }
-        return shouldCopy(session.projectPath, sourcePath);
+        return shouldCopy(
+          session.projectPath,
+          workspace,
+          sourcePath,
+          destinationPath,
+        );
       },
     });
+    await validateCopiedSymlinks(workspace);
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
@@ -162,6 +231,7 @@ export function buildClaudeSandboxProfile({
         (name) =>
           `(deny file-write* (subpath "${sandboxLiteral(join(claudeHome, name))}"))`,
       ),
+    `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
     `(deny file-write* (subpath "${sandboxLiteral(projectPath)}"))`,
   ];
   if (siblingRoot) {
@@ -180,6 +250,7 @@ function codexConfigString(value) {
 export function buildCodexPermissionArgs({
   readOnly = false,
   siblingRoot = "",
+  projectPath = "",
 } = {}) {
   const profileName = readOnly
     ? "roundtable_read_only"
@@ -187,6 +258,7 @@ export function buildCodexPermissionArgs({
   const deniedPaths = [
     ...CODEX_PROTECTED_PATHS.map((name) => `~/${name}`),
     ...(siblingRoot ? [siblingRoot] : []),
+    ...(projectPath ? [projectPath] : []),
   ];
   const filesystemTable = deniedPaths
     .map((path) => `${codexConfigString(path)}="deny"`)

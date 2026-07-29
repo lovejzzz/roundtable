@@ -41,7 +41,9 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /aria-label="Claude reasoning effort"/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
   assert.match(html, /TEST CAPABILITY/i);
-  assert.match(html, /separate disposable project copies/i);
+  assert.match(html, /separate disposable project copy/i);
+  assert.match(html, /Claude remains read-only/i);
+  assert.match(html, /separate brokered runner/i);
   assert.match(html, /Bridge credentials are never passed to either agent process/i);
   assert.match(html, /id="outcome-title"/i);
   assert.match(html, /COMPLETION BRIEF/i);
@@ -64,7 +66,8 @@ test("removes every starter-preview marker", async () => {
   assert.match(page, /Retry or end this turn before adding another note/i);
   assert.match(page, /Reported by \{message\.author\}/i);
   assert.match(page, /Agent-reported, not independently verified/i);
-  assert.match(page, /shell can still use the network/i);
+  assert.match(page, /Claude has no shell access/i);
+  assert.match(page, /Claude remains read-only/i);
   assert.match(page, /Agent-reported checks — \$\{message\.author\}/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));

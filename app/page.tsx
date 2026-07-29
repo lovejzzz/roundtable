@@ -1547,7 +1547,7 @@ export default function Home() {
                 Agents work from separate disposable copies, never the selected project. Codex
                 writes only inside its native sandbox.
                 {health?.projectWriteGuard
-                  ? " Codex’s native permissions and Claude’s outer macOS guard also read-deny common host credential paths, isolate their workspaces, and keep each CLI operational with its required runtime access. Claude’s shell can still use the network because its guard also wraps the model client."
+                  ? " Codex’s native permissions and Claude’s outer macOS guard also read-deny common host credential paths and isolate their workspaces. Claude has no shell access; it remains on Read, Glob, and Grep until checks can run beyond the model-client boundary."
                   : " Without a supported OS guard, Claude stays read-only."}
                 {" "}Bridge credentials are never passed to either agent process.
               </p>
@@ -1559,13 +1559,10 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Focused checks in separate disposable project copies are optional.
-                {health?.testSandbox?.codex && health?.testSandbox?.claude
-                  ? " Both agents can use them, generated files are deleted when the room ends, and results remain agent-reported rather than bridge-verified."
-                  : ` Codex can use them; Claude remains read-only. ${
-                      health?.testSandbox?.claudeReason ||
-                      "A supported OS write guard is unavailable."
-                    }`}
+                Focused checks in a separate disposable project copy are optional. Codex can use
+                them; Claude remains read-only.{" "}
+                {health?.testSandbox?.claudeReason ||
+                  "Claude checks require a separate brokered runner."}
               </p>
             </div>
           </section>

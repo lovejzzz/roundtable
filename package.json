@@ -1,6 +1,6 @@
 {
   "name": "roundtable-cli-room",
-  "version": "0.0.0.7",
+  "version": "0.0.0.8",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -12,7 +12,7 @@
     "bridge": "node scripts/bridge.mjs",
     "talk": "node scripts/talk.mjs",
     "test": "npm run test:bridge && npm run build && node --test tests/rendered-html.test.mjs",
-    "test:bridge": "node --test tests/agent-environment.test.mjs tests/bridge-core.test.mjs tests/history-store.test.mjs tests/test-sandbox.test.mjs",
+    "test:bridge": "node --test tests/agent-environment.test.mjs tests/bridge-core.test.mjs tests/claude-invocation.test.mjs tests/history-store.test.mjs tests/test-sandbox.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },

@@ -122,6 +122,12 @@ test("queues steering after the active reply and includes it once in the next pr
     assert.doesNotMatch(prompts[0], /Prioritize reliability/);
     assert.match(prompts[1], /Prioritize reliability/);
     assert.equal(prompts[1].match(/Prioritize reliability/g)?.length, 1);
+    assert.match(prompts[0], /DISPOSABLE TEST SANDBOX/);
+    assert.match(prompts[0], /You may run\s+focused existing tests/);
+    assert.match(prompts[1], /READ-ONLY PROJECT COPY/);
+    assert.match(prompts[1], /You cannot run shell commands or tests/);
+    assert.match(prompts[1], /do not emit\s+a roundtable-checks block/);
+    assert.doesNotMatch(prompts[1], /You may run\s+focused existing tests/);
 
     const lateSteer = await fetch(`${bridge.baseUrl}/sessions/${id}/steer`, {
       method: "POST",

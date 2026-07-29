@@ -6,8 +6,10 @@ import {
   mkdtemp,
   readdir,
   readFile,
+  readlink,
   realpath,
   rm,
+  symlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -98,6 +100,88 @@ test("creates isolated per-agent project copies and removes them after the room 
   }
 });
 
+test("preserves safe internal symlinks and rejects links whose copied meaning escapes", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-symlink-fixture-"));
+  const actualProjectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const externalPath = join(fixtureRoot, "external-secret");
+  try {
+    await Promise.all([
+      mkdir(join(actualProjectPath, "a"), { recursive: true }),
+      mkdir(join(actualProjectPath, "b"), { recursive: true }),
+      mkdir(temporaryDirectory, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(actualProjectPath, "b", "value.txt"), "inside\n"),
+      writeFile(externalPath, "outside\n"),
+    ]);
+    await symlink("../b/value.txt", join(actualProjectPath, "a", "inside"));
+
+    const safeSession = { projectPath: await realpath(actualProjectPath) };
+    const workspace = await ensureTestSandbox(safeSession, "codex", {
+      temporaryDirectory,
+    });
+    assert.equal(await readlink(join(workspace, "a", "inside")), "../b/value.txt");
+    assert.equal(
+      await realpath(join(workspace, "a", "inside")),
+      join(workspace, "b", "value.txt"),
+    );
+    await cleanupTestSandboxes(safeSession);
+
+    const unsafeLinks = [
+      ["escape-external", externalPath],
+      ["escape-absolute-internal", join(actualProjectPath, "b", "value.txt")],
+      ["a/escape-out-and-back", "../../project/b/value.txt"],
+    ];
+    for (const [name, target] of unsafeLinks) {
+      const linkPath = join(actualProjectPath, name);
+      await symlink(target, linkPath);
+      const unsafeSession = { projectPath: await realpath(actualProjectPath) };
+      await assert.rejects(
+        ensureTestSandbox(unsafeSession, "claude", { temporaryDirectory }),
+        (error) =>
+          error?.code === "UNSAFE_SYMLINK" &&
+          error.message.includes(name),
+      );
+      await rm(linkPath);
+      assert.deepEqual(await readdir(temporaryDirectory), []);
+    }
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("post-copy verification removes a root if a copied symlink escapes", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-post-copy-fixture-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const externalPath = join(fixtureRoot, "external");
+  try {
+    await Promise.all([
+      mkdir(projectPath),
+      mkdir(temporaryDirectory),
+      writeFile(externalPath, "outside\n"),
+    ]);
+    const session = { projectPath: await realpath(projectPath) };
+    await assert.rejects(
+      ensureTestSandbox(session, "codex", {
+        temporaryDirectory,
+        copy: async (source, destination, options) => {
+          assert.equal(await options.filter(source, destination), true);
+          await mkdir(destination);
+          await symlink(externalPath, join(destination, "late-escape"));
+        },
+      }),
+      (error) =>
+        error?.code === "UNSAFE_SYMLINK" &&
+        error.message.includes("late-escape"),
+    );
+    assert.deepEqual(await readdir(temporaryDirectory), []);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("removes only stale sandbox roots with the dedicated prefix", async () => {
   const temporaryDirectory = await mkdtemp(join(tmpdir(), "roundtable-sweep-fixture-"));
   const oldRoot = join(temporaryDirectory, "roundtable-agent-sandbox-codex-old");
@@ -127,9 +211,9 @@ test("cancels sandbox preparation before an agent process starts", async () => {
       ensureTestSandbox(session, "codex", {
         temporaryDirectory,
         copy: async (source, destination, options) => {
-          assert.equal(options.filter(source), true);
+          assert.equal(await options.filter(source, destination), true);
           session.stopRequested = true;
-          options.filter(join(source, "next-file"));
+          await options.filter(join(source, "next-file"));
         },
       }),
       (error) => error?.code === "USER_STOP",
@@ -166,6 +250,7 @@ test(
         writeFile(join(home, ".claude", "session-env", "readable"), "runtime\n"),
         writeFile(join(home, ".claude", "settings.json"), "{}\n"),
         writeFile(join(home, ".codex", "auth.json"), "codex\n"),
+        writeFile(join(projectPath, "original-source"), "project\n"),
         writeFile(join(siblingRoot, "visible"), "sibling\n"),
         ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) =>
           writeFile(credentialProbePath(home, name), `secret:${name}\n`),
@@ -193,6 +278,7 @@ test(
         );
       }
       assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".codex")}"))`));
+      assert.ok(profile.includes(`(deny file-read* (subpath "${projectPath}"))`));
       try {
         await execFileAsync("/usr/bin/sandbox-exec", [
           "-p",
@@ -247,6 +333,17 @@ test(
           profile,
           "/bin/sh",
           "-c",
+          'cat "$1/original-source"',
+          "roundtable-project-read",
+          projectPath,
+        ]),
+      );
+      await assert.rejects(
+        execFileAsync("/usr/bin/sandbox-exec", [
+          "-p",
+          profile,
+          "/bin/sh",
+          "-c",
           'cat "$1/visible"',
           "roundtable-sibling-read",
           siblingRoot,
@@ -260,7 +357,8 @@ test(
 
 test("the Codex native permission profile preserves workspace semantics and denies host reads", () => {
   const siblingRoot = "/private/tmp/roundtable-agent-sandbox-claude-example";
-  const workspaceArgs = buildCodexPermissionArgs({ siblingRoot });
+  const projectPath = "/Users/example/project";
+  const workspaceArgs = buildCodexPermissionArgs({ siblingRoot, projectPath });
   const readOnlyArgs = buildCodexPermissionArgs({ readOnly: true });
   const workspaceText = workspaceArgs.join("\n");
   const readOnlyText = readOnlyArgs.join("\n");
@@ -275,5 +373,6 @@ test("the Codex native permission profile preserves workspace semantics and deni
   assert.ok(workspaceText.includes('"~/.claude"="deny"'));
   assert.ok(workspaceText.includes('"~/.claude.json"="deny"'));
   assert.ok(workspaceText.includes(`${JSON.stringify(siblingRoot)}="deny"`));
+  assert.ok(workspaceText.includes(`${JSON.stringify(projectPath)}="deny"`));
   assert.doesNotMatch(workspaceText, /~\/\.codex/);
 });

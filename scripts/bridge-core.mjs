@@ -210,13 +210,9 @@ function buildPrompt(session, role, turn) {
   const participant = role === "codex" ? "Codex CLI" : "Claude CLI";
   const other = role === "codex" ? "Claude CLI" : "Codex CLI";
   const transcript = buildTranscript(session.messages);
-
-  return `You are ${participant} in a visible project roundtable with ${other} and a human project owner.
-
-PROJECT FOLDER
-${session.projectPath}
-
-DISPOSABLE TEST SANDBOX
+  const capabilityPrompt =
+    role === "codex"
+      ? `DISPOSABLE TEST SANDBOX
 Your CLI is running in a disposable copy of the project. Use the current working directory for
 inspection and commands; never target the original absolute project path above. You may run
 focused existing tests, linters, type checks, or builds when they would validate a claim. This is
@@ -229,7 +225,20 @@ your reply with this versioned block (valid JSON, no text after the fence):
 \`\`\`
 The only statuses are "passed", "failed", and "blocked". Use "blocked" only when the environment
 prevented a meaningful result. Omit exitCode when none exists. This is agent-reported evidence,
-not independent bridge verification.
+not independent bridge verification.`
+      : `READ-ONLY PROJECT COPY
+Your CLI is running in a disposable copy of the project with Read, Glob, and Grep only. Use the
+current working directory for inspection; never target the original absolute project path above.
+You cannot run shell commands or tests. This is a deliberate fail-closed boundary until test
+execution can run in a separate brokered process. Do not claim to have run a check and do not emit
+a roundtable-checks block.`;
+
+  return `You are ${participant} in a visible project roundtable with ${other} and a human project owner.
+
+PROJECT FOLDER
+${session.projectPath}
+
+${capabilityPrompt}
 
 DISCUSSION GOAL
 ${session.topic}

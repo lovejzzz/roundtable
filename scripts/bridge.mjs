@@ -6,6 +6,7 @@ import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { buildAgentEnvironment } from "./agent-environment.mjs";
 import { createBridge } from "./bridge-core.mjs";
+import { buildClaudeInvocationArgs } from "./claude-invocation.mjs";
 import { createHistoryStore } from "./history-store.mjs";
 import {
   buildCodexPermissionArgs,
@@ -106,12 +107,9 @@ const health = {
   projectWriteGuard: Boolean(sandboxExecPath),
   testSandbox: {
     codex: Boolean(codexPath),
-    claude: Boolean(claudePath && sandboxExecPath),
-    claudeReason: sandboxExecPath
-      ? ""
-      : sandboxExecCandidate
-        ? "The macOS write guard could not apply a profile."
-        : "A supported OS write guard is unavailable.",
+    claude: false,
+    claudeReason:
+      "Claude stays on Read, Glob, and Grep until checks have a separate brokered runner.",
   },
   models: {
     codex: {
@@ -276,6 +274,7 @@ async function runCodex(session, prompt, purpose) {
       ...buildCodexPermissionArgs({
         readOnly: purpose === "synthesis",
         siblingRoot,
+        projectPath: session.projectPath,
       }),
     );
     if (session.codexModel) args.push("--model", session.codexModel);
@@ -298,25 +297,10 @@ async function runCodex(session, prompt, purpose) {
 
 async function runClaude(session, prompt) {
   const workingDirectory = await ensureTestSandbox(session, "claude");
-  const testToolsAvailable = Boolean(sandboxExecPath);
-  const args = [
-    "--print",
-    "--output-format",
-    "text",
-    "--permission-mode",
-    testToolsAvailable ? "dontAsk" : "plan",
-    "--no-session-persistence",
-    "--no-chrome",
-    "--safe-mode",
-    "--strict-mcp-config",
-    "--tools",
-    testToolsAvailable ? "Read,Glob,Grep,Bash" : "Read,Glob,Grep",
-  ];
-  if (testToolsAvailable) {
-    args.push("--allowedTools", "Read", "Glob", "Grep", "Bash");
-  }
-  if (session.claudeModel) args.push("--model", session.claudeModel);
-  if (session.claudeEffort) args.push("--effort", session.claudeEffort);
+  const args = buildClaudeInvocationArgs({
+    model: session.claudeModel,
+    effort: session.claudeEffort,
+  });
 
   if (sandboxExecPath) {
     const siblingRoot = getTestSandboxInfo(session, "codex")?.root || "";

@@ -4,6 +4,73 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.8] — 2026-07-29
+
+### Conversation
+
+Prompt: design the smallest safe architecture that preserves useful project
+checks while removing Claude Bash from the model-client privilege boundary;
+compare a named-check broker, MCP transports, restricted helpers, hooks,
+proxies, containers, and disclosure against an explicit adversarial threat
+model.
+
+Across two rounds, Codex and Claude reached consensus that v0.0.0.8 must remove
+Claude Bash unconditionally and defer brokered Claude checks. They verified that
+the outer macOS profile must retain Claude's model transport and some runtime
+access, cannot apply a nested Seatbelt profile, and therefore cannot safely
+contain shell code. Claude also found that the permitted runtime paths could
+allow injected shell activity to persist beyond a disposable copy.
+
+The review rejected a restricted Bash helper, hooks, permission interception,
+and a proxy as policy layers rather than execution boundaries. It also rejected
+shipping an incomplete broker: the current bridge tracks one agent process,
+lacks independent check cancellation and provenance, and has not proven a safe
+MCP capability transport.
+
+### Security repair
+
+- Claude now always runs in plan mode with only Read, Glob, and Grep. Bash is
+  absent from both its tool list and allowed-tool policy on every platform.
+- The bridge health contract and room context fail closed and explicitly say
+  that Claude checks are unavailable until execution has a separate brokered
+  runner. Claude's prompt cannot claim test access or emit check evidence.
+- Codex retains its native sandboxed, optional focused-check capability.
+- Claude continues to receive safe mode, strict empty MCP configuration,
+  disabled session persistence, the outer host/project guard where supported,
+  and a bridge-token-scrubbed environment.
+
+### Copy-boundary correction
+
+Claude's final turn reproduced a separate bug in Node's default recursive copy:
+an internal relative symlink was rewritten as an absolute link into the original
+project. Roundtable now copies with verbatim symlink semantics, preserves links
+that remain relative and resolve inside both the selected project and the copied
+workspace, and rejects absolute, dangling, external, or relocation-unsafe links.
+A post-copy walk independently verifies every surviving link before agent
+startup and removes the partial root on failure. Codex's native permission
+profile now also denies the original project path as defense in depth, and
+Claude's outer profile denies both reads and writes to that path. Links into
+intentionally omitted generated trees fail closed rather than silently changing
+meaning in the copy. This correction is a prerequisite for any future broker
+runner and makes the existing disposable-copy claim accurate.
+
+### Verification
+
+- Added a direct Claude invocation contract test proving plan mode,
+  `Read,Glob,Grep`, safe mode, strict MCP isolation, no session persistence, and
+  the complete absence of Bash and `allowedTools`.
+- Added executable symlink regressions: a safe internal relative link must
+  resolve inside the disposable workspace; absolute-internal, external, and
+  outward-and-back links must fail before copy; and a simulated post-copy escape
+  must be caught with no partial sandbox root left behind.
+- Ran 27 bridge, archive, environment, invocation, copy, sandbox, and redaction
+  tests plus lint before the live gate.
+- The release design room completed four real CLI turns and a structured
+  consensus brief. The first live implementation gate blocked release on the
+  absolute-internal and relocation-unsafe symlink cases, which drove the
+  post-copy verification and Codex original-path deny above. A fresh gate then
+  rechecked the remediated boundary before release.
+
 ## [v0.0.0.7] — 2026-07-29
 
 ### Conversation
