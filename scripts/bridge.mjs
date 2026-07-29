@@ -5,6 +5,7 @@ import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { createBridge } from "./bridge-core.mjs";
+import { createHistoryStore } from "./history-store.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
@@ -283,12 +284,16 @@ const agentRunner = {
   },
 };
 
+const historyStore = createHistoryStore();
+await historyStore.initialize();
+
 const { server } = createBridge({
   token,
   defaultProject: process.cwd(),
   health,
   agentRunner,
   resolveProject,
+  historyStore,
 });
 
 server.listen(port, host, () => {

@@ -33,6 +33,7 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /ROUNDTABLE/);
   assert.match(html, /Two agents\. One project\./);
   assert.match(html, /Start the roundtable/);
+  assert.match(html, />History</i);
   assert.match(html, /Steer the next turn/i);
   assert.match(html, /aria-label="Codex model"/i);
   assert.match(html, /aria-label="Claude model"/i);

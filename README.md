@@ -2,7 +2,7 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
-Current release: **v0.0.0.2**
+Current release: **v0.0.0.3**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -29,9 +29,33 @@ The command starts the local bridge and the web room, then opens the connected r
 6. After the final turn, Codex produces a structured Outcome with the decision,
    rationale, owned next actions, and open questions. You can skip this brief
    without losing the transcript.
-7. Stop the discussion whenever you want.
+7. If you opt in, open **History** to revisit recent discussions after a bridge
+   restart. Archived discussions are read-only and keep undelivered steering
+   notes visibly separate from the transcript.
+8. Stop the discussion whenever you want.
 
-Active discussions survive a refresh in the same browser tab while the bridge remains running. Completed transcripts can be copied or exported as Markdown from the room header.
+Active discussions survive a refresh in the same browser tab while the bridge
+remains running. Completed transcripts can be copied or exported as Markdown from
+the room header.
+
+## Local discussion history
+
+Roundtable asks before archiving anything. If you choose **Keep locally**, new
+discussions are saved as append-only event logs in the operating system's user
+data folder, outside the discussed project. The archive:
+
+- uses owner-only directory and file permissions;
+- never stores bridge credentials or SSE tickets in structural event fields;
+- lists only topic, project name, date, status, and message count until you open a
+  record;
+- retains at most 50 discussions for 30 days;
+- recovers the valid prefix of a log if its final write was interrupted;
+- marks nonterminal discussions as interrupted after a bridge restart;
+- can be turned off for future discussions, deleted record by record, or cleared
+  from the History drawer.
+
+Set `ROUNDTABLE_HISTORY=off` before `npm run talk` to disable archive storage and
+its API entirely. `ROUNDTABLE_HISTORY_DIR` can override the user-data location.
 
 The bridge binds only to `127.0.0.1` and requires a fresh random key on every run. This first version keeps both agents in discussion-only mode: Codex uses a read-only sandbox; Claude runs in safe mode with only Read, Glob, and Grep available. On macOS, the bridge also places Claude behind an OS-level guard that denies writes inside the selected project.
 

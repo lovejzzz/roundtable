@@ -7,14 +7,17 @@ import {
   Copy,
   Download,
   FolderOpen,
+  History,
   KeyRound,
   Radio,
   RefreshCw,
   Send,
   Sparkles,
   Terminal,
+  Trash2,
   Wifi,
   WifiOff,
+  X,
 } from "lucide-react";
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
@@ -67,11 +70,16 @@ type BridgeHealth = {
   };
   codex: { available: boolean; version: string };
   claude: { available: boolean; version: string };
+  history: {
+    available: boolean;
+    retention: { maxRecords: number; maxDays: number };
+  };
 };
 
 type SessionEvent =
   | { type: "message"; message: Message }
   | { type: "session.outcome"; outcome: Outcome }
+  | { type: "session.history"; warning: string }
   | {
       type: "session.status";
       status: SessionStatus;
@@ -88,7 +96,8 @@ type SessionStatus =
   | "synthesizing"
   | "complete"
   | "stopped"
-  | "error";
+  | "error"
+  | "interrupted";
 
 type SessionSnapshot = {
   id: string;
@@ -103,10 +112,31 @@ type SessionSnapshot = {
   completedTurns: number;
   messages: Message[];
   outcome: Outcome | null;
+  pendingSteering: Message[];
+  historyWarning: string;
+  archived?: boolean;
   lastStatus: Extract<SessionEvent, { type: "session.status" }>;
 };
 
-const TERMINAL_STATUSES = new Set<SessionStatus>(["complete", "stopped", "error"]);
+type HistoryRecord = {
+  id: string;
+  topic: string;
+  projectName: string;
+  createdAt: string;
+  updatedAt: string;
+  status: SessionStatus;
+  totalTurns: number;
+  messageCount: number;
+  hasOutcome: boolean;
+  historyWarning?: string;
+};
+
+const TERMINAL_STATUSES = new Set<SessionStatus>([
+  "complete",
+  "stopped",
+  "error",
+  "interrupted",
+]);
 const SAMPLE_MESSAGES: Message[] = [
   {
     id: "sample-1",
@@ -222,9 +252,15 @@ function OutcomeCard({
         </div>
       )}
 
-      {!outcome && status !== "synthesizing" && (
+      {!outcome && !TERMINAL_STATUSES.has(status) && status !== "synthesizing" && (
         <p className="outcome-empty">
           A completion brief will appear here after the agents finish.
+        </p>
+      )}
+
+      {!outcome && TERMINAL_STATUSES.has(status) && (
+        <p className="outcome-empty">
+          The discussion ended before a completion brief could be produced.
         </p>
       )}
 
@@ -296,6 +332,17 @@ export default function Home() {
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>(SAMPLE_MESSAGES);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
+  const [pendingSteering, setPendingSteering] = useState<Message[]>([]);
+  const [historyWarning, setHistoryWarning] = useState("");
+  const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [viewingHistory, setViewingHistory] = useState(false);
+  const [historyPreference, setHistoryPreference] = useState<"unset" | "on" | "off">(() => {
+    if (typeof window === "undefined") return "unset";
+    const saved = localStorage.getItem("roundtable.history");
+    return saved === "on" || saved === "off" ? saved : "unset";
+  });
   const [isPreview, setIsPreview] = useState(true);
   const [speaker, setSpeaker] = useState<"codex" | "claude" | null>(null);
   const [turn, setTurn] = useState(0);
@@ -359,6 +406,9 @@ export default function Home() {
       setClaudeEffort((current) => current || data.models?.claude.effort || "medium");
       setStatus((current) => (current === "connecting" ? "idle" : current));
       setConnectOpen(false);
+      if (data.history?.available) {
+        await loadHistory(nextToken.trim(), normalizedBridge);
+      }
       const savedSessionId = sessionStorage.getItem("roundtable.sessionId");
       if (savedSessionId) {
         await recoverSession(savedSessionId, nextToken.trim(), normalizedBridge);
@@ -401,7 +451,7 @@ export default function Home() {
     });
   }, [messages, speaker]);
 
-  function applySnapshot(snapshot: SessionSnapshot) {
+  function applySnapshot(snapshot: SessionSnapshot, archived = Boolean(snapshot.archived)) {
     setConnectionError("");
     setSessionId(snapshot.id);
     setProjectPath(snapshot.projectPath);
@@ -412,6 +462,9 @@ export default function Home() {
     setClaudeEffort(snapshot.claudeEffort);
     setMessages(snapshot.messages);
     setOutcome(snapshot.outcome);
+    setPendingSteering(snapshot.pendingSteering || []);
+    setHistoryWarning(snapshot.historyWarning || "");
+    setViewingHistory(archived);
     setIsPreview(false);
     setTotalTurns(snapshot.totalTurns);
     setRounds(String(snapshot.totalTurns / 2));
@@ -425,7 +478,14 @@ export default function Home() {
       headers: { Authorization: `Bearer ${recoveryToken}` },
     });
     if (response.status === 404) {
+      const historyResponse = await fetch(`${recoveryBridge}/history/${id}`, {
+        headers: { Authorization: `Bearer ${recoveryToken}` },
+      });
       sessionStorage.removeItem("roundtable.sessionId");
+      if (historyResponse.ok) {
+        applySnapshot((await historyResponse.json()) as SessionSnapshot, true);
+        return;
+      }
       setConnectionError("The previous discussion is no longer available.");
       setStatus("idle");
       return;
@@ -467,6 +527,10 @@ export default function Home() {
         setOutcome(update.outcome);
         return;
       }
+      if (update.type === "session.history") {
+        setHistoryWarning(update.warning);
+        return;
+      }
       setStatus(update.status);
       setSpeaker(update.speaker || null);
       if (typeof update.turn === "number") setTurn(update.turn);
@@ -474,6 +538,7 @@ export default function Home() {
       if (TERMINAL_STATUSES.has(update.status)) {
         setSpeaker(null);
         stream.close();
+        void loadHistory(streamToken, streamBridge);
       }
     };
     stream.onerror = () => {
@@ -511,15 +576,23 @@ export default function Home() {
         claudeModel: claudeModel.trim(),
         codexEffort,
         claudeEffort,
+        keepHistory: historyPreference === "on",
       }),
     });
-    const data = (await response.json()) as { id?: string; error?: string };
+    const data = (await response.json()) as {
+      id?: string;
+      error?: string;
+      historyWarning?: string;
+    };
     if (!response.ok || !data.id) {
       setConnectionError(data.error || "The discussion could not be started.");
       return;
     }
     setMessages([]);
     setOutcome(null);
+    setPendingSteering([]);
+    setHistoryWarning(data.historyWarning || "");
+    setViewingHistory(false);
     setIsPreview(false);
     setSessionId(data.id);
     sessionStorage.setItem("roundtable.sessionId", data.id);
@@ -527,6 +600,91 @@ export default function Home() {
     setTurn(0);
     setTotalTurns(Number(rounds) * 2);
     await openStream(data.id);
+  }
+
+  async function loadHistory(historyToken = token, historyBridge = bridgeUrl) {
+    if (!historyToken) return;
+    setHistoryLoading(true);
+    try {
+      const response = await fetch(`${historyBridge}/history`, {
+        headers: { Authorization: `Bearer ${historyToken}` },
+      });
+      if (!response.ok) throw new Error("Could not load local history.");
+      const data = (await response.json()) as {
+        enabled: boolean;
+        records: HistoryRecord[];
+      };
+      setHistoryRecords(data.records);
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "Could not load local history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  function chooseHistoryPreference(value: "on" | "off") {
+    localStorage.setItem("roundtable.history", value);
+    setHistoryPreference(value);
+  }
+
+  async function openHistoryRecord(id: string) {
+    setHistoryLoading(true);
+    try {
+      const response = await fetch(`${bridgeUrl}/history/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) throw new Error("That archived discussion is unavailable.");
+      applySnapshot((await response.json()) as SessionSnapshot, true);
+      setHistoryOpen(false);
+    } catch (error) {
+      setConnectionError(error instanceof Error ? error.message : "Could not open history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function deleteHistoryRecord(record: HistoryRecord) {
+    if (!window.confirm(`Delete “${record.topic}” from local history?`)) return;
+    const response = await fetch(`${bridgeUrl}/history/${record.id}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      setConnectionError("The archived discussion could not be deleted.");
+      return;
+    }
+    if (viewingHistory && sessionId === record.id) {
+      setViewingHistory(false);
+      setIsPreview(true);
+      setMessages(SAMPLE_MESSAGES);
+      setOutcome(null);
+      setStatus("idle");
+    }
+    await loadHistory();
+  }
+
+  async function clearHistory() {
+    if (!window.confirm("Clear every locally archived Roundtable discussion?")) return;
+    const response = await fetch(`${bridgeUrl}/history`, {
+      method: "DELETE",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ confirm: "clear" }),
+    });
+    if (!response.ok) {
+      setConnectionError("Local history could not be cleared.");
+      return;
+    }
+    setHistoryRecords([]);
+    if (viewingHistory) {
+      setViewingHistory(false);
+      setIsPreview(true);
+      setMessages(SAMPLE_MESSAGES);
+      setOutcome(null);
+      setStatus("idle");
+    }
   }
 
   async function sendSteering(event: FormEvent) {
@@ -624,6 +782,16 @@ export default function Home() {
         "",
       );
     }
+    if (pendingSteering.length) {
+      lines.push(
+        "# Queued, never delivered",
+        "",
+        "These steering notes were saved separately and were never added to an agent turn.",
+        "",
+      );
+      pendingSteering.forEach((message) => lines.push(`- ${message.body}`));
+      lines.push("");
+    }
     return lines.join("\n");
   }
 
@@ -664,15 +832,47 @@ export default function Home() {
                 ? "PRODUCT PREVIEW"
                 : status.toUpperCase()}
         </div>
-        <button
-          className={`connection-button ${connected ? "connected" : ""}`}
-          onClick={() => setConnectOpen((value) => !value)}
-          type="button"
-        >
-          {connected ? <Wifi size={15} /> : <WifiOff size={15} />}
-          {connected ? "Bridge connected" : "Connect bridge"}
-        </button>
+        <div className="topbar-actions">
+          <button
+            className="history-button"
+            onClick={() => {
+              setHistoryOpen((value) => !value);
+              if (!historyOpen) void loadHistory();
+            }}
+            type="button"
+            disabled={!connected}
+          >
+            <History size={15} />
+            History{historyRecords.length ? ` · ${historyRecords.length}` : ""}
+          </button>
+          <button
+            className={`connection-button ${connected ? "connected" : ""}`}
+            onClick={() => setConnectOpen((value) => !value)}
+            type="button"
+          >
+            {connected ? <Wifi size={15} /> : <WifiOff size={15} />}
+            {connected ? "Bridge connected" : "Connect bridge"}
+          </button>
+        </div>
       </header>
+
+      {connected && health?.history?.available && historyPreference === "unset" && (
+        <section className="history-consent" aria-label="Local discussion history">
+          <div>
+            <strong>Keep discussions locally?</strong>
+            <p>
+              Save transcripts and Outcomes on this Mac so they survive restarts. Nothing is stored
+              in the project or cloud, and bridge credentials are never written.
+            </p>
+          </div>
+          <button type="button" onClick={() => chooseHistoryPreference("on")}>
+            Keep locally
+          </button>
+          <button type="button" onClick={() => chooseHistoryPreference("off")}>
+            Not now
+          </button>
+        </section>
+      )}
 
       {connectOpen && (
         <section className="connection-drawer" aria-label="Bridge connection">
@@ -702,6 +902,97 @@ export default function Home() {
             <KeyRound size={16} />
             Connect
           </button>
+        </section>
+      )}
+
+      {historyOpen && (
+        <section className="history-drawer" aria-label="Recent discussions">
+          <div className="history-drawer-header">
+            <div>
+              <p className="eyebrow">LOCAL ARCHIVE</p>
+              <h2>Recent discussions</h2>
+            </div>
+            <button
+              className="drawer-close"
+              type="button"
+              onClick={() => setHistoryOpen(false)}
+              aria-label="Close recent discussions"
+            >
+              <X size={17} />
+            </button>
+          </div>
+          <p className="history-privacy">
+            Stored only in your user data folder with owner-only permissions. Retained for up to{" "}
+            {health?.history?.retention.maxDays || 30} days or{" "}
+            {health?.history?.retention.maxRecords || 50} discussions.
+          </p>
+          {health?.history?.available ? (
+            <div className="history-preference">
+              <span>Archive new discussions</span>
+              <button
+                type="button"
+                className={historyPreference === "on" ? "selected" : ""}
+                onClick={() => chooseHistoryPreference("on")}
+              >
+                On
+              </button>
+              <button
+                type="button"
+                className={historyPreference !== "on" ? "selected" : ""}
+                onClick={() => chooseHistoryPreference("off")}
+              >
+                Off
+              </button>
+            </div>
+          ) : (
+            <p className="history-disabled">Local history is disabled by the bridge administrator.</p>
+          )}
+
+          <div className="history-list">
+            {historyLoading && <p className="history-empty">Loading local history…</p>}
+            {!historyLoading && historyRecords.length === 0 && (
+              <p className="history-empty">No archived discussions yet.</p>
+            )}
+            {historyRecords.map((record) => (
+              <article className="history-record" key={record.id}>
+                <button
+                  className="history-record-open"
+                  type="button"
+                  onClick={() => void openHistoryRecord(record.id)}
+                >
+                  <span className={`history-status ${record.status}`}>{record.status}</span>
+                  <strong>{record.topic}</strong>
+                  <small>
+                    {record.projectName} · {new Date(record.updatedAt).toLocaleDateString()} ·{" "}
+                    {record.messageCount} messages
+                  </small>
+                  {record.historyWarning && <em>History incomplete</em>}
+                </button>
+                <button
+                  className="history-delete"
+                  type="button"
+                  onClick={() => void deleteHistoryRecord(record)}
+                  aria-label={`Delete ${record.topic}`}
+                >
+                  <Trash2 size={14} />
+                </button>
+              </article>
+            ))}
+          </div>
+
+          <div className="history-drawer-actions">
+            <button type="button" onClick={() => setHistoryOpen(false)}>
+              New discussion
+            </button>
+            <button
+              className="clear-history"
+              type="button"
+              onClick={() => void clearHistory()}
+              disabled={!historyRecords.length}
+            >
+              Clear history
+            </button>
+          </div>
         </section>
       )}
 
@@ -869,7 +1160,13 @@ export default function Home() {
         <section className="conversation-panel">
           <div className="conversation-header">
             <div>
-              <p className="eyebrow">{isPreview ? "CONVERSATION PREVIEW" : "PROJECT ROOM"}</p>
+              <p className="eyebrow">
+                {isPreview
+                  ? "CONVERSATION PREVIEW"
+                  : viewingHistory
+                    ? "ARCHIVED DISCUSSION"
+                    : "PROJECT ROOM"}
+              </p>
               <h1>Two agents. One project.<br />You set the direction.</h1>
             </div>
             <div className="conversation-actions">
@@ -931,6 +1228,23 @@ export default function Home() {
                 <p>{message.body}</p>
               </article>
             ))}
+            {pendingSteering.length > 0 && (
+              <section className="undelivered-steering" aria-labelledby="undelivered-title">
+                <span className="human-pulse" />
+                <div>
+                  <h2 id="undelivered-title">Queued, never delivered</h2>
+                  <p>
+                    The bridge stopped before these notes reached another agent, so they are not
+                    part of the shared transcript.
+                  </p>
+                  <ul>
+                    {pendingSteering.map((message) => (
+                      <li key={message.id}>{message.body}</li>
+                    ))}
+                  </ul>
+                </div>
+              </section>
+            )}
             {speaker && (
               <article className={`message thinking ${speaker}`}>
                 <div className="message-meta">
@@ -993,6 +1307,13 @@ export default function Home() {
           </div>
 
           <OutcomeCard outcome={outcome} status={status} />
+
+          {historyWarning && (
+            <section className="history-warning" role="status">
+              <History size={15} />
+              <p>{historyWarning}</p>
+            </section>
+          )}
 
           <section className="context-block">
             <span className="context-label">CURRENT FOCUS</span>

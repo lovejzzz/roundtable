@@ -39,7 +39,7 @@ async function waitFor(check, timeoutMs = 2_000) {
   throw new Error("Timed out waiting for test state.");
 }
 
-async function startTestBridge(agentRunner) {
+async function startTestBridge(agentRunner, options = {}) {
   const { server, sessions } = createBridge({
     token,
     defaultProject: "/test/project",
@@ -47,6 +47,8 @@ async function startTestBridge(agentRunner) {
     agentRunner,
     resolveProject: async () => "/test/project",
     sessionTtlMs: 5_000,
+    historyStore: options.historyStore,
+    maxSessions: options.maxSessions,
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -356,6 +358,144 @@ test("a stop accepted before process registration prevents agent work from start
     assert.equal(stopped.outcome.reason, "stopped");
     assert.match(stopped.outcome.message, /stopped before a completion brief/);
     assert.equal(launchedWork, 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("serves a separate metadata-only archive without consuming live session capacity", async () => {
+  const archivedRecords = Array.from({ length: 20 }, (_, index) => ({
+    id: `archived-${String(index).padStart(8, "0")}`,
+    topic: `Archived topic ${index}`,
+    projectName: "project",
+    projectPath: "/test/project",
+    createdAt: "2026-07-29T12:00:00.000Z",
+    updatedAt: "2026-07-29T12:00:00.000Z",
+    status: "complete",
+    totalTurns: 2,
+    messageCount: 2,
+    hasOutcome: true,
+  }));
+  const archivedSnapshot = {
+    id: archivedRecords[0].id,
+    phase: "complete",
+    projectPath: "/test/project",
+    topic: archivedRecords[0].topic,
+    codexModel: "codex-test",
+    claudeModel: "claude-test",
+    codexEffort: "high",
+    claudeEffort: "high",
+    totalTurns: 2,
+    completedTurns: 2,
+    messages: [],
+    outcome: null,
+    pendingSteering: [],
+    historyWarning: "",
+    archived: true,
+    lastStatus: {
+      type: "session.status",
+      status: "complete",
+      turn: 2,
+      totalTurns: 2,
+    },
+  };
+  const historyStore = {
+    enabled: true,
+    append: async () => {},
+    list: async () => archivedRecords,
+    get: async (id) => (id === archivedSnapshot.id ? archivedSnapshot : null),
+    delete: async () => false,
+    clear: async () => archivedRecords.length,
+  };
+  const agentRunner = {
+    run: async ({ role, purpose }) =>
+      purpose === "synthesis"
+        ? '{"decision":"Done","rationale":"Tested","actions":[],"openQuestions":[],"consensus":true}'
+        : `${role} reply`,
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner, { historyStore, maxSessions: 1 });
+
+  try {
+    const historyResponse = await fetch(`${bridge.baseUrl}/history`, {
+      headers: authHeaders(),
+    });
+    const history = await historyResponse.json();
+    assert.equal(history.records.length, 20);
+    assert.doesNotMatch(JSON.stringify(history.records), /reply|transcript|outcome.*decision/i);
+
+    const archivedResponse = await fetch(
+      `${bridge.baseUrl}/history/${archivedSnapshot.id}`,
+      { headers: authHeaders() },
+    );
+    assert.equal(archivedResponse.status, 200);
+    assert.equal((await archivedResponse.json()).archived, true);
+    const archiveTicket = await fetch(
+      `${bridge.baseUrl}/history/${archivedSnapshot.id}/ticket`,
+      { method: "POST", headers: authHeaders() },
+    );
+    assert.equal(archiveTicket.status, 404);
+
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "A new live discussion",
+        rounds: 1,
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("history write failures do not stop the live discussion and surface a warning", async () => {
+  const historyStore = {
+    enabled: true,
+    append: async () => {
+      throw new Error("disk full");
+    },
+    list: async () => [],
+    get: async () => null,
+    delete: async () => false,
+    clear: async () => 0,
+  };
+  const agentRunner = {
+    run: async ({ role, purpose }) =>
+      purpose === "synthesis"
+        ? '{"decision":"Continue","rationale":"History is optional","actions":[],"openQuestions":[],"consensus":true}'
+        : `${role} reply`,
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner, { historyStore });
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Survive a history failure",
+        rounds: 1,
+        keepHistory: true,
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const created = await createResponse.json();
+    assert.match(created.historyWarning, /History incomplete: disk full/);
+
+    const snapshot = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${created.id}`, {
+        headers: authHeaders(),
+      });
+      const value = await response.json();
+      return value.phase === "complete" ? value : null;
+    });
+    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.outcome.status, "available");
+    assert.match(snapshot.historyWarning, /disk full/);
   } finally {
     await bridge.close();
   }

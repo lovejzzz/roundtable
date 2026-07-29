@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
-export const TERMINAL_PHASES = new Set(["complete", "stopped", "error"]);
+export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interrupted"]);
 const OUTCOME_OWNERS = new Set(["You", "Codex", "Claude", "Unassigned"]);
 
 export function buildTranscript(messages, maxCharacters = 48_000) {
@@ -177,6 +177,14 @@ export function createBridge({
   health,
   agentRunner,
   resolveProject,
+  historyStore = {
+    enabled: false,
+    append: async () => {},
+    list: async () => [],
+    get: async () => null,
+    delete: async () => false,
+    clear: async () => 0,
+  },
   allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"],
   now = () => new Date(),
   sessionTtlMs = 60 * 60 * 1000,
@@ -239,6 +247,29 @@ export function createBridge({
     if (event.type === "session.status") session.lastStatus = event;
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of session.clients) client.write(payload);
+    if (["message", "session.outcome", "session.status"].includes(event.type)) {
+      void persistHistory(session, event);
+    }
+  }
+
+  function historyFailure(session, error) {
+    const visible = safeVisibleError(error);
+    session.historyWarning = `History incomplete: ${visible}`;
+    const payload = {
+      type: "session.history",
+      warning: session.historyWarning,
+    };
+    const encoded = `data: ${JSON.stringify(payload)}\n\n`;
+    for (const client of session.clients) client.write(encoded);
+  }
+
+  function persistHistory(session, event) {
+    if (!session.keepHistory || !historyStore.enabled) return Promise.resolve();
+    const write = () => historyStore.append(session.id, event);
+    session.historyWriteChain = (session.historyWriteChain || Promise.resolve())
+      .then(write)
+      .catch((error) => historyFailure(session, error));
+    return session.historyWriteChain;
   }
 
   function setPhase(session, phase, extra = {}) {
@@ -255,7 +286,13 @@ export function createBridge({
   function flushSteering(session, targetTurn = Infinity) {
     const retained = [];
     for (const queued of session.pendingSteering) {
-      if (queued.targetTurn <= targetTurn) emit(session, { type: "message", message: queued.message });
+      if (queued.targetTurn <= targetTurn) {
+        void persistHistory(session, {
+          type: "steering.committed",
+          messageId: queued.message.id,
+        });
+        emit(session, { type: "message", message: queued.message });
+      }
       else retained.push(queued);
     }
     session.pendingSteering = retained;
@@ -392,6 +429,7 @@ export function createBridge({
         });
       }
     } finally {
+      await session.historyWriteChain;
       for (const client of session.clients) client.end();
       session.clients.clear();
       scheduleEviction(session);
@@ -404,6 +442,7 @@ export function createBridge({
       phase: session.phase,
       projectPath: session.projectPath,
       topic: session.topic,
+      createdAt: session.createdAt,
       codexModel: session.codexModel,
       claudeModel: session.claudeModel,
       codexEffort: session.codexEffort,
@@ -412,6 +451,8 @@ export function createBridge({
       completedTurns: session.completedTurns,
       messages: session.messages,
       outcome: session.outcome,
+      pendingSteering: session.pendingSteering.map((queued) => queued.message),
+      historyWarning: session.historyWarning,
       lastStatus: session.lastStatus,
     };
   }
@@ -470,8 +511,53 @@ export function createBridge({
         sendJson(request, response, 200, {
           ok: true,
           defaultProject,
+          history: {
+            available: Boolean(historyStore.enabled),
+            retention: historyStore.retention || { maxRecords: 50, maxDays: 30 },
+          },
           ...health,
         });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/history") {
+        const records = await historyStore.list();
+        sendJson(request, response, 200, {
+          enabled: Boolean(historyStore.enabled),
+          records,
+        });
+        return;
+      }
+
+      const historyMatch = url.pathname.match(/^\/history\/([^/]+)$/);
+      if (request.method === "GET" && historyMatch) {
+        const snapshot = await historyStore.get(historyMatch[1]);
+        if (!snapshot) {
+          sendJson(request, response, 404, { error: "Archived discussion not found." });
+          return;
+        }
+        sendJson(request, response, 200, snapshot);
+        return;
+      }
+
+      if (request.method === "DELETE" && historyMatch) {
+        const deleted = await historyStore.delete(historyMatch[1]);
+        if (!deleted) {
+          sendJson(request, response, 404, { error: "Archived discussion not found." });
+          return;
+        }
+        sendJson(request, response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === "DELETE" && url.pathname === "/history") {
+        const payload = await readJson(request);
+        if (payload.confirm !== "clear") {
+          sendJson(request, response, 400, { error: "Clear history requires confirmation." });
+          return;
+        }
+        const deleted = await historyStore.clear();
+        sendJson(request, response, 200, { ok: true, deleted });
         return;
       }
 
@@ -487,6 +573,7 @@ export function createBridge({
         const claudeModel = String(payload.claudeModel || health.models.claude.configured).trim();
         const codexEffort = String(payload.codexEffort || health.models.codex.effort).trim();
         const claudeEffort = String(payload.claudeEffort || health.models.claude.effort).trim();
+        const keepHistory = Boolean(payload.keepHistory && historyStore.enabled);
 
         if (!topic) {
           sendJson(request, response, 400, { error: "Add a discussion goal first." });
@@ -532,6 +619,10 @@ export function createBridge({
           pendingSteering: [],
           stopRequested: false,
           skipOutcomeRequested: false,
+          keepHistory,
+          historyWarning: "",
+          historyWriteChain: Promise.resolve(),
+          createdAt: now().toISOString(),
           clients: new Set(),
           child: null,
           outcome: null,
@@ -543,7 +634,14 @@ export function createBridge({
           },
         };
         sessions.set(id, session);
-        sendJson(request, response, 201, { id });
+        await persistHistory(session, {
+          type: "session.created",
+          session: sessionSnapshot(session),
+        });
+        sendJson(request, response, 201, {
+          id,
+          historyWarning: session.historyWarning,
+        });
         setImmediate(() => void runSession(session));
         return;
       }
@@ -596,7 +694,16 @@ export function createBridge({
             message,
             targetTurn: Math.max(0, session.currentTurn + 1),
           });
-          sendJson(request, response, 202, { ok: true, message });
+          await persistHistory(session, {
+            type: "steering.queued",
+            message,
+            targetTurn: Math.max(0, session.currentTurn + 1),
+          });
+          sendJson(request, response, 202, {
+            ok: true,
+            message,
+            historyWarning: session.historyWarning,
+          });
           return;
         }
 
@@ -614,6 +721,12 @@ export function createBridge({
           if (session.phase !== "stopping") {
             session.stopRequested = true;
             session.phase = "stopping";
+            void persistHistory(session, {
+              type: "session.status",
+              status: "stopping",
+              turn: session.completedTurns,
+              totalTurns: session.totalTurns,
+            });
             void agentRunner.stop(session, "user_stop");
           }
           sendJson(request, response, 202, { ok: true });

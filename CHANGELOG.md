@@ -4,6 +4,70 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.3] — 2026-07-29
+
+### Conversation
+
+Prompt: audit the current product and codebase, compare durable or local history,
+transcript navigation and search, agent-position comparison, action-item workflow,
+synthesis repair, and accessibility, then converge on the highest-leverage bounded
+feature for repeated real-world use.
+
+Across two rounds, Codex and Claude selected an opt-in local discussion archive.
+They agreed that repeated use first needs trustworthy continuity: a small
+metadata-only Recent Discussions drawer, faithful read-only transcript recovery,
+an append-only event log, owner-only storage outside the project, explicit
+retention and deletion, and honest recovery states for interrupted work and
+undelivered steering.
+
+### Added
+
+- A first-run choice to archive new discussions locally, remembered in the
+  browser and independently changeable from the History drawer.
+- A metadata-only Recent Discussions list showing topic, project name, date,
+  terminal state, and message count without loading transcript bodies.
+- Read-only archived discussion views that restore the transcript, participant
+  models and reasoning levels, Outcome, status, warnings, and pending steering.
+- Per-record deletion, clear-all confirmation, opt-out controls, and a bridge-wide
+  `ROUNDTABLE_HISTORY=off` kill switch.
+- Append-only NDJSON session event logs and an atomically replaced metadata index
+  in the operating system user-data directory.
+- A separate authorized `/history` API namespace that does not occupy live session
+  capacity or repopulate the in-memory live session map.
+- Archived Markdown export of queued-but-never-delivered steering in a separate,
+  explicit section.
+
+### Privacy and reliability
+
+- Enforced owner-only `0700` directory and `0600` file modes and kept archive
+  files outside the discussed project by default.
+- Sanitized credential-bearing structural fields recursively at the persistence
+  boundary, including bridge tokens, bearer authorization, SSE tickets, and
+  credential fields.
+- Limited the archive to 50 records and 30 days, pruning both metadata and event
+  logs.
+- Marked unfinished discussions `interrupted` during bridge initialization and
+  preserved undelivered steering outside the transcript.
+- Recovered all valid events before a damaged final NDJSON line and surfaced a
+  visible “History incomplete” warning instead of losing the record.
+- Kept live discussions running when history writes fail, while surfacing an
+  archive warning over SSE.
+- Replaced the misleading completion-brief placeholder with a terminal explanation
+  when an error, stop, or interruption ends a discussion before synthesis.
+
+### Verification
+
+- Thirteen bridge and archive tests covering metadata isolation, exact archive
+  retrieval, retention, deletion, clearing, owner-only permissions, credential
+  sanitization, torn-write recovery, restart interruption, pending steering, and
+  nonfatal history failures.
+- Production build, lint, diff checks, and two rendered-HTML tests.
+- Live opt-in smoke test confirming the History count, archived Error record, and
+  metadata drawer after Claude returned a temporary `529 Overloaded` response.
+- Real bridge restart with a new bearer key confirming the old in-memory session
+  was recovered from the local archive as a read-only Error transcript with its
+  model and reasoning metadata intact.
+
 ## [v0.0.0.2] — 2026-07-29
 
 ### Conversation
