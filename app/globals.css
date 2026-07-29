@@ -1013,6 +1013,92 @@ button {
   margin-top: 6px;
 }
 
+.failed-turn-card {
+  margin: 18px 0;
+  border: 1px solid #68443a;
+  background:
+    linear-gradient(135deg, rgba(218, 122, 94, 0.08), transparent 58%),
+    #181312;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+}
+
+.failed-turn-icon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #805244;
+  color: #e39a83;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 11px;
+}
+
+.failed-turn-card h2 {
+  margin: 5px 0 0;
+  color: #efe1dc;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.failed-turn-card p {
+  margin: 8px 0 0;
+  color: #c79e91;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.failed-turn-card small {
+  display: block;
+  margin-top: 8px;
+  color: #836e68;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.failed-turn-actions {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.failed-turn-actions button {
+  border: 1px solid #6b4b42;
+  background: #251a17;
+  color: #e5b1a1;
+  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.failed-turn-actions button:first-child {
+  border-color: #7f6c35;
+  background: #232014;
+  color: var(--human);
+}
+
+.failed-turn-actions button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.failed-turn-readonly {
+  color: #83756f !important;
+  font-size: 9px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
 .thinking {
   min-height: 98px;
 }

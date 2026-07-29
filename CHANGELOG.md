@@ -4,6 +4,68 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.4] — 2026-07-29
+
+### Conversation
+
+Prompt: with secure CLI orchestration, visible model and reasoning controls,
+completion briefs, and restart-safe local history already present, compare
+transcript navigation, agent-position comparison, action follow-through, prompt
+reuse, Outcome repair, and runtime resilience; then choose one bounded feature.
+
+Across two rounds, Codex and Claude selected explicit **Retry failed turn**
+recovery. The prior release’s live `529 Overloaded` smoke test supplied the
+evidence: a temporary provider failure should not terminate and archive an
+otherwise useful discussion. They converged on suspending the exact turn behind
+a retry, stop, or expiry gate; preserving the completed transcript; rebuilding
+the prompt from frozen state; disabling steering during the pause; keeping SSE
+and refresh recovery live; and making restart-recovered sessions read-only.
+
+### Added
+
+- A nonterminal `failed` phase carrying the failed agent, zero-based turn, safe
+  error, attempt count, failure time, and retry deadline.
+- A visible failed-turn card with **Retry Codex/Claude turn** and **End
+  discussion** controls, plus accurate retry progress and pause copy.
+- An authenticated `POST /sessions/:id/retry` action that atomically claims the
+  suspended turn and rejects stale or competing requests with `409`.
+- An inner agent-attempt loop that remains inside the same live session, agent,
+  and turn until retry succeeds, the user ends the discussion, or the pause
+  expires.
+- Snapshot and SSE recovery of failed and retrying phases so a same-tab refresh
+  restores the retry affordance while the original bridge remains alive.
+- A dedicated 15-minute failed-turn deadline that converts abandoned pauses to a
+  terminal error and releases retained session capacity.
+
+### Safety and reliability
+
+- Rebuilds retry prompts deterministically from the unchanged transcript instead
+  of caching a second source of truth.
+- Disables steering during failure and retry so the retried input cannot silently
+  change; notes already targeted to later turns remain untouched.
+- Emits a transcript message only after a usable agent response, preventing
+  duplicates and synthetic failure messages.
+- Resolves Stop through the suspended-turn gate even when no CLI child process is
+  active.
+- Sanitizes bearer credentials, tokens, tickets, API keys, and credential fields
+  before errors reach UI, SSE, snapshots, or opted-in history.
+- Persists failure status only for opted-in history. After bridge restart, the
+  existing archive recovery converts the unfinished session to read-only
+  `interrupted` rather than retrying it automatically.
+
+### Verification
+
+- Seventeen bridge and archive tests, including exact-prompt equality,
+  same-role/same-turn recovery, duplicate retry rejection, clean stop from
+  failure, pause expiry and capacity release, credential redaction, and failed
+  archive interruption on restart.
+- Production build, lint, rendered HTML checks, and diff validation.
+- A live two-round Codex–Claude design review with a structured consensus brief.
+- A controlled real-CLI smoke test using an intentionally invalid Claude model:
+  Codex’s completed reply remained intact, Claude paused with a sanitized error,
+  retry advanced the attempt count without duplicating the transcript, steering
+  stayed disabled, and End discussion produced a clean Stopped outcome.
+
 ## [v0.0.0.3] — 2026-07-29
 
 ### Conversation

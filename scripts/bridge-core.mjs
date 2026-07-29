@@ -127,6 +127,11 @@ function makeMessage(now, role, body, round, model, effort) {
 function safeVisibleError(error) {
   const raw = error instanceof Error ? error.message : "An agent turn failed.";
   return raw
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/-]{8,}/gi, "Bearer [redacted]")
+    .replace(
+      /\b(authorization|api[_-]?key|bridge[_-]?key|credential|sse[_-]?ticket|ticket|token)\s*[:=]\s*[^\s,;]+/gi,
+      "$1=[redacted]",
+    )
     .replace(/\b(?:sk-|art_v1_|api[_-]?key[:=]?)[A-Za-z0-9._-]{10,}\b/gi, "[redacted]")
     .slice(0, 700);
 }
@@ -188,6 +193,7 @@ export function createBridge({
   allowedOrigins = ["http://localhost:3000", "http://127.0.0.1:3000"],
   now = () => new Date(),
   sessionTtlMs = 60 * 60 * 1000,
+  failedTurnTtlMs = 15 * 60 * 1000,
   maxSessions = 20,
 }) {
   const sessions = new Map();
@@ -279,7 +285,30 @@ export function createBridge({
       status: phase === "stopping" ? "running" : phase,
       turn: session.completedTurns,
       totalTurns: session.totalTurns,
+      failedTurn:
+        phase === "failed" || phase === "retrying" ? session.failedTurn : null,
       ...extra,
+    });
+  }
+
+  function waitForFailedTurnAction(session) {
+    return new Promise((resolve) => {
+      const gate = {
+        claimed: false,
+        timer: null,
+        settle(action) {
+          if (gate.claimed) return false;
+          gate.claimed = true;
+          clearTimeout(gate.timer);
+          resolve(action);
+          return true;
+        },
+      };
+      gate.timer = setTimeout(() => gate.settle("expired"), failedTurnTtlMs);
+      gate.timer.unref?.();
+      session.failureGate = gate;
+    }).finally(() => {
+      session.failureGate = null;
     });
   }
 
@@ -322,22 +351,72 @@ export function createBridge({
   async function runSession(session) {
     try {
       session.phase = session.stopRequested ? "stopping" : "running";
+      turnLoop:
       for (let turn = 0; turn < session.totalTurns; turn += 1) {
         if (session.phase === "stopping" || session.stopRequested) break;
         session.currentTurn = turn;
         flushSteering(session, turn);
         const role = turn % 2 === 0 ? "codex" : "claude";
         const round = Math.floor(turn / 2) + 1;
+        let attempts = 0;
         emit(session, {
           type: "session.status",
           status: "running",
           speaker: role,
           turn,
           totalTurns: session.totalTurns,
+          failedTurn: null,
         });
-        const prompt = buildPrompt(session, role, turn);
-        const body = await agentRunner.run({ session, role, prompt });
-        if (!body) throw new Error(`${role === "codex" ? "Codex" : "Claude"} returned no text.`);
+        let body;
+        while (body === undefined) {
+          if (session.stopRequested) break turnLoop;
+          const prompt = buildPrompt(session, role, turn);
+          try {
+            const reply = await agentRunner.run({ session, role, prompt });
+            if (!reply) {
+              throw new Error(`${role === "codex" ? "Codex" : "Claude"} returned no text.`);
+            }
+            body = reply;
+          } catch (error) {
+            if (
+              session.phase === "stopping" ||
+              session.stopRequested ||
+              error?.code === "USER_STOP"
+            ) {
+              session.stopRequested = true;
+              break turnLoop;
+            }
+            attempts += 1;
+            const failedAt = now();
+            session.failedTurn = {
+              turn,
+              role,
+              safeError: safeVisibleError(error),
+              attempts,
+              failedAt: failedAt.toISOString(),
+              expiresAt: new Date(failedAt.getTime() + failedTurnTtlMs).toISOString(),
+            };
+            setPhase(session, "failed", { failedTurn: session.failedTurn });
+            const action = await waitForFailedTurnAction(session);
+            if (action === "stop") {
+              session.stopRequested = true;
+              break turnLoop;
+            }
+            if (action === "expired") {
+              setPhase(session, "error", {
+                failedTurn: session.failedTurn,
+                note: `${role === "codex" ? "Codex" : "Claude"} retry window expired.`,
+              });
+              return;
+            }
+            setPhase(session, "retrying", {
+              speaker: role,
+              turn,
+              failedTurn: session.failedTurn,
+            });
+          }
+        }
+        session.failedTurn = null;
         const model = role === "codex" ? session.codexModel : session.claudeModel;
         const effort = role === "codex" ? session.codexEffort : session.claudeEffort;
         emit(session, {
@@ -350,6 +429,7 @@ export function createBridge({
           status: "running",
           turn: session.completedTurns,
           totalTurns: session.totalTurns,
+          failedTurn: null,
         });
       }
 
@@ -425,7 +505,7 @@ export function createBridge({
           message: makeMessage(now, "human", `Bridge error: ${visibleMessage}`),
         });
         setPhase(session, "error", {
-          note: error instanceof Error ? error.message.slice(0, 4_000) : visibleMessage,
+          note: visibleMessage,
         });
       }
     } finally {
@@ -452,6 +532,7 @@ export function createBridge({
       messages: session.messages,
       outcome: session.outcome,
       pendingSteering: session.pendingSteering.map((queued) => queued.message),
+      failedTurn: session.failedTurn,
       historyWarning: session.historyWarning,
       lastStatus: session.lastStatus,
     };
@@ -617,6 +698,8 @@ export function createBridge({
           currentTurn: -1,
           messages: [],
           pendingSteering: [],
+          failedTurn: null,
+          failureGate: null,
           stopRequested: false,
           skipOutcomeRequested: false,
           keepHistory,
@@ -657,7 +740,7 @@ export function createBridge({
         return;
       }
 
-      const actionMatch = url.pathname.match(/^\/sessions\/([^/]+)\/(ticket|steer|stop)$/);
+      const actionMatch = url.pathname.match(/^\/sessions\/([^/]+)\/(ticket|retry|steer|stop)$/);
       if (actionMatch) {
         const [, id, action] = actionMatch;
         const session = sessions.get(id);
@@ -676,7 +759,12 @@ export function createBridge({
 
         if (request.method === "POST" && action === "steer") {
           if (session.phase !== "running") {
-            sendJson(request, response, 409, { error: "This discussion has already ended." });
+            sendJson(request, response, 409, {
+              error:
+                session.phase === "failed" || session.phase === "retrying"
+                  ? "Retry or end the failed turn before adding another note."
+                  : "This discussion has already ended.",
+            });
             return;
           }
           if (session.currentTurn >= session.totalTurns - 1) {
@@ -707,6 +795,24 @@ export function createBridge({
           return;
         }
 
+        if (request.method === "POST" && action === "retry") {
+          if (
+            session.phase !== "failed" ||
+            !session.failedTurn ||
+            !session.failureGate?.settle("retry")
+          ) {
+            sendJson(request, response, 409, {
+              error: "This failed turn is already resuming or is no longer retryable.",
+            });
+            return;
+          }
+          sendJson(request, response, 202, {
+            ok: true,
+            attempt: session.failedTurn.attempts + 1,
+          });
+          return;
+        }
+
         if (request.method === "POST" && action === "stop") {
           if (TERMINAL_PHASES.has(session.phase)) {
             sendJson(request, response, 409, { error: "This discussion has already ended." });
@@ -716,6 +822,31 @@ export function createBridge({
             session.skipOutcomeRequested = true;
             void agentRunner.stop(session, "user_stop");
             sendJson(request, response, 202, { ok: true, skippingOutcome: true });
+            return;
+          }
+          if (session.phase === "failed") {
+            if (!session.failureGate?.settle("stop")) {
+              sendJson(request, response, 409, {
+                error: "This failed turn is already resuming or ending.",
+              });
+              return;
+            }
+            session.stopRequested = true;
+            session.phase = "stopping";
+            void persistHistory(session, {
+              type: "session.status",
+              status: "stopping",
+              turn: session.completedTurns,
+              totalTurns: session.totalTurns,
+              failedTurn: session.failedTurn,
+            });
+            sendJson(request, response, 202, { ok: true });
+            return;
+          }
+          if (session.phase === "retrying" && session.failureGate?.claimed) {
+            sendJson(request, response, 409, {
+              error: "This failed turn is already resuming.",
+            });
             return;
           }
           if (session.phase !== "stopping") {

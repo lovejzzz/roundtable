@@ -47,6 +47,7 @@ async function startTestBridge(agentRunner, options = {}) {
     agentRunner,
     resolveProject: async () => "/test/project",
     sessionTtlMs: 5_000,
+    failedTurnTtlMs: options.failedTurnTtlMs,
     historyStore: options.historyStore,
     maxSessions: options.maxSessions,
   });
@@ -358,6 +359,226 @@ test("a stop accepted before process registration prevents agent work from start
     assert.equal(stopped.outcome.reason, "stopped");
     assert.match(stopped.outcome.message, /stopped before a completion brief/);
     assert.equal(launchedWork, 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("retries the same failed role and turn without changing its prompt or duplicating messages", async () => {
+  const prompts = [];
+  let turnAttempts = 0;
+  const agentRunner = {
+    async run({ role, purpose, prompt }) {
+      if (purpose === "synthesis") {
+        return '{"decision":"Recovered","rationale":"The retry succeeded.","actions":[],"openQuestions":[],"consensus":true}';
+      }
+      prompts.push(prompt);
+      if (role === "codex" && turnAttempts++ === 0) {
+        throw new Error("529 Overloaded");
+      }
+      return `${role} recovered reply`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Recover a failed turn",
+        rounds: 1,
+      }),
+    });
+    const { id } = await createResponse.json();
+    const failed = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "failed" ? snapshot : null;
+    });
+    assert.equal(failed.messages.length, 0);
+    assert.equal(failed.failedTurn.role, "codex");
+    assert.equal(failed.failedTurn.turn, 0);
+    assert.equal(failed.failedTurn.attempts, 1);
+
+    const [firstRetry, competingRetry] = await Promise.all([
+      fetch(`${bridge.baseUrl}/sessions/${id}/retry`, {
+        method: "POST",
+        headers: authHeaders(),
+      }),
+      fetch(`${bridge.baseUrl}/sessions/${id}/retry`, {
+        method: "POST",
+        headers: authHeaders(),
+      }),
+    ]);
+    assert.deepEqual(
+      [firstRetry.status, competingRetry.status].sort(),
+      [202, 409],
+    );
+
+    const completed = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+    assert.equal(prompts[0], prompts[1]);
+    assert.deepEqual(
+      completed.messages.map((message) => message.role),
+      ["codex", "claude"],
+    );
+    assert.equal(completed.failedTurn, null);
+    assert.equal(completed.outcome.status, "available");
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("stops cleanly from a failed turn without adding a synthetic error message", async () => {
+  const agentRunner = {
+    run: async () => {
+      throw new Error("temporary provider failure");
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "End a failed discussion",
+        rounds: 1,
+      }),
+    });
+    const { id } = await createResponse.json();
+    await waitFor(() => bridge.sessions.get(id)?.phase === "failed");
+
+    const stopResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/stop`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(stopResponse.status, 202);
+
+    const stopped = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "stopped" ? snapshot : null;
+    });
+    assert.equal(stopped.messages.length, 0);
+    assert.equal(stopped.outcome.reason, "stopped");
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("expires an abandoned failed turn and releases its retained session slot", async () => {
+  let calls = 0;
+  const agentRunner = {
+    async run({ role, purpose }) {
+      if (calls++ === 0) throw new Error("temporary provider failure");
+      return purpose === "synthesis"
+        ? '{"decision":"Continue","rationale":"Capacity recovered.","actions":[],"openQuestions":[],"consensus":true}'
+        : `${role} reply`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner, {
+    failedTurnTtlMs: 25,
+    maxSessions: 1,
+  });
+
+  try {
+    const firstResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Expire this pause",
+        rounds: 1,
+      }),
+    });
+    const { id } = await firstResponse.json();
+    const expired = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "error" ? snapshot : null;
+    });
+    assert.match(expired.lastStatus.note, /retry window expired/i);
+
+    const secondResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Use the released slot",
+        rounds: 1,
+      }),
+    });
+    assert.equal(secondResponse.status, 201);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("redacts failed-turn credentials before snapshots and opted-in history", async () => {
+  const events = [];
+  const historyStore = {
+    enabled: true,
+    append: async (_id, event) => events.push(event),
+    list: async () => [],
+    get: async () => null,
+    delete: async () => false,
+    clear: async () => 0,
+  };
+  const agentRunner = {
+    run: async () => {
+      throw new Error(
+        "Authorization: Bearer abcdefghijklmnop token=secret-token-value sk-secretvalue123456",
+      );
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner, { historyStore });
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Redact a failed turn",
+        rounds: 1,
+        keepHistory: true,
+      }),
+    });
+    const { id } = await createResponse.json();
+    const failed = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "failed" ? snapshot : null;
+    });
+    const serialized = JSON.stringify({ failed, events });
+    assert.doesNotMatch(serialized, /abcdefghijklmnop|secret-token-value|secretvalue123456/);
+    assert.match(serialized, /\[redacted\]/);
+
+    await fetch(`${bridge.baseUrl}/sessions/${id}/stop`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
   } finally {
     await bridge.close();
   }

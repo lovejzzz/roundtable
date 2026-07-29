@@ -139,9 +139,17 @@ test("marks restarted work interrupted and keeps undelivered steering outside th
     });
     await firstStore.append(id, {
       type: "session.status",
-      status: "running",
+      status: "failed",
       turn: 0,
       totalTurns: 2,
+      failedTurn: {
+        turn: 0,
+        role: "codex",
+        safeError: "Temporary provider failure.",
+        attempts: 1,
+        failedAt: "2026-07-29T12:03:00.000Z",
+        expiresAt: "2026-07-29T12:18:00.000Z",
+      },
     });
 
     const restartedStore = createHistoryStore({
@@ -154,6 +162,7 @@ test("marks restarted work interrupted and keeps undelivered steering outside th
     assert.equal(snapshot.lastStatus.status, "interrupted");
     assert.equal(snapshot.messages.length, 0);
     assert.equal(snapshot.pendingSteering[0].body, "Never delivered");
+    assert.equal(snapshot.failedTurn ?? null, null);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

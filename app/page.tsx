@@ -76,6 +76,15 @@ type BridgeHealth = {
   };
 };
 
+type FailedTurn = {
+  turn: number;
+  role: Exclude<Speaker, "human">;
+  safeError: string;
+  attempts: number;
+  failedAt: string;
+  expiresAt: string;
+};
+
 type SessionEvent =
   | { type: "message"; message: Message }
   | { type: "session.outcome"; outcome: Outcome }
@@ -87,12 +96,15 @@ type SessionEvent =
       turn?: number;
       totalTurns?: number;
       note?: string;
+      failedTurn?: FailedTurn | null;
     };
 
 type SessionStatus =
   | "idle"
   | "connecting"
   | "running"
+  | "failed"
+  | "retrying"
   | "synthesizing"
   | "complete"
   | "stopped"
@@ -113,6 +125,7 @@ type SessionSnapshot = {
   messages: Message[];
   outcome: Outcome | null;
   pendingSteering: Message[];
+  failedTurn?: FailedTurn | null;
   historyWarning: string;
   archived?: boolean;
   lastStatus: Extract<SessionEvent, { type: "session.status" }>;
@@ -252,11 +265,25 @@ function OutcomeCard({
         </div>
       )}
 
-      {!outcome && !TERMINAL_STATUSES.has(status) && status !== "synthesizing" && (
+      {!outcome && status === "failed" && (
+        <p className="outcome-empty">
+          The transcript is safe. Retry or end the paused turn to continue.
+        </p>
+      )}
+
+      {!outcome && status === "retrying" && (
+        <p className="outcome-empty">
+          The failed agent turn is being retried with the same discussion context.
+        </p>
+      )}
+
+      {!outcome &&
+        !TERMINAL_STATUSES.has(status) &&
+        !["failed", "retrying", "synthesizing"].includes(status) && (
         <p className="outcome-empty">
           A completion brief will appear here after the agents finish.
         </p>
-      )}
+        )}
 
       {!outcome && TERMINAL_STATUSES.has(status) && (
         <p className="outcome-empty">
@@ -333,6 +360,7 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>(SAMPLE_MESSAGES);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [pendingSteering, setPendingSteering] = useState<Message[]>([]);
+  const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const [historyWarning, setHistoryWarning] = useState("");
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -363,9 +391,11 @@ export default function Home() {
   const feedRef = useRef<HTMLDivElement | null>(null);
 
   const connected = Boolean(health?.ok);
-  const active = status === "running";
+  const active =
+    !viewingHistory &&
+    (status === "running" || status === "failed" || status === "retrying");
   const busy = active || status === "synthesizing";
-  const canSteer = active && turn < totalTurns - 1;
+  const canSteer = status === "running" && turn < totalTurns - 1;
   const codexEfforts = health?.models.codex.efforts?.length
     ? health.models.codex.efforts
     : DEFAULT_EFFORT_LEVELS;
@@ -463,6 +493,7 @@ export default function Home() {
     setMessages(snapshot.messages);
     setOutcome(snapshot.outcome);
     setPendingSteering(snapshot.pendingSteering || []);
+    setFailedTurn(snapshot.failedTurn || snapshot.lastStatus.failedTurn || null);
     setHistoryWarning(snapshot.historyWarning || "");
     setViewingHistory(archived);
     setIsPreview(false);
@@ -495,6 +526,8 @@ export default function Home() {
     applySnapshot(snapshot);
     if (
       snapshot.phase === "running" ||
+      snapshot.phase === "failed" ||
+      snapshot.phase === "retrying" ||
       snapshot.phase === "starting" ||
       snapshot.phase === "stopping" ||
       snapshot.phase === "synthesizing"
@@ -533,6 +566,7 @@ export default function Home() {
       }
       setStatus(update.status);
       setSpeaker(update.speaker || null);
+      if ("failedTurn" in update) setFailedTurn(update.failedTurn || null);
       if (typeof update.turn === "number") setTurn(update.turn);
       if (typeof update.totalTurns === "number") setTotalTurns(update.totalTurns);
       if (TERMINAL_STATUSES.has(update.status)) {
@@ -591,6 +625,7 @@ export default function Home() {
     setMessages([]);
     setOutcome(null);
     setPendingSteering([]);
+    setFailedTurn(null);
     setHistoryWarning(data.historyWarning || "");
     setViewingHistory(false);
     setIsPreview(false);
@@ -714,6 +749,19 @@ export default function Home() {
     });
   }
 
+  async function retryFailedTurn() {
+    if (!sessionId || status !== "failed" || viewingHistory) return;
+    setConnectionError("");
+    const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/retry`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: string };
+      setConnectionError(data.error || "The failed turn could not be retried.");
+    }
+  }
+
   function transcriptMarkdown() {
     const lines = [
       "# Roundtable transcript",
@@ -826,6 +874,10 @@ export default function Home() {
           <span className={`live-dot ${busy ? "is-live" : ""}`} />
           {status === "synthesizing"
             ? "SYNTHESIZING OUTCOME"
+            : status === "failed"
+              ? `TURN ${(failedTurn?.turn ?? turn) + 1} PAUSED`
+              : status === "retrying"
+                ? `RETRYING ${failedTurn?.role === "claude" ? "CLAUDE" : "CODEX"}`
             : active
               ? `LIVE · TURN ${turn + 1}`
               : isPreview
@@ -1051,6 +1103,10 @@ export default function Home() {
               {busy ? <Radio size={17} /> : <Sparkles size={17} />}
               {status === "synthesizing"
                 ? "Building outcome"
+                : status === "failed"
+                  ? "Turn paused"
+                  : status === "retrying"
+                    ? "Retrying turn"
                 : active
                   ? "Discussion running"
                   : "Start the roundtable"}
@@ -1185,7 +1241,11 @@ export default function Home() {
               {busy && (
                 <button className="stop-button" type="button" onClick={stopDiscussion}>
                   <CircleStop size={16} />
-                  {status === "synthesizing" ? "Skip brief" : "Stop"}
+                  {status === "synthesizing"
+                    ? "Skip brief"
+                    : status === "failed"
+                      ? "End discussion"
+                      : "Stop"}
                 </button>
               )}
             </div>
@@ -1245,6 +1305,48 @@ export default function Home() {
                 </div>
               </section>
             )}
+            {failedTurn && (status === "failed" || status === "retrying") && (
+              <section className="failed-turn-card" role="alert" aria-labelledby="failed-turn-title">
+                <div className="failed-turn-icon">
+                  {failedTurn.role === "codex" ? "C" : "A"}
+                </div>
+                <div>
+                  <span className="context-label">TURN {failedTurn.turn + 1} PAUSED</span>
+                  <h2 id="failed-turn-title">
+                    {failedTurn.role === "codex" ? "Codex" : "Claude"} failed before replying
+                  </h2>
+                  <p>{failedTurn.safeError}</p>
+                  <small>
+                    {failedTurn.attempts === 1
+                      ? "First attempt failed"
+                      : `${failedTurn.attempts} attempts failed`}
+                    {" · "}Retry available until {displayTime(failedTurn.expiresAt)}
+                  </small>
+                  {viewingHistory ? (
+                    <p className="failed-turn-readonly">
+                      This archived recovery state is read-only.
+                    </p>
+                  ) : (
+                    <div className="failed-turn-actions">
+                      <button
+                        type="button"
+                        onClick={() => void retryFailedTurn()}
+                        disabled={status === "retrying"}
+                      >
+                        <RefreshCw size={14} />
+                        {status === "retrying"
+                          ? "Retrying…"
+                          : `Retry ${failedTurn.role === "codex" ? "Codex" : "Claude"} turn`}
+                      </button>
+                      <button type="button" onClick={() => void stopDiscussion()}>
+                        <CircleStop size={14} />
+                        End discussion
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </section>
+            )}
             {speaker && (
               <article className={`message thinking ${speaker}`}>
                 <div className="message-meta">
@@ -1277,6 +1379,8 @@ export default function Home() {
                 placeholder={
                   canSteer
                     ? "Add a priority, correction, or question…"
+                    : status === "failed" || status === "retrying"
+                      ? "Retry or end this turn before adding another note…"
                     : status === "synthesizing"
                       ? "The discussion is complete while Codex builds the brief…"
                     : active

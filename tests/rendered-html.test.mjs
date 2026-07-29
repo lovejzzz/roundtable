@@ -57,6 +57,8 @@ test("removes every starter-preview marker", async () => {
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview|react-loading-skeleton/);
   assert.doesNotMatch(layout, /Starter Project|codex-preview|_sites-preview/);
   assert.doesNotMatch(packageJson, /site-creator-vinext-starter|react-loading-skeleton/);
+  assert.match(page, /Retry failed turn|Retry .* turn|failed-turn-card/i);
+  assert.match(page, /Retry or end this turn before adding another note/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
   await access(new URL("../scripts/bridge.mjs", import.meta.url));
