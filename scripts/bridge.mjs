@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { access, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { constants } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
 const host = "127.0.0.1";
@@ -81,6 +81,31 @@ const codexPath = await findExecutable("codex");
 const claudePath = await findExecutable("claude");
 const sandboxExecPath =
   process.platform === "darwin" ? await findExecutable("sandbox-exec") : "";
+const codexConfigText = await readFile(
+  join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
+  "utf8",
+).catch(() => "");
+const codexConfiguredModel =
+  codexConfigText.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1] || "";
+const codexConfiguredEffort =
+  codexConfigText.match(/^\s*model_reasoning_effort\s*=\s*["']([^"']+)["']/m)?.[1] || "medium";
+const claudeSettingsText = await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(
+  () => "",
+);
+let claudeConfiguredModel = process.env.ANTHROPIC_MODEL || "";
+let claudeConfiguredEffort = "medium";
+if (claudeSettingsText) {
+  try {
+    const settings = JSON.parse(claudeSettingsText);
+    if (!claudeConfiguredModel) {
+      claudeConfiguredModel = typeof settings.model === "string" ? settings.model : "";
+    }
+    claudeConfiguredEffort =
+      typeof settings.effortLevel === "string" ? settings.effortLevel : "medium";
+  } catch {
+    // A malformed optional settings file should not prevent the bridge from starting.
+  }
+}
 const [codexVersion, claudeVersion] = await Promise.all([
   runSmallCommand(codexPath, ["--version"]),
   runSmallCommand(claudePath, ["--version"]),
@@ -93,7 +118,7 @@ function emit(session, event) {
   for (const client of session.clients) client.write(payload);
 }
 
-function makeMessage(role, body, round) {
+function makeMessage(role, body, round, model, effort) {
   return {
     id: randomUUID(),
     author: role === "codex" ? "Codex" : role === "claude" ? "Claude" : "You",
@@ -101,6 +126,8 @@ function makeMessage(role, body, round) {
     body: body.trim(),
     at: new Date().toISOString(),
     ...(round ? { round } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
   };
 }
 
@@ -182,23 +209,28 @@ async function runCodex(session, prompt) {
   const outputDirectory = await mkdtemp(join(tmpdir(), "roundtable-codex-"));
   const outputFile = join(outputDirectory, "last-message.txt");
   try {
+    const args = [
+      "exec",
+      "--color",
+      "never",
+      "--skip-git-repo-check",
+      "--ephemeral",
+      "--cd",
+      session.projectPath,
+      "--sandbox",
+      "read-only",
+      "--output-last-message",
+      outputFile,
+    ];
+    if (session.codexModel) args.push("--model", session.codexModel);
+    if (session.codexEffort) {
+      args.push("--config", `model_reasoning_effort="${session.codexEffort}"`);
+    }
+    args.push("-");
     await runProcess(
       session,
       codexPath,
-      [
-        "exec",
-        "--color",
-        "never",
-        "--skip-git-repo-check",
-        "--ephemeral",
-        "--cd",
-        session.projectPath,
-        "--sandbox",
-        "read-only",
-        "--output-last-message",
-        outputFile,
-        "-",
-      ],
+      args,
       prompt,
     );
     return (await readFile(outputFile, "utf8")).trim();
@@ -221,6 +253,8 @@ async function runClaude(session, prompt) {
     "--tools",
     "Read,Glob,Grep",
   ];
+  if (session.claudeModel) claudeArgs.push("--model", session.claudeModel);
+  if (session.claudeEffort) claudeArgs.push("--effort", session.claudeEffort);
 
   if (sandboxExecPath) {
     const escapedProjectPath = session.projectPath
@@ -262,7 +296,9 @@ async function runSession(session) {
       const body =
         role === "codex" ? await runCodex(session, prompt) : await runClaude(session, prompt);
       if (!body) throw new Error(`${role === "codex" ? "Codex" : "Claude"} returned no text.`);
-      emit(session, { type: "message", message: makeMessage(role, body, round) });
+      const model = role === "codex" ? session.codexModel : session.claudeModel;
+      const effort = role === "codex" ? session.codexEffort : session.claudeEffort;
+      emit(session, { type: "message", message: makeMessage(role, body, round, model, effort) });
       session.completedTurns = turn + 1;
       emit(session, {
         type: "session.status",
@@ -319,6 +355,10 @@ const server = createServer(async (request, response) => {
         ok: true,
         defaultProject: process.cwd(),
         projectWriteGuard: Boolean(sandboxExecPath),
+        models: {
+          codex: { configured: codexConfiguredModel, effort: codexConfiguredEffort },
+          claude: { configured: claudeConfiguredModel, effort: claudeConfiguredEffort },
+        },
         codex: { available: Boolean(codexPath), version: codexVersion },
         claude: { available: Boolean(claudePath), version: claudeVersion },
       });
@@ -336,6 +376,10 @@ const server = createServer(async (request, response) => {
       const requestedPath = String(payload.projectPath || "").trim();
       const topic = String(payload.topic || "").trim();
       const rounds = Math.max(1, Math.min(5, Number(payload.rounds) || 3));
+      const codexModel = String(payload.codexModel || codexConfiguredModel).trim();
+      const claudeModel = String(payload.claudeModel || claudeConfiguredModel).trim();
+      const codexEffort = String(payload.codexEffort || codexConfiguredEffort).trim();
+      const claudeEffort = String(payload.claudeEffort || claudeConfiguredEffort).trim();
 
       if (!isAbsolute(requestedPath)) {
         sendJson(request, response, 400, { error: "Project folder must be an absolute path." });
@@ -355,12 +399,29 @@ const server = createServer(async (request, response) => {
         sendJson(request, response, 400, { error: "Add a discussion goal first." });
         return;
       }
+      const modelPattern = /^[A-Za-z0-9._:/[\]-]+$/;
+      const allowedEfforts = new Set(["low", "medium", "high", "xhigh", "max"]);
+      if (
+        (codexModel && !modelPattern.test(codexModel)) ||
+        (claudeModel && !modelPattern.test(claudeModel))
+      ) {
+        sendJson(request, response, 400, { error: "Model names contain unsupported characters." });
+        return;
+      }
+      if (!allowedEfforts.has(codexEffort) || !allowedEfforts.has(claudeEffort)) {
+        sendJson(request, response, 400, { error: "Reasoning effort is not supported." });
+        return;
+      }
 
       const id = randomUUID();
       const session = {
         id,
         projectPath,
         topic,
+        codexModel,
+        claudeModel,
+        codexEffort,
+        claudeEffort,
         totalTurns: rounds * 2,
         completedTurns: 0,
         messages: [],

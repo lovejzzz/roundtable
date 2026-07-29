@@ -13,7 +13,7 @@ import {
   Wifi,
   WifiOff,
 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type Speaker = "codex" | "claude" | "human";
 
@@ -24,12 +24,18 @@ type Message = {
   body: string;
   at: string;
   round?: number;
+  model?: string;
+  effort?: string;
 };
 
 type BridgeHealth = {
   ok: boolean;
   defaultProject: string;
   projectWriteGuard: boolean;
+  models: {
+    codex: { configured: string; effort: string };
+    claude: { configured: string; effort: string };
+  };
   codex: { available: boolean; version: string };
   claude: { available: boolean; version: string };
 };
@@ -80,6 +86,43 @@ const SAMPLE_MESSAGES: Message[] = [
 ];
 
 const DEFAULT_BRIDGE = "http://127.0.0.1:4317";
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+
+function friendlyModelName(role: Exclude<Speaker, "human">, model: string) {
+  if (!model) return "CLI default";
+  const normalized = model.toLowerCase();
+  if (role === "claude") {
+    if (normalized.includes("opus")) {
+      const version = normalized.match(/opus-(\d+(?:-\d+)*)/)?.[1]?.replaceAll("-", ".") || "5";
+      return `Claude Opus ${version}${normalized.includes("[1m]") ? " · 1M" : ""}`;
+    }
+    if (normalized.includes("sonnet")) {
+      const version = normalized.match(/sonnet-(\d+(?:-\d+)*)/)?.[1]?.replaceAll("-", ".") || "5";
+      return `Claude Sonnet ${version}`;
+    }
+    if (normalized.includes("fable")) return "Claude Fable 5";
+  }
+  if (normalized.startsWith("gpt-")) {
+    return normalized
+      .split("-")
+      .map((part, index) => (index === 0 ? part.toUpperCase() : part[0]?.toUpperCase() + part.slice(1)))
+      .join(" ");
+  }
+  return model;
+}
+
+function friendlyEffort(effort: string) {
+  if (effort === "xhigh") return "Extra high";
+  return effort ? effort[0].toUpperCase() + effort.slice(1) : "CLI default";
+}
+
+function effortStyle(effort: string) {
+  const index = Math.max(
+    0,
+    EFFORT_LEVELS.indexOf((effort || "medium") as (typeof EFFORT_LEVELS)[number]),
+  );
+  return { "--effort-progress": `${(index / (EFFORT_LEVELS.length - 1)) * 100}%` } as CSSProperties;
+}
 
 function shortVersion(version?: string) {
   return version?.replace(/^codex-cli\s*/i, "").replace(/\s*\(Claude Code\)$/i, "") || "—";
@@ -109,6 +152,10 @@ export default function Home() {
     "Review this project’s architecture and agree on the highest-leverage next steps.",
   );
   const [rounds, setRounds] = useState("3");
+  const [codexModel, setCodexModel] = useState("");
+  const [claudeModel, setClaudeModel] = useState("");
+  const [codexEffort, setCodexEffort] = useState("");
+  const [claudeEffort, setClaudeEffort] = useState("");
   const [steering, setSteering] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
@@ -143,6 +190,10 @@ export default function Home() {
       localStorage.setItem("roundtable.bridge", nextBridge.replace(/\/$/, ""));
       localStorage.setItem("roundtable.token", nextToken.trim());
       if (!projectPath) setProjectPath(data.defaultProject);
+      setCodexModel((current) => current || data.models?.codex.configured || "");
+      setClaudeModel((current) => current || data.models?.claude.configured || "");
+      setCodexEffort((current) => current || data.models?.codex.effort || "medium");
+      setClaudeEffort((current) => current || data.models?.claude.effort || "medium");
       setStatus((current) => (current === "connecting" ? "idle" : current));
       setConnectOpen(false);
     } catch (error) {
@@ -226,6 +277,10 @@ export default function Home() {
         projectPath: projectPath.trim(),
         topic: topic.trim(),
         rounds: Number(rounds),
+        codexModel: codexModel.trim(),
+        claudeModel: claudeModel.trim(),
+        codexEffort,
+        claudeEffort,
       }),
     });
     const data = (await response.json()) as { id?: string; error?: string };
@@ -382,22 +437,100 @@ export default function Home() {
 
           <div className="agent-stack">
             <p className="eyebrow">PARTICIPANTS</p>
-            <div className="agent-row">
+            <div className="agent-row codex-agent">
               <span className="agent-glyph codex-glyph">C</span>
-              <div>
+              <div className="agent-copy">
                 <strong>Codex CLI</strong>
                 <small>{connected ? shortVersion(health?.codex.version) : "Waiting for bridge"}</small>
+                <label className="model-picker">
+                  <span>MODEL</span>
+                  <div className="model-input-stack">
+                    <output>{friendlyModelName("codex", codexModel)}</output>
+                    <input
+                      list="codex-model-options"
+                      value={codexModel}
+                      onChange={(event) => setCodexModel(event.target.value)}
+                      placeholder="CLI default"
+                      disabled={active}
+                      aria-label="Codex model"
+                    />
+                  </div>
+                </label>
+                <label className="effort-picker">
+                  <span className="effort-heading">
+                    <span>REASONING</span>
+                    <output>{friendlyEffort(codexEffort || "medium")}</output>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max={EFFORT_LEVELS.length - 1}
+                    step="1"
+                    value={Math.max(0, EFFORT_LEVELS.indexOf((codexEffort || "medium") as typeof EFFORT_LEVELS[number]))}
+                    onChange={(event) => setCodexEffort(EFFORT_LEVELS[Number(event.target.value)])}
+                    disabled={active}
+                    aria-label="Codex reasoning effort"
+                    style={effortStyle(codexEffort)}
+                  />
+                </label>
               </div>
               <span className={`presence ${health?.codex.available ? "online" : ""}`} />
             </div>
-            <div className="agent-row">
+            <div className="agent-row claude-agent">
               <span className="agent-glyph claude-glyph">A</span>
-              <div>
+              <div className="agent-copy">
                 <strong>Claude CLI</strong>
                 <small>{connected ? shortVersion(health?.claude.version) : "Waiting for bridge"}</small>
+                <label className="model-picker">
+                  <span>MODEL</span>
+                  <div className="model-input-stack">
+                    <output>{friendlyModelName("claude", claudeModel)}</output>
+                    <input
+                      list="claude-model-options"
+                      value={claudeModel}
+                      onChange={(event) => setClaudeModel(event.target.value)}
+                      placeholder="CLI default"
+                      disabled={active}
+                      aria-label="Claude model"
+                    />
+                  </div>
+                </label>
+                <label className="effort-picker">
+                  <span className="effort-heading">
+                    <span>REASONING</span>
+                    <output>{friendlyEffort(claudeEffort || "medium")}</output>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max={EFFORT_LEVELS.length - 1}
+                    step="1"
+                    value={Math.max(0, EFFORT_LEVELS.indexOf((claudeEffort || "medium") as typeof EFFORT_LEVELS[number]))}
+                    onChange={(event) => setClaudeEffort(EFFORT_LEVELS[Number(event.target.value)])}
+                    disabled={active}
+                    aria-label="Claude reasoning effort"
+                    style={effortStyle(claudeEffort)}
+                  />
+                </label>
               </div>
               <span className={`presence ${health?.claude.available ? "online" : ""}`} />
             </div>
+            <datalist id="codex-model-options">
+              {health?.models.codex.configured && (
+                <option value={health.models.codex.configured}>Configured default</option>
+              )}
+            </datalist>
+            <datalist id="claude-model-options">
+              {health?.models.claude.configured && (
+                <option value={health.models.claude.configured}>Configured default</option>
+              )}
+              <option value="claude-opus-5">Claude Opus 5</option>
+              <option value="claude-sonnet-5">Claude Sonnet 5</option>
+              <option value="claude-fable-5">Claude Fable 5</option>
+            </datalist>
+            <p className="model-hint">
+              Model overrides are locked during a live discussion and apply when the room starts.
+            </p>
           </div>
         </aside>
 
@@ -438,6 +571,10 @@ export default function Home() {
                     <small>
                       {message.round ? `ROUND ${message.round} · ` : ""}
                       {displayTime(message.at)}
+                      {message.model
+                        ? ` · ${friendlyModelName(message.role === "claude" ? "claude" : "codex", message.model)}`
+                        : ""}
+                      {message.effort ? ` · ${friendlyEffort(message.effort)}` : ""}
                     </small>
                   </div>
                 </div>
@@ -522,6 +659,24 @@ export default function Home() {
                 Your steering
               </li>
             </ol>
+          </section>
+
+          <section className="context-block">
+            <span className="context-label">MODEL ROUTING</span>
+            <dl className="model-routing">
+              <div>
+                <dt>Codex</dt>
+                <dd>
+                  {friendlyModelName("codex", codexModel)} · {friendlyEffort(codexEffort || "medium")}
+                </dd>
+              </div>
+              <div>
+                <dt>Claude</dt>
+                <dd>
+                  {friendlyModelName("claude", claudeModel)} · {friendlyEffort(claudeEffort || "medium")}
+                </dd>
+              </div>
+            </dl>
           </section>
 
           <section className="context-block">
