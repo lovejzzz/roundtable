@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
 export const TERMINAL_PHASES = new Set(["complete", "stopped", "error"]);
+const OUTCOME_OWNERS = new Set(["You", "Codex", "Claude", "Unassigned"]);
 
 export function buildTranscript(messages, maxCharacters = 48_000) {
   const selected = [];
@@ -14,6 +15,100 @@ export function buildTranscript(messages, maxCharacters = 48_000) {
     length += block.length + 2;
   }
   return selected.join("\n\n");
+}
+
+function excerptBody(body, limit) {
+  if (body.length <= limit) return body;
+  const marker = "\n… [excerpt shortened] …\n";
+  const available = Math.max(0, limit - marker.length);
+  const start = Math.ceil(available * 0.65);
+  return `${body.slice(0, start)}${marker}${body.slice(-(available - start))}`;
+}
+
+export function buildOutcomeInput(topic, messages, maxCharacters = 96_000) {
+  const normalized = messages.map((message, index) => ({
+    index,
+    author: message.author,
+    round: message.round ?? null,
+    body: String(message.body || ""),
+  }));
+  const totalCharacters = normalized.reduce((sum, message) => sum + message.body.length, 0);
+  const metadataLength = normalized.reduce(
+    (sum, message) => sum + `MESSAGE ${message.index + 1} · ${message.author} · ROUND ${message.round ?? "—"}\n`.length + 2,
+    0,
+  );
+  const fixedLength = `DISCUSSION GOAL\n${topic}\n\nTRANSCRIPT\n`.length + metadataLength;
+  const bodyBudget = Math.max(0, maxCharacters - fixedLength);
+  const perMessageBudget = normalized.length
+    ? Math.max(240, Math.floor(bodyBudget / normalized.length))
+    : 0;
+  const blocks = normalized.map(
+    (message) =>
+      `MESSAGE ${message.index + 1} · ${message.author} · ROUND ${message.round ?? "—"}\n${excerptBody(message.body, perMessageBudget)}`,
+  );
+  const includedCharacters = normalized.reduce(
+    (sum, message) => sum + Math.min(message.body.length, perMessageBudget),
+    0,
+  );
+  return {
+    text: `DISCUSSION GOAL\n${topic}\n\nTRANSCRIPT\n${blocks.join("\n\n")}`,
+    coverage: {
+      truncated: includedCharacters < totalCharacters,
+      includedCharacters,
+      totalCharacters,
+      messageCount: normalized.length,
+    },
+  };
+}
+
+export function extractOutcomeJson(raw) {
+  const source = String(raw || "").trim();
+  const unfenced = source
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+  const start = unfenced.indexOf("{");
+  const end = unfenced.lastIndexOf("}");
+  if (start < 0 || end <= start) throw new Error("The outcome did not contain a JSON object.");
+  let parsed;
+  try {
+    parsed = JSON.parse(unfenced.slice(start, end + 1));
+  } catch {
+    throw new Error("The outcome was not valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("The outcome must be a JSON object.");
+  }
+  const decision = String(parsed.decision || "").trim();
+  const rationale = String(parsed.rationale || "").trim();
+  if (!decision || !rationale) throw new Error("The outcome is missing a decision or rationale.");
+  if (!Array.isArray(parsed.actions) || !Array.isArray(parsed.openQuestions)) {
+    throw new Error("The outcome is missing actions or open questions.");
+  }
+  const actions = parsed.actions.map((action) => {
+    const owner = String(action?.owner || "").trim();
+    const text = String(action?.text || "").trim();
+    if (!OUTCOME_OWNERS.has(owner) || !text) {
+      throw new Error("The outcome contains an invalid action item.");
+    }
+    return { owner, text: text.slice(0, 1_200) };
+  });
+  const openQuestions = parsed.openQuestions.map((question) => {
+    const text = String(question || "").trim();
+    if (!text) throw new Error("The outcome contains an empty open question.");
+    return text.slice(0, 1_200);
+  });
+  if (typeof parsed.consensus !== "boolean") {
+    throw new Error("The outcome must say whether consensus was reached.");
+  }
+  return {
+    status: "available",
+    decision: decision.slice(0, 2_000),
+    rationale: rationale.slice(0, 4_000),
+    actions,
+    openQuestions,
+    consensus: parsed.consensus,
+  };
 }
 
 function makeMessage(now, role, body, round, model, effort) {
@@ -56,6 +151,24 @@ YOUR TURN
 Inspect the project as needed, then advance the discussion. Respond directly to the strongest point in the transcript, identify concrete evidence from the repository, and make a useful recommendation or challenge. Keep this to roughly 250–500 words. Do not edit, create, delete, or rename files. Do not run destructive commands. This is discussion-only mode. Write only your contribution to the roundtable—no preamble about being an AI and no hidden reasoning.
 
 This is turn ${turn + 1} of ${session.totalTurns}.`;
+}
+
+function buildOutcomePrompt(session, outcomeInput) {
+  return `You are Codex CLI, producing the final structured brief for a visible project roundtable.
+
+Read the complete supplied discussion coverage. Faithfully represent disagreement; do not invent
+consensus or action items. Return only one JSON object, without markdown fences, matching:
+{
+  "decision": "the recommendation or explicit no-consensus result",
+  "rationale": "why the room reached this result",
+  "actions": [{"owner": "You|Codex|Claude|Unassigned", "text": "ordered next action"}],
+  "openQuestions": ["unresolved question or disagreement"],
+  "consensus": true
+}
+
+Use the existing participant name "You" for the human owner. Keep actions in transcript order.
+
+${outcomeInput.text}`;
 }
 
 export function createBridge({
@@ -122,6 +235,7 @@ export function createBridge({
 
   function emit(session, event) {
     if (event.type === "message") session.messages.push(event.message);
+    if (event.type === "session.outcome") session.outcome = event.outcome;
     if (event.type === "session.status") session.lastStatus = event;
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of session.clients) client.write(payload);
@@ -203,10 +317,69 @@ export function createBridge({
       }
 
       flushSteering(session);
-      setPhase(session, session.phase === "stopping" || session.stopRequested ? "stopped" : "complete");
+      if (session.phase === "stopping" || session.stopRequested) {
+        const stoppedInput = buildOutcomeInput(session.topic, session.messages);
+        emit(session, {
+          type: "session.outcome",
+          outcome: {
+            status: "unavailable",
+            reason: "stopped",
+            message: "The discussion was stopped before a completion brief could be produced.",
+            coverage: stoppedInput.coverage,
+            synthesizedBy: "Codex",
+          },
+        });
+        setPhase(session, "stopped");
+        return;
+      }
+
+      const outcomeInput = buildOutcomeInput(session.topic, session.messages);
+      setPhase(session, "synthesizing");
+      try {
+        const rawOutcome = await agentRunner.run({
+          session,
+          role: "codex",
+          purpose: "synthesis",
+          prompt: buildOutcomePrompt(session, outcomeInput),
+        });
+        const outcome = {
+          ...extractOutcomeJson(rawOutcome),
+          coverage: outcomeInput.coverage,
+          synthesizedBy: "Codex",
+        };
+        emit(session, { type: "session.outcome", outcome });
+      } catch (error) {
+        const skipped = session.skipOutcomeRequested && error?.code === "USER_STOP";
+        emit(session, {
+          type: "session.outcome",
+          outcome: {
+            status: "unavailable",
+            reason: skipped ? "skipped" : "failed",
+            message: skipped
+              ? "The completion brief was skipped. The transcript is complete."
+              : `The transcript is complete, but the brief could not be produced: ${safeVisibleError(error)}`,
+            coverage: outcomeInput.coverage,
+            synthesizedBy: "Codex",
+          },
+        });
+      }
+      setPhase(session, "complete");
     } catch (error) {
       flushSteering(session);
       if (session.phase === "stopping" || error?.code === "USER_STOP") {
+        if (!session.outcome) {
+          const stoppedInput = buildOutcomeInput(session.topic, session.messages);
+          emit(session, {
+            type: "session.outcome",
+            outcome: {
+              status: "unavailable",
+              reason: "stopped",
+              message: "The discussion was stopped before a completion brief could be produced.",
+              coverage: stoppedInput.coverage,
+              synthesizedBy: "Codex",
+            },
+          });
+        }
         setPhase(session, "stopped");
       } else {
         const visibleMessage = safeVisibleError(error);
@@ -238,6 +411,7 @@ export function createBridge({
       totalTurns: session.totalTurns,
       completedTurns: session.completedTurns,
       messages: session.messages,
+      outcome: session.outcome,
       lastStatus: session.lastStatus,
     };
   }
@@ -271,6 +445,11 @@ export function createBridge({
         response.write(": connected\n\n");
         for (const message of session.messages) {
           response.write(`data: ${JSON.stringify({ type: "message", message })}\n\n`);
+        }
+        if (session.outcome) {
+          response.write(
+            `data: ${JSON.stringify({ type: "session.outcome", outcome: session.outcome })}\n\n`,
+          );
         }
         response.write(`data: ${JSON.stringify(session.lastStatus)}\n\n`);
         if (TERMINAL_PHASES.has(session.phase)) {
@@ -352,8 +531,10 @@ export function createBridge({
           messages: [],
           pendingSteering: [],
           stopRequested: false,
+          skipOutcomeRequested: false,
           clients: new Set(),
           child: null,
+          outcome: null,
           lastStatus: {
             type: "session.status",
             status: "running",
@@ -396,7 +577,7 @@ export function createBridge({
         }
 
         if (request.method === "POST" && action === "steer") {
-          if (TERMINAL_PHASES.has(session.phase) || session.phase === "stopping") {
+          if (session.phase !== "running") {
             sendJson(request, response, 409, { error: "This discussion has already ended." });
             return;
           }
@@ -422,6 +603,12 @@ export function createBridge({
         if (request.method === "POST" && action === "stop") {
           if (TERMINAL_PHASES.has(session.phase)) {
             sendJson(request, response, 409, { error: "This discussion has already ended." });
+            return;
+          }
+          if (session.phase === "synthesizing") {
+            session.skipOutcomeRequested = true;
+            void agentRunner.stop(session, "user_stop");
+            sendJson(request, response, 202, { ok: true, skippingOutcome: true });
             return;
           }
           if (session.phase !== "stopping") {

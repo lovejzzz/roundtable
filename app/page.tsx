@@ -31,6 +31,32 @@ type Message = {
   effort?: string;
 };
 
+type OutcomeCoverage = {
+  truncated: boolean;
+  includedCharacters: number;
+  totalCharacters: number;
+  messageCount: number;
+};
+
+type Outcome =
+  | {
+      status: "available";
+      decision: string;
+      rationale: string;
+      actions: { owner: "You" | "Codex" | "Claude" | "Unassigned"; text: string }[];
+      openQuestions: string[];
+      consensus: boolean;
+      coverage: OutcomeCoverage;
+      synthesizedBy: "Codex";
+    }
+  | {
+      status: "unavailable";
+      reason: "skipped" | "failed" | "stopped";
+      message: string;
+      coverage: OutcomeCoverage;
+      synthesizedBy: "Codex";
+    };
+
 type BridgeHealth = {
   ok: boolean;
   defaultProject: string;
@@ -45,6 +71,7 @@ type BridgeHealth = {
 
 type SessionEvent =
   | { type: "message"; message: Message }
+  | { type: "session.outcome"; outcome: Outcome }
   | {
       type: "session.status";
       status: SessionStatus;
@@ -58,6 +85,7 @@ type SessionStatus =
   | "idle"
   | "connecting"
   | "running"
+  | "synthesizing"
   | "complete"
   | "stopped"
   | "error";
@@ -74,9 +102,11 @@ type SessionSnapshot = {
   totalTurns: number;
   completedTurns: number;
   messages: Message[];
+  outcome: Outcome | null;
   lastStatus: Extract<SessionEvent, { type: "session.status" }>;
 };
 
+const TERMINAL_STATUSES = new Set<SessionStatus>(["complete", "stopped", "error"]);
 const SAMPLE_MESSAGES: Message[] = [
   {
     id: "sample-1",
@@ -155,14 +185,117 @@ function displayTime(value?: string) {
   return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function OutcomeCard({
+  outcome,
+  status,
+  compact = false,
+}: {
+  outcome: Outcome | null;
+  status: SessionStatus;
+  compact?: boolean;
+}) {
+  return (
+    <section
+      className={`outcome-card${compact ? " compact-outcome" : ""}`}
+      aria-labelledby={compact ? "outcome-title-compact" : "outcome-title"}
+    >
+      <div className="outcome-heading">
+        <div>
+          <span className="context-label">COMPLETION BRIEF</span>
+          <h2 id={compact ? "outcome-title-compact" : "outcome-title"}>Outcome</h2>
+        </div>
+        {outcome?.status === "available" && (
+          <span className={`consensus-badge ${outcome.consensus ? "" : "split"}`}>
+            {outcome.consensus ? "Consensus" : "No consensus"}
+          </span>
+        )}
+      </div>
+
+      {status === "synthesizing" && !outcome && (
+        <div className="outcome-pending" role="status">
+          <span className="thinking-line" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          Codex is turning the completed discussion into decisions and next actions.
+        </div>
+      )}
+
+      {!outcome && status !== "synthesizing" && (
+        <p className="outcome-empty">
+          A completion brief will appear here after the agents finish.
+        </p>
+      )}
+
+      {outcome?.status === "unavailable" && (
+        <p className="outcome-unavailable" role="status">{outcome.message}</p>
+      )}
+
+      {outcome?.status === "available" && (
+        <>
+          <div className="outcome-section">
+            <span>Decision</span>
+            <p>{outcome.decision}</p>
+          </div>
+          <div className="outcome-section">
+            <span>Why</span>
+            <p>{outcome.rationale}</p>
+          </div>
+          <div className="outcome-section">
+            <span>Next actions</span>
+            {outcome.actions.length ? (
+              <ol className="outcome-actions">
+                {outcome.actions.map((action, index) => (
+                  <li key={`${action.owner}-${index}`}>
+                    <strong>{action.owner}</strong>
+                    <p>{action.text}</p>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p>No actions were agreed.</p>
+            )}
+          </div>
+          {outcome.openQuestions.length > 0 && (
+            <div className="outcome-section">
+              <span>Open questions</span>
+              <ul className="outcome-questions">
+                {outcome.openQuestions.map((question, index) => (
+                  <li key={index}>{question}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+
+      {outcome?.coverage.truncated && (
+        <p className="coverage-note">
+          Partial brief: every turn is represented, but long messages were shortened for synthesis.
+        </p>
+      )}
+    </section>
+  );
+}
+
 export default function Home() {
-  const [bridgeUrl, setBridgeUrl] = useState(DEFAULT_BRIDGE);
-  const [token, setToken] = useState("");
+  const [bridgeUrl, setBridgeUrl] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_BRIDGE;
+    const queryBridge = new URLSearchParams(window.location.search).get("bridge");
+    return queryBridge || sessionStorage.getItem("roundtable.bridge") || DEFAULT_BRIDGE;
+  });
+  const [token, setToken] = useState(() => {
+    if (typeof window === "undefined") return "";
+    const queryToken = new URLSearchParams(window.location.search).get("token");
+    return queryToken || sessionStorage.getItem("roundtable.token") || "";
+  });
   const [health, setHealth] = useState<BridgeHealth | null>(null);
   const [connectionError, setConnectionError] = useState("");
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [sessionId, setSessionId] = useState("");
   const [messages, setMessages] = useState<Message[]>(SAMPLE_MESSAGES);
+  const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [isPreview, setIsPreview] = useState(true);
   const [speaker, setSpeaker] = useState<"codex" | "claude" | null>(null);
   const [turn, setTurn] = useState(0);
@@ -184,6 +317,7 @@ export default function Home() {
 
   const connected = Boolean(health?.ok);
   const active = status === "running";
+  const busy = active || status === "synthesizing";
   const canSteer = active && turn < totalTurns - 1;
   const codexEfforts = health?.models.codex.efforts?.length
     ? health.models.codex.efforts
@@ -241,19 +375,20 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     const queryToken = params.get("token");
     const queryBridge = params.get("bridge");
-    const savedToken = sessionStorage.getItem("roundtable.token") || "";
-    const savedBridge = sessionStorage.getItem("roundtable.bridge") || DEFAULT_BRIDGE;
-    const initialToken = queryToken || savedToken;
-    const initialBridge = queryBridge || savedBridge;
+    const initialToken = queryToken || token;
+    const initialBridge = queryBridge || bridgeUrl;
 
-    setToken(initialToken);
-    setBridgeUrl(initialBridge);
     if (queryToken || queryBridge) {
       window.history.replaceState({}, "", window.location.pathname);
     }
-    if (initialToken) void connect(initialToken, initialBridge);
+    const connectTimer = initialToken
+      ? window.setTimeout(() => void connect(initialToken, initialBridge), 0)
+      : undefined;
 
-    return () => streamRef.current?.close();
+    return () => {
+      if (connectTimer !== undefined) window.clearTimeout(connectTimer);
+      streamRef.current?.close();
+    };
     // Initial bridge discovery runs once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -276,6 +411,7 @@ export default function Home() {
     setCodexEffort(snapshot.codexEffort);
     setClaudeEffort(snapshot.claudeEffort);
     setMessages(snapshot.messages);
+    setOutcome(snapshot.outcome);
     setIsPreview(false);
     setTotalTurns(snapshot.totalTurns);
     setRounds(String(snapshot.totalTurns / 2));
@@ -297,7 +433,12 @@ export default function Home() {
     if (!response.ok) throw new Error("The previous discussion could not be restored.");
     const snapshot = (await response.json()) as SessionSnapshot;
     applySnapshot(snapshot);
-    if (snapshot.phase === "running" || snapshot.phase === "starting" || snapshot.phase === "stopping") {
+    if (
+      snapshot.phase === "running" ||
+      snapshot.phase === "starting" ||
+      snapshot.phase === "stopping" ||
+      snapshot.phase === "synthesizing"
+    ) {
       await openStream(id, recoveryToken, recoveryBridge);
     }
   }
@@ -322,11 +463,15 @@ export default function Home() {
         );
         return;
       }
+      if (update.type === "session.outcome") {
+        setOutcome(update.outcome);
+        return;
+      }
       setStatus(update.status);
       setSpeaker(update.speaker || null);
       if (typeof update.turn === "number") setTurn(update.turn);
       if (typeof update.totalTurns === "number") setTotalTurns(update.totalTurns);
-      if (update.status !== "running") {
+      if (TERMINAL_STATUSES.has(update.status)) {
         setSpeaker(null);
         stream.close();
       }
@@ -374,6 +519,7 @@ export default function Home() {
       return;
     }
     setMessages([]);
+    setOutcome(null);
     setIsPreview(false);
     setSessionId(data.id);
     sessionStorage.setItem("roundtable.sessionId", data.id);
@@ -420,6 +566,46 @@ export default function Home() {
       `**Claude:** ${friendlyModelName("claude", claudeModel)} · ${friendlyEffort(claudeEffort)}`,
       "",
     ];
+    if (outcome?.status === "available") {
+      lines.push(
+        "# Outcome",
+        "",
+        `**Consensus:** ${outcome.consensus ? "Yes" : "No"}`,
+        "",
+        "## Decision",
+        "",
+        outcome.decision,
+        "",
+        "## Rationale",
+        "",
+        outcome.rationale,
+        "",
+        "## Next actions",
+        "",
+      );
+      if (outcome.actions.length) {
+        outcome.actions.forEach((action, index) => {
+          lines.push(`${index + 1}. **${action.owner}:** ${action.text}`);
+        });
+      } else {
+        lines.push("No actions were agreed.");
+      }
+      lines.push("", "## Open questions", "");
+      if (outcome.openQuestions.length) {
+        outcome.openQuestions.forEach((question) => lines.push(`- ${question}`));
+      } else {
+        lines.push("None.");
+      }
+      if (outcome.coverage.truncated) {
+        lines.push(
+          "",
+          "> Partial brief: every turn is represented, but long messages were shortened for synthesis.",
+        );
+      }
+      lines.push("", "---", "");
+    } else if (outcome?.status === "unavailable") {
+      lines.push("# Outcome", "", outcome.message, "", "---", "");
+    }
     for (const message of messages) {
       lines.push(
         `## ${message.author}${message.round ? ` — Round ${message.round}` : ""}`,
@@ -469,8 +655,14 @@ export default function Home() {
           <span>ROUNDTABLE</span>
         </a>
         <div className="topbar-center">
-          <span className={`live-dot ${active ? "is-live" : ""}`} />
-          {active ? `LIVE · TURN ${turn + 1}` : isPreview ? "PRODUCT PREVIEW" : status.toUpperCase()}
+          <span className={`live-dot ${busy ? "is-live" : ""}`} />
+          {status === "synthesizing"
+            ? "SYNTHESIZING OUTCOME"
+            : active
+              ? `LIVE · TURN ${turn + 1}`
+              : isPreview
+                ? "PRODUCT PREVIEW"
+                : status.toUpperCase()}
         </div>
         <button
           className={`connection-button ${connected ? "connected" : ""}`}
@@ -564,10 +756,14 @@ export default function Home() {
               </div>
             </div>
 
-            <button className="primary" type="submit" disabled={active}>
-              {active ? <Radio size={17} /> : <Sparkles size={17} />}
-              {active ? "Discussion running" : "Start the roundtable"}
-              {!active && <ArrowRight size={17} />}
+            <button className="primary" type="submit" disabled={busy}>
+              {busy ? <Radio size={17} /> : <Sparkles size={17} />}
+              {status === "synthesizing"
+                ? "Building outcome"
+                : active
+                  ? "Discussion running"
+                  : "Start the roundtable"}
+              {!busy && <ArrowRight size={17} />}
             </button>
           </form>
 
@@ -587,7 +783,7 @@ export default function Home() {
                       value={codexModel}
                       onChange={(event) => setCodexModel(event.target.value)}
                       placeholder="CLI default"
-                      disabled={active}
+                      disabled={busy}
                       aria-label="Codex model"
                     />
                   </div>
@@ -604,7 +800,7 @@ export default function Home() {
                     step="1"
                     value={effortIndex(codexEffort, codexEfforts)}
                     onChange={(event) => setCodexEffort(codexEfforts[Number(event.target.value)])}
-                    disabled={active}
+                    disabled={busy}
                     aria-label="Codex reasoning effort"
                     style={effortStyle(codexEffort, codexEfforts)}
                   />
@@ -626,7 +822,7 @@ export default function Home() {
                       value={claudeModel}
                       onChange={(event) => setClaudeModel(event.target.value)}
                       placeholder="CLI default"
-                      disabled={active}
+                      disabled={busy}
                       aria-label="Claude model"
                     />
                   </div>
@@ -643,7 +839,7 @@ export default function Home() {
                     step="1"
                     value={effortIndex(claudeEffort, claudeEfforts)}
                     onChange={(event) => setClaudeEffort(claudeEfforts[Number(event.target.value)])}
-                    disabled={active}
+                    disabled={busy}
                     aria-label="Claude reasoning effort"
                     style={effortStyle(claudeEffort, claudeEfforts)}
                   />
@@ -689,10 +885,10 @@ export default function Home() {
                   </button>
                 </>
               )}
-              {active && (
+              {busy && (
                 <button className="stop-button" type="button" onClick={stopDiscussion}>
                   <CircleStop size={16} />
-                  Stop
+                  {status === "synthesizing" ? "Skip brief" : "Stop"}
                 </button>
               )}
             </div>
@@ -700,6 +896,10 @@ export default function Home() {
 
           <div className="progress-rail" aria-label={`Discussion progress ${progress}%`}>
             <span style={{ width: `${progress}%` }} />
+          </div>
+
+          <div className="mobile-outcome">
+            <OutcomeCard outcome={outcome} status={status} compact />
           </div>
 
           <div className="message-feed" ref={feedRef}>
@@ -763,6 +963,8 @@ export default function Home() {
                 placeholder={
                   canSteer
                     ? "Add a priority, correction, or question…"
+                    : status === "synthesizing"
+                      ? "The discussion is complete while Codex builds the brief…"
                     : active
                       ? "Final turn—there is no next agent to steer…"
                     : "Start a live discussion to add your voice…"
@@ -789,6 +991,8 @@ export default function Home() {
             <p className="eyebrow">ROOM CONTEXT</p>
             <span className="step-count">02</span>
           </div>
+
+          <OutcomeCard outcome={outcome} status={status} />
 
           <section className="context-block">
             <span className="context-label">CURRENT FOCUS</span>

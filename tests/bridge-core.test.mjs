@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createBridge } from "../scripts/bridge-core.mjs";
+import {
+  buildOutcomeInput,
+  createBridge,
+  extractOutcomeJson,
+} from "../scripts/bridge-core.mjs";
 
 const token = "test-bridge-token";
 const health = {
@@ -127,7 +131,12 @@ test("queues steering after the active reply and includes it once in the next pr
 
 test("restores snapshots and closes terminal SSE streams after replay", async () => {
   const agentRunner = {
-    run: async ({ role }) => `${role} reply`,
+    run: async ({ role, purpose }) =>
+      purpose === "synthesis"
+        ? `\`\`\`json
+{"decision":"Ship the brief","rationale":"It makes the transcript actionable.","actions":[{"owner":"Codex","text":"Implement it."}],"openQuestions":[],"consensus":true}
+\`\`\``
+        : `${role} reply`,
     stop: async () => {},
   };
   const bridge = await startTestBridge(agentRunner);
@@ -151,6 +160,9 @@ test("restores snapshots and closes terminal SSE streams after replay", async ()
       return value.phase === "complete" ? value : null;
     });
     assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.outcome.status, "available");
+    assert.equal(snapshot.outcome.synthesizedBy, "Codex");
+    assert.equal(snapshot.outcome.actions[0].owner, "Codex");
 
     const ticketResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/ticket`, {
       method: "POST",
@@ -162,7 +174,130 @@ test("restores snapshots and closes terminal SSE streams after replay", async ()
     );
     const replay = await streamResponse.text();
     assert.match(replay, /codex reply/);
+    assert.match(replay, /"type":"session.outcome"/);
     assert.match(replay, /"status":"complete"/);
+    assert.ok(
+      replay.indexOf('"type":"session.outcome"') < replay.indexOf('"status":"complete"'),
+      "the persisted outcome replays before terminal status",
+    );
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("builds coverage-aware outcome input and validates fenced JSON", () => {
+  const input = buildOutcomeInput(
+    "Choose the next feature",
+    [
+      { author: "Codex", round: 1, body: "A".repeat(2_000) },
+      { author: "Claude", round: 1, body: "B".repeat(2_000) },
+    ],
+    1_200,
+  );
+  assert.equal(input.coverage.truncated, true);
+  assert.equal(input.coverage.messageCount, 2);
+  assert.match(input.text, /MESSAGE 1 · Codex/);
+  assert.match(input.text, /MESSAGE 2 · Claude/);
+
+  const outcome = extractOutcomeJson(`\`\`\`json
+{"decision":"Add an outcome","rationale":"It creates actionability.","actions":[{"owner":"You","text":"Review the result."}],"openQuestions":["How should retry work?"],"consensus":false}
+\`\`\``);
+  assert.equal(outcome.status, "available");
+  assert.equal(outcome.consensus, false);
+  assert.equal(outcome.actions[0].owner, "You");
+  assert.throws(() => extractOutcomeJson("not json"), /JSON object/);
+  assert.throws(
+    () =>
+      extractOutcomeJson(
+        '{"decision":"x","rationale":"y","actions":[{"owner":"Human","text":"z"}],"openQuestions":[],"consensus":true}',
+      ),
+    /invalid action item/,
+  );
+});
+
+test("a synthesis failure preserves the transcript and completes with an unavailable outcome", async () => {
+  const agentRunner = {
+    run: async ({ role, purpose }) => {
+      if (purpose === "synthesis") throw new Error("synthetic test failure");
+      return `${role} reply`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Test synthesis failure",
+        rounds: 1,
+      }),
+    });
+    const { id } = await createResponse.json();
+    const snapshot = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const value = await response.json();
+      return value.phase === "complete" ? value : null;
+    });
+    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.outcome.status, "unavailable");
+    assert.equal(snapshot.outcome.reason, "failed");
+    assert.match(snapshot.outcome.message, /synthetic test failure/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("stopping during synthesis skips only the brief", async () => {
+  let rejectSynthesis;
+  const agentRunner = {
+    run: async ({ role, purpose }) => {
+      if (purpose !== "synthesis") return `${role} reply`;
+      return new Promise((resolve, reject) => {
+        rejectSynthesis = reject;
+      });
+    },
+    stop: async () => {
+      const error = new Error("Discussion stopped.");
+      error.code = "USER_STOP";
+      rejectSynthesis?.(error);
+    },
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Test synthesis skip",
+        rounds: 1,
+      }),
+    });
+    const { id } = await createResponse.json();
+    await waitFor(() => rejectSynthesis);
+
+    const stopResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/stop`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(stopResponse.status, 202);
+    assert.equal((await stopResponse.json()).skippingOutcome, true);
+
+    const snapshot = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const value = await response.json();
+      return value.phase === "complete" ? value : null;
+    });
+    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.outcome.reason, "skipped");
   } finally {
     await bridge.close();
   }
@@ -218,6 +353,8 @@ test("a stop accepted before process registration prevents agent work from start
       return snapshot.phase === "stopped" ? snapshot : null;
     });
     assert.equal(stopped.phase, "stopped");
+    assert.equal(stopped.outcome.reason, "stopped");
+    assert.match(stopped.outcome.message, /stopped before a completion brief/);
     assert.equal(launchedWork, 0);
   } finally {
     await bridge.close();

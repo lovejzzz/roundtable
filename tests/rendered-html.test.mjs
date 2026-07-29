@@ -39,6 +39,9 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /aria-label="Codex reasoning effort"/i);
   assert.match(html, /aria-label="Claude reasoning effort"/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
+  assert.match(html, /id="outcome-title"/i);
+  assert.match(html, /COMPLETION BRIEF/i);
+  assert.match(html, /A completion brief will appear here after the agents finish/i);
   assert.match(html, /property="og:image"/i);
   assert.match(html, /\/og\.png/i);
 });

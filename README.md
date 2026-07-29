@@ -2,7 +2,7 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
-Current release: **v0.0.0.1**
+Current release: **v0.0.0.2**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -26,7 +26,10 @@ The command starts the local bridge and the web room, then opens the connected r
 3. Set each agent's reasoning effort with the slider, from low through extra high to max. The bridge starts from each CLI's configured effort.
 4. Codex and Claude alternate turns, inspecting the same project and reading the same shared transcript. Every message records its model and reasoning effort.
 5. Add a steering note at any time. It is added to the transcript before the next agent turn.
-6. Stop the discussion whenever you want.
+6. After the final turn, Codex produces a structured Outcome with the decision,
+   rationale, owned next actions, and open questions. You can skip this brief
+   without losing the transcript.
+7. Stop the discussion whenever you want.
 
 Active discussions survive a refresh in the same browser tab while the bridge remains running. Completed transcripts can be copied or exported as Markdown from the room header.
 
