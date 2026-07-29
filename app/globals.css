@@ -576,6 +576,31 @@ button {
   padding: 28px 34px 24px;
 }
 
+.conversation-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.utility-button {
+  border: 1px solid #34353c;
+  background: #15161b;
+  color: #a8a9b0;
+  padding: 9px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.utility-button:hover {
+  border-color: #5e6069;
+  color: var(--paper);
+}
+
 .conversation-header h1 {
   margin: 10px 0 0;
   max-width: 680px;

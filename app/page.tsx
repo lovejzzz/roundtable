@@ -2,7 +2,10 @@
 
 import {
   ArrowRight,
+  Check,
   CircleStop,
+  Copy,
+  Download,
   FolderOpen,
   KeyRound,
   Radio,
@@ -33,8 +36,8 @@ type BridgeHealth = {
   defaultProject: string;
   projectWriteGuard: boolean;
   models: {
-    codex: { configured: string; effort: string };
-    claude: { configured: string; effort: string };
+    codex: { configured: string; effort: string; efforts: string[] };
+    claude: { configured: string; effort: string; efforts: string[] };
   };
   codex: { available: boolean; version: string };
   claude: { available: boolean; version: string };
@@ -58,6 +61,21 @@ type SessionStatus =
   | "complete"
   | "stopped"
   | "error";
+
+type SessionSnapshot = {
+  id: string;
+  phase: SessionStatus | "starting" | "stopping";
+  projectPath: string;
+  topic: string;
+  codexModel: string;
+  claudeModel: string;
+  codexEffort: string;
+  claudeEffort: string;
+  totalTurns: number;
+  completedTurns: number;
+  messages: Message[];
+  lastStatus: Extract<SessionEvent, { type: "session.status" }>;
+};
 
 const SAMPLE_MESSAGES: Message[] = [
   {
@@ -86,7 +104,7 @@ const SAMPLE_MESSAGES: Message[] = [
 ];
 
 const DEFAULT_BRIDGE = "http://127.0.0.1:4317";
-const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
 function friendlyModelName(role: Exclude<Speaker, "human">, model: string) {
   if (!model) return "CLI default";
@@ -113,15 +131,17 @@ function friendlyModelName(role: Exclude<Speaker, "human">, model: string) {
 
 function friendlyEffort(effort: string) {
   if (effort === "xhigh") return "Extra high";
+  if (effort === "ultra") return "Ultra";
   return effort ? effort[0].toUpperCase() + effort.slice(1) : "CLI default";
 }
 
-function effortStyle(effort: string) {
-  const index = Math.max(
-    0,
-    EFFORT_LEVELS.indexOf((effort || "medium") as (typeof EFFORT_LEVELS)[number]),
-  );
-  return { "--effort-progress": `${(index / (EFFORT_LEVELS.length - 1)) * 100}%` } as CSSProperties;
+function effortIndex(effort: string, levels: string[]) {
+  return Math.max(0, levels.indexOf(effort || "medium"));
+}
+
+function effortStyle(effort: string, levels: string[]) {
+  const index = effortIndex(effort, levels);
+  return { "--effort-progress": `${(index / Math.max(1, levels.length - 1)) * 100}%` } as CSSProperties;
 }
 
 function shortVersion(version?: string) {
@@ -158,11 +178,19 @@ export default function Home() {
   const [claudeEffort, setClaudeEffort] = useState("");
   const [steering, setSteering] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
 
   const connected = Boolean(health?.ok);
   const active = status === "running";
+  const canSteer = active && turn < totalTurns - 1;
+  const codexEfforts = health?.models.codex.efforts?.length
+    ? health.models.codex.efforts
+    : DEFAULT_EFFORT_LEVELS;
+  const claudeEfforts = health?.models.claude.efforts?.length
+    ? health.models.claude.efforts
+    : DEFAULT_EFFORT_LEVELS;
 
   const progress = useMemo(() => {
     if (!totalTurns) return 0;
@@ -179,16 +207,17 @@ export default function Home() {
     setStatus((current) => (current === "running" ? current : "connecting"));
     setConnectionError("");
     try {
-      const response = await fetch(
-        `${nextBridge.replace(/\/$/, "")}/health?token=${encodeURIComponent(nextToken.trim())}`,
-      );
+      const normalizedBridge = nextBridge.replace(/\/$/, "");
+      const response = await fetch(`${normalizedBridge}/health`, {
+        headers: { Authorization: `Bearer ${nextToken.trim()}` },
+      });
       if (!response.ok) throw new Error("The bridge key was not accepted.");
       const data = (await response.json()) as BridgeHealth;
       setHealth(data);
       setToken(nextToken.trim());
-      setBridgeUrl(nextBridge.replace(/\/$/, ""));
-      localStorage.setItem("roundtable.bridge", nextBridge.replace(/\/$/, ""));
-      localStorage.setItem("roundtable.token", nextToken.trim());
+      setBridgeUrl(normalizedBridge);
+      sessionStorage.setItem("roundtable.bridge", normalizedBridge);
+      sessionStorage.setItem("roundtable.token", nextToken.trim());
       if (!projectPath) setProjectPath(data.defaultProject);
       setCodexModel((current) => current || data.models?.codex.configured || "");
       setClaudeModel((current) => current || data.models?.claude.configured || "");
@@ -196,6 +225,10 @@ export default function Home() {
       setClaudeEffort((current) => current || data.models?.claude.effort || "medium");
       setStatus((current) => (current === "connecting" ? "idle" : current));
       setConnectOpen(false);
+      const savedSessionId = sessionStorage.getItem("roundtable.sessionId");
+      if (savedSessionId) {
+        await recoverSession(savedSessionId, nextToken.trim(), normalizedBridge);
+      }
     } catch (error) {
       setHealth(null);
       setStatus("idle");
@@ -208,8 +241,8 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     const queryToken = params.get("token");
     const queryBridge = params.get("bridge");
-    const savedToken = localStorage.getItem("roundtable.token") || "";
-    const savedBridge = localStorage.getItem("roundtable.bridge") || DEFAULT_BRIDGE;
+    const savedToken = sessionStorage.getItem("roundtable.token") || "";
+    const savedBridge = sessionStorage.getItem("roundtable.bridge") || DEFAULT_BRIDGE;
     const initialToken = queryToken || savedToken;
     const initialBridge = queryBridge || savedBridge;
 
@@ -233,11 +266,51 @@ export default function Home() {
     });
   }, [messages, speaker]);
 
-  function openStream(id: string) {
+  function applySnapshot(snapshot: SessionSnapshot) {
+    setConnectionError("");
+    setSessionId(snapshot.id);
+    setProjectPath(snapshot.projectPath);
+    setTopic(snapshot.topic);
+    setCodexModel(snapshot.codexModel);
+    setClaudeModel(snapshot.claudeModel);
+    setCodexEffort(snapshot.codexEffort);
+    setClaudeEffort(snapshot.claudeEffort);
+    setMessages(snapshot.messages);
+    setIsPreview(false);
+    setTotalTurns(snapshot.totalTurns);
+    setRounds(String(snapshot.totalTurns / 2));
+    setTurn(snapshot.lastStatus.turn ?? snapshot.completedTurns);
+    setSpeaker(snapshot.lastStatus.speaker || null);
+    setStatus(snapshot.lastStatus.status);
+  }
+
+  async function recoverSession(id: string, recoveryToken = token, recoveryBridge = bridgeUrl) {
+    const response = await fetch(`${recoveryBridge}/sessions/${id}`, {
+      headers: { Authorization: `Bearer ${recoveryToken}` },
+    });
+    if (response.status === 404) {
+      sessionStorage.removeItem("roundtable.sessionId");
+      setConnectionError("The previous discussion is no longer available.");
+      setStatus("idle");
+      return;
+    }
+    if (!response.ok) throw new Error("The previous discussion could not be restored.");
+    const snapshot = (await response.json()) as SessionSnapshot;
+    applySnapshot(snapshot);
+    if (snapshot.phase === "running" || snapshot.phase === "starting" || snapshot.phase === "stopping") {
+      await openStream(id, recoveryToken, recoveryBridge);
+    }
+  }
+
+  async function openStream(id: string, streamToken = token, streamBridge = bridgeUrl) {
     streamRef.current?.close();
-    const stream = new EventSource(
-      `${bridgeUrl}/sessions/${id}/events?token=${encodeURIComponent(token)}`,
-    );
+    const ticketResponse = await fetch(`${streamBridge}/sessions/${id}/ticket`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${streamToken}` },
+    });
+    if (!ticketResponse.ok) throw new Error("Could not open the live discussion stream.");
+    const { ticket } = (await ticketResponse.json()) as { ticket: string };
+    const stream = new EventSource(`${streamBridge}/sessions/${id}/events?ticket=${encodeURIComponent(ticket)}`);
     streamRef.current = stream;
     stream.onmessage = (event) => {
       const update = JSON.parse(event.data) as SessionEvent;
@@ -253,10 +326,22 @@ export default function Home() {
       setSpeaker(update.speaker || null);
       if (typeof update.turn === "number") setTurn(update.turn);
       if (typeof update.totalTurns === "number") setTotalTurns(update.totalTurns);
-      if (update.status !== "running") stream.close();
+      if (update.status !== "running") {
+        setSpeaker(null);
+        stream.close();
+      }
     };
     stream.onerror = () => {
-      if (status === "running") setConnectionError("The live stream was interrupted.");
+      if (streamRef.current !== stream) return;
+      stream.close();
+      setConnectionError("The live stream was interrupted. Reconnecting…");
+      window.setTimeout(() => {
+        void recoverSession(id, streamToken, streamBridge).catch(() => {
+          sessionStorage.removeItem("roundtable.sessionId");
+          setStatus("error");
+          setConnectionError("The discussion could not be reconnected.");
+        });
+      }, 900);
     };
   }
 
@@ -291,15 +376,16 @@ export default function Home() {
     setMessages([]);
     setIsPreview(false);
     setSessionId(data.id);
+    sessionStorage.setItem("roundtable.sessionId", data.id);
     setStatus("running");
     setTurn(0);
     setTotalTurns(Number(rounds) * 2);
-    openStream(data.id);
+    await openStream(data.id);
   }
 
   async function sendSteering(event: FormEvent) {
     event.preventDefault();
-    if (!sessionId || !steering.trim()) return;
+    if (!sessionId || !steering.trim() || !canSteer) return;
     const text = steering.trim();
     setSteering("");
     const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/steer`, {
@@ -310,7 +396,10 @@ export default function Home() {
       },
       body: JSON.stringify({ text }),
     });
-    if (!response.ok) setConnectionError("Your steering note could not be queued.");
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: string };
+      setConnectionError(data.error || "Your steering note could not be queued.");
+    }
   }
 
   async function stopDiscussion() {
@@ -319,6 +408,53 @@ export default function Home() {
       method: "POST",
       headers: { Authorization: `Bearer ${token}` },
     });
+  }
+
+  function transcriptMarkdown() {
+    const lines = [
+      "# Roundtable transcript",
+      "",
+      `**Project:** ${projectPath}`,
+      `**Goal:** ${topic}`,
+      `**Codex:** ${friendlyModelName("codex", codexModel)} · ${friendlyEffort(codexEffort)}`,
+      `**Claude:** ${friendlyModelName("claude", claudeModel)} · ${friendlyEffort(claudeEffort)}`,
+      "",
+    ];
+    for (const message of messages) {
+      lines.push(
+        `## ${message.author}${message.round ? ` — Round ${message.round}` : ""}`,
+        "",
+        [
+          displayTime(message.at),
+          message.model
+            ? friendlyModelName(message.role === "claude" ? "claude" : "codex", message.model)
+            : "",
+          message.effort ? friendlyEffort(message.effort) : "",
+        ]
+          .filter(Boolean)
+          .join(" · "),
+        "",
+        message.body,
+        "",
+      );
+    }
+    return lines.join("\n");
+  }
+
+  async function copyTranscript() {
+    await navigator.clipboard.writeText(transcriptMarkdown());
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1_500);
+  }
+
+  function downloadTranscript() {
+    const blob = new Blob([transcriptMarkdown()], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `roundtable-${new Date().toISOString().slice(0, 10)}.md`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -464,13 +600,13 @@ export default function Home() {
                   <input
                     type="range"
                     min="0"
-                    max={EFFORT_LEVELS.length - 1}
+                    max={codexEfforts.length - 1}
                     step="1"
-                    value={Math.max(0, EFFORT_LEVELS.indexOf((codexEffort || "medium") as typeof EFFORT_LEVELS[number]))}
-                    onChange={(event) => setCodexEffort(EFFORT_LEVELS[Number(event.target.value)])}
+                    value={effortIndex(codexEffort, codexEfforts)}
+                    onChange={(event) => setCodexEffort(codexEfforts[Number(event.target.value)])}
                     disabled={active}
                     aria-label="Codex reasoning effort"
-                    style={effortStyle(codexEffort)}
+                    style={effortStyle(codexEffort, codexEfforts)}
                   />
                 </label>
               </div>
@@ -503,13 +639,13 @@ export default function Home() {
                   <input
                     type="range"
                     min="0"
-                    max={EFFORT_LEVELS.length - 1}
+                    max={claudeEfforts.length - 1}
                     step="1"
-                    value={Math.max(0, EFFORT_LEVELS.indexOf((claudeEffort || "medium") as typeof EFFORT_LEVELS[number]))}
-                    onChange={(event) => setClaudeEffort(EFFORT_LEVELS[Number(event.target.value)])}
+                    value={effortIndex(claudeEffort, claudeEfforts)}
+                    onChange={(event) => setClaudeEffort(claudeEfforts[Number(event.target.value)])}
                     disabled={active}
                     aria-label="Claude reasoning effort"
-                    style={effortStyle(claudeEffort)}
+                    style={effortStyle(claudeEffort, claudeEfforts)}
                   />
                 </label>
               </div>
@@ -529,7 +665,7 @@ export default function Home() {
               <option value="claude-fable-5">Claude Fable 5</option>
             </datalist>
             <p className="model-hint">
-              Model overrides are locked during a live discussion and apply when the room starts.
+              Model and reasoning choices lock when the room starts.
             </p>
           </div>
         </aside>
@@ -540,12 +676,26 @@ export default function Home() {
               <p className="eyebrow">{isPreview ? "CONVERSATION PREVIEW" : "PROJECT ROOM"}</p>
               <h1>Two agents. One project.<br />You set the direction.</h1>
             </div>
-            {active && (
-              <button className="stop-button" type="button" onClick={stopDiscussion}>
-                <CircleStop size={16} />
-                Stop
-              </button>
-            )}
+            <div className="conversation-actions">
+              {!isPreview && messages.length > 0 && (
+                <>
+                  <button className="utility-button" type="button" onClick={copyTranscript}>
+                    {copied ? <Check size={15} /> : <Copy size={15} />}
+                    {copied ? "Copied" : "Copy"}
+                  </button>
+                  <button className="utility-button" type="button" onClick={downloadTranscript}>
+                    <Download size={15} />
+                    Export
+                  </button>
+                </>
+              )}
+              {active && (
+                <button className="stop-button" type="button" onClick={stopDiscussion}>
+                  <CircleStop size={16} />
+                  Stop
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="progress-rail" aria-label={`Discussion progress ${progress}%`}>
@@ -611,12 +761,14 @@ export default function Home() {
                 value={steering}
                 onChange={(event) => setSteering(event.target.value)}
                 placeholder={
-                  active
+                  canSteer
                     ? "Add a priority, correction, or question…"
+                    : active
+                      ? "Final turn—there is no next agent to steer…"
                     : "Start a live discussion to add your voice…"
                 }
                 rows={2}
-                disabled={!active}
+                disabled={!canSteer}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
                     event.preventDefault();
@@ -624,11 +776,11 @@ export default function Home() {
                   }
                 }}
               />
-              <button type="submit" disabled={!active || !steering.trim()} aria-label="Send steering note">
+              <button type="submit" disabled={!canSteer || !steering.trim()} aria-label="Send steering note">
                 <Send size={18} />
               </button>
             </div>
-            <small>⌘ ENTER TO SEND · INSERTED BEFORE THE NEXT AGENT TURN</small>
+            <small>⌘ ENTER TO SEND · QUEUED AT THE NEXT TURN BOUNDARY</small>
           </form>
         </section>
 
@@ -685,7 +837,10 @@ export default function Home() {
               <span className="safe-dot" />
               <p>
                 Codex runs in a read-only sandbox. Claude runs in safe mode with only Read, Glob,
-                and Grep{health?.projectWriteGuard ? ", plus a macOS project write guard" : ""}.
+                and Grep
+                {health?.projectWriteGuard
+                  ? ", plus a macOS guard that denies writes inside the selected project"
+                  : ""}.
               </p>
             </div>
           </section>

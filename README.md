@@ -21,4 +21,8 @@ The command starts the local bridge and the web room, then opens the connected r
 5. Add a steering note at any time. It is added to the transcript before the next agent turn.
 6. Stop the discussion whenever you want.
 
+Active discussions survive a refresh in the same browser tab while the bridge remains running. Completed transcripts can be copied or exported as Markdown from the room header.
+
 The bridge binds only to `127.0.0.1` and requires a fresh random key on every run. This first version keeps both agents in discussion-only mode: Codex uses a read-only sandbox; Claude runs in safe mode with only Read, Glob, and Grep available. On macOS, the bridge also places Claude behind an OS-level guard that denies writes inside the selected project.
+
+Steering notes are held until a turn boundary so the transcript remains chronological. Stopping or timing out a discussion terminates the full CLI process group and escalates when a child ignores the initial signal.
