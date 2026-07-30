@@ -4,6 +4,120 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.18] — 2026-07-30
+
+### Conversation
+
+Prompt: audit v0.0.0.17 for one highest-leverage reliability, recovery, or
+performance improvement at the local live-stream boundary during long-running
+CLI turns. Agents were asked to inspect the EventSource recovery flow, bridge
+ticket lifecycle, SSE replay and cleanup, latest changelog, and tests; consider
+dropped streams, stale state, browser sleep/wake, one-use tickets, long silent
+turns, and slow clients; use optional sandboxed checks when useful; and avoid
+speculative infrastructure or any change to permission, credential, or
+authentication boundaries.
+
+Across two rounds and six complete contributions, Codex, Claude, and
+Antigravity converged on a client-owned recovery contract. Codex identified the
+uncancelled delayed recovery that could restore an old session after the user
+reset or started another room. Claude showed that the existing one-shot catch
+also deleted the only saved session pointer after one transient failure, and
+that the initial connection path incorrectly treated a restoration failure as
+a bridge-authentication failure. Antigravity confirmed those paths against the
+source. In the second round, Claude found the decisive ticket failure: the
+client closed its EventSource before requesting a fresh one-use ticket but left
+the closed object in `streamRef`, so a failed ticket request had neither a live
+source nor an `onerror` capable of scheduling another attempt.
+
+No participant requested a brokered check or reported a sandbox check in this
+discussion. The complete transcript and Completion Brief were audited only
+after all turns and synthesis finished.
+
+### Independent audit
+
+- Accepted a session-generation guard and cancellable recovery timer because
+  reset, successful session creation, connection-target changes, archive
+  selection, and unmount are real ownership boundaries. Results and event
+  handlers from an older generation now fail closed before mutating UI state.
+- Accepted self-scheduled transient retries with capped 0.9, 2, 5, and
+  10-second delays. A finite three-attempt limit was rejected because an
+  hour-retained bridge session should not be abandoned after a short sleep or
+  network outage; the delay caps while retry ownership remains bounded by the
+  current room.
+- Accepted clearing the stream reference immediately when closing it and
+  routing snapshot, history, and ticket HTTP status through a small
+  classification helper. Network failures and other nondefinitive responses
+  retain the session pointer; only a definitive absence clears it.
+- Accepted treating 401 and 403 as authorization failures that stop automatic
+  retry and reopen connection setup. Narrowed the Completion Brief's open
+  question by preserving the saved session ID: after a bridge restart issues a
+  new key, that ID is still required to resolve the interrupted local archive.
+- Accepted advancing ownership only after a new discussion is successfully
+  created. Invalidating the current room before the create request succeeds
+  would turn an ordinary validation or network failure into state loss.
+- Accepted separating successful health discovery from asynchronous session
+  restoration. Transient restoration and ticket failures no longer erase a
+  valid bridge health result or falsely reopen the key modal.
+- Narrowed Codex's initial claim that overlapping same-session streams corrupt
+  message state: stable message IDs already deduplicate replay. The ownership
+  guard still removes the socket leak and prevents stale status or
+  cross-session mutation.
+- Rejected heartbeats, `Last-Event-ID`, bridge protocol changes, and new
+  DOM-testing dependencies. The bridge already replays complete bounded room
+  state, terminal streams close before client registration, localhost has no
+  proxy idle timeout, and visibility/online listeners add no protection while
+  browser JavaScript is suspended.
+
+### Implementation
+
+- Added a zero-dependency recovery module with typed HTTP status retention,
+  missing/authorization/transient classification, capped retry delays, and a
+  testable session-generation ownership predicate.
+- Added generation, owned-session, and recovery-timer refs to the room. Every
+  snapshot fetch, history fallback, ticket fetch, stream creation, message
+  handler, and error handler verifies that it still owns the current session.
+- Replaced the one-shot EventSource error timer with a recovery chain that
+  fetches a fresh snapshot before each fresh ticket, survives ticket-request
+  failures, and keeps retrying transient failures at a capped interval.
+- Closed and nulled replaced streams as one operation. A source that loses
+  ownership closes itself, and terminal status clears both the source ref and
+  any pending recovery timer.
+- Kept definitive missing-session archive fallback, but now distinguishes
+  unavailable history from transient or authorization failures before removing
+  the saved session ID.
+- Isolated initial restoration from bridge health discovery and invalidated
+  live ownership before showing a selected archive, preventing a background
+  live stream from mutating the read-only archived view.
+- Added four direct helper regressions and source/rendered contracts for new
+  session ownership, stale-result guards, timer cleanup, closed-stream refs,
+  archive replacement, and preservation of recoverable session IDs.
+
+### Verification
+
+- All 81 bridge tests pass with no skips on the unnested host, including the
+  Claude, Codex, Antigravity, broker-network, credential, symlink, attachment,
+  history, retry, and macOS containment regressions.
+- All 4 focused recovery tests pass. Lint is clean, the production build
+  succeeds, both rendered-page checks pass, and `git diff --check` is clean.
+- Browser QA against the real local bridge opened the completed six-message
+  discussion and Completion Brief, confirmed the connected setup and archived
+  room, verified 6-of-6 progress and the labeled keyboard-focusable transcript
+  log, and found no console warnings or errors.
+
+### Remaining limitations
+
+- The generation and retry arithmetic are directly unit-tested, while React
+  wiring is covered through build, source contracts, and live browser QA. The
+  repository still has no DOM event harness that can deterministically suspend
+  a browser and inject a mid-ticket network failure.
+- Retries intentionally continue at a maximum 10-second interval while the
+  page still owns a nonterminal session. Reset, room replacement, archive
+  selection, or unmount invalidates ownership; terminal completion,
+  missing-session resolution, and authorization failure stop pending recovery.
+- No heartbeat was added. A dropped local connection is detected by
+  EventSource and repaired from a fresh snapshot; a fully suspended browser
+  cannot run either heartbeat or recovery code until it resumes.
+
 ## [v0.0.0.17] — 2026-07-30
 
 ### Conversation

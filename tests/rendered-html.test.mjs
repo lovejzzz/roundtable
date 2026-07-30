@@ -112,6 +112,14 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /aria-live="off"/);
   assert.match(page, /tabIndex=\{0\}/);
   assert.match(page, /matchMedia\("\(prefers-reduced-motion: reduce\)"\)/);
+  assert.match(page, /sessionGenerationRef/);
+  assert.match(page, /recoveryTimerRef/);
+  assert.match(page, /beginSessionOwnership\(data\.id\)/);
+  assert.match(page, /beginSessionOwnership\(id\);\s*applySnapshot\(snapshot, true\)/);
+  assert.match(page, /stillOwnsSession\(id, generation\)/);
+  assert.match(page, /streamRef\.current = null/);
+  assert.match(page, /scheduleRecovery\(id, streamToken, streamBridge, generation, 0\)/);
+  assert.doesNotMatch(page, /sessionStorage\.removeItem\("roundtable\.sessionId"\);\s*setStatus\("error"\)/);
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /\.message-feed:focus-visible/);
   assert.match(styles, /\.visually-hidden/);

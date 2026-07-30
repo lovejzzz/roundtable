@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.17**
+Current release: **v0.0.0.18**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -73,8 +73,14 @@ read-only archive state, and **New discussion** returns every room surface
 through one reset path.
 
 Active discussions survive a refresh in the same browser tab while the bridge
-remains running. Completed transcripts can be copied or exported as Markdown from
-the room header.
+remains running. If the live event stream drops, the room retains its session,
+rebuilds from a fresh bridge snapshot, and retries transient snapshot or ticket
+failures with capped backoff. Switching rooms, starting a replacement session,
+or resetting the setup invalidates older recovery work so a delayed response
+cannot resurrect or mutate the prior room. An expired bridge key asks for a new
+connection without discarding the saved session pointer needed for history
+recovery. Completed transcripts can be copied or exported as Markdown from the
+room header.
 
 The live room exposes concise, polite turn-status announcements without reading
 whole agent replies aloud. Its transcript is a labeled keyboard-focusable log

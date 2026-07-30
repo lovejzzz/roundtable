@@ -34,6 +34,12 @@ import {
   autoScrollBehavior,
   liveStatusText,
 } from "../lib/live-status.mjs";
+import {
+  RecoveryHttpError,
+  ownsSessionGeneration,
+  recoveryDelayMs,
+  recoveryFailureKind,
+} from "../lib/stream-recovery.mjs";
 
 type AgentRole = "codex" | "claude" | "antigravity";
 type Speaker = AgentRole | "human";
@@ -719,6 +725,9 @@ export default function Home() {
   const [connectOpen, setConnectOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
+  const recoveryTimerRef = useRef<number | null>(null);
+  const sessionGenerationRef = useRef(0);
+  const ownedSessionIdRef = useRef("");
   const feedRef = useRef<HTMLDivElement | null>(null);
   const shouldAutoScrollRef = useRef(true);
 
@@ -770,6 +779,39 @@ export default function Home() {
     lastReplyAuthor: lastAgentReplyAuthor,
   });
 
+  function clearRecoveryTimer() {
+    if (recoveryTimerRef.current === null) return;
+    window.clearTimeout(recoveryTimerRef.current);
+    recoveryTimerRef.current = null;
+  }
+
+  function closeCurrentStream() {
+    streamRef.current?.close();
+    streamRef.current = null;
+  }
+
+  function invalidateSessionOwnership() {
+    sessionGenerationRef.current += 1;
+    ownedSessionIdRef.current = "";
+    clearRecoveryTimer();
+    closeCurrentStream();
+  }
+
+  function beginSessionOwnership(id: string) {
+    invalidateSessionOwnership();
+    ownedSessionIdRef.current = id;
+    return sessionGenerationRef.current;
+  }
+
+  function stillOwnsSession(id: string, generation: number) {
+    return ownsSessionGeneration({
+      expectedGeneration: generation,
+      currentGeneration: sessionGenerationRef.current,
+      expectedSessionId: id,
+      currentSessionId: ownedSessionIdRef.current,
+    });
+  }
+
   async function connect(nextToken = token, nextBridge = bridgeUrl) {
     if (!nextToken.trim()) {
       setConnectionError("Paste the bridge key printed by npm run talk.");
@@ -779,18 +821,22 @@ export default function Home() {
 
     setStatus((current) => (current === "running" ? current : "connecting"));
     setConnectionError("");
+    const normalizedBridge = nextBridge.replace(/\/$/, "");
+    const normalizedToken = nextToken.trim();
     try {
-      const normalizedBridge = nextBridge.replace(/\/$/, "");
       const response = await fetch(`${normalizedBridge}/health`, {
-        headers: { Authorization: `Bearer ${nextToken.trim()}` },
+        headers: { Authorization: `Bearer ${normalizedToken}` },
       });
       if (!response.ok) throw new Error("The bridge key was not accepted.");
       const data = (await response.json()) as BridgeHealth;
+      if (normalizedBridge !== bridgeUrl || normalizedToken !== token) {
+        invalidateSessionOwnership();
+      }
       setHealth(data);
-      setToken(nextToken.trim());
+      setToken(normalizedToken);
       setBridgeUrl(normalizedBridge);
       sessionStorage.setItem("roundtable.bridge", normalizedBridge);
-      sessionStorage.setItem("roundtable.token", nextToken.trim());
+      sessionStorage.setItem("roundtable.token", normalizedToken);
       if (!projectPath) setProjectPath(data.defaultProject);
       setCodexModel((current) => current || data.models?.codex.configured || "");
       setClaudeModel((current) => current || data.models?.claude.configured || "");
@@ -810,11 +856,17 @@ export default function Home() {
       setStatus((current) => (current === "connecting" ? "idle" : current));
       setConnectOpen(false);
       if (data.history?.available) {
-        await loadHistory(nextToken.trim(), normalizedBridge);
+        await loadHistory(normalizedToken, normalizedBridge);
       }
       const savedSessionId = sessionStorage.getItem("roundtable.sessionId");
       if (savedSessionId) {
-        await recoverSession(savedSessionId, nextToken.trim(), normalizedBridge);
+        const generation = beginSessionOwnership(savedSessionId);
+        void recoverSession(
+          savedSessionId,
+          normalizedToken,
+          normalizedBridge,
+          generation,
+        );
       }
     } catch (error) {
       setHealth(null);
@@ -840,7 +892,7 @@ export default function Home() {
 
     return () => {
       if (connectTimer !== undefined) window.clearTimeout(connectTimer);
-      streamRef.current?.close();
+      invalidateSessionOwnership();
     };
     // Initial bridge discovery runs once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -900,50 +952,173 @@ export default function Home() {
     setStatus(snapshot.lastStatus.status);
   }
 
-  async function recoverSession(id: string, recoveryToken = token, recoveryBridge = bridgeUrl) {
-    const response = await fetch(`${recoveryBridge}/sessions/${id}`, {
-      headers: { Authorization: `Bearer ${recoveryToken}` },
-    });
-    if (response.status === 404) {
-      const historyResponse = await fetch(`${recoveryBridge}/history/${id}`, {
+  function scheduleRecovery(
+    id: string,
+    recoveryToken: string,
+    recoveryBridge: string,
+    generation: number,
+    attempt: number,
+  ) {
+    if (!stillOwnsSession(id, generation)) return;
+    clearRecoveryTimer();
+    const delay = recoveryDelayMs(attempt);
+    setConnectionError(
+      `The live stream was interrupted. Reconnecting in ${Math.ceil(delay / 1_000)} seconds…`,
+    );
+    recoveryTimerRef.current = window.setTimeout(() => {
+      recoveryTimerRef.current = null;
+      if (!stillOwnsSession(id, generation)) return;
+      void recoverSession(
+        id,
+        recoveryToken,
+        recoveryBridge,
+        generation,
+        attempt + 1,
+      );
+    }, delay);
+  }
+
+  function handleAuthorizationFailure() {
+    clearRecoveryTimer();
+    closeCurrentStream();
+    setHealth(null);
+    setStatus("error");
+    setConnectionError(
+      "The bridge key is no longer valid. Reconnect to restore this discussion.",
+    );
+    setConnectOpen(true);
+  }
+
+  async function recoverSession(
+    id: string,
+    recoveryToken = token,
+    recoveryBridge = bridgeUrl,
+    generation = sessionGenerationRef.current,
+    attempt = 0,
+  ) {
+    if (!stillOwnsSession(id, generation)) return;
+    try {
+      const response = await fetch(`${recoveryBridge}/sessions/${id}`, {
         headers: { Authorization: `Bearer ${recoveryToken}` },
       });
-      sessionStorage.removeItem("roundtable.sessionId");
-      if (historyResponse.ok) {
-        applySnapshot((await historyResponse.json()) as SessionSnapshot, true);
+      if (!stillOwnsSession(id, generation)) return;
+      if (response.status === 404) {
+        const historyResponse = await fetch(`${recoveryBridge}/history/${id}`, {
+          headers: { Authorization: `Bearer ${recoveryToken}` },
+        });
+        if (!stillOwnsSession(id, generation)) return;
+        if (historyResponse.ok) {
+          const archived = (await historyResponse.json()) as SessionSnapshot;
+          if (!stillOwnsSession(id, generation)) return;
+          sessionStorage.removeItem("roundtable.sessionId");
+          applySnapshot(archived, true);
+          return;
+        }
+        const historyFailure = recoveryFailureKind(historyResponse.status);
+        if (historyFailure === "authorization") {
+          handleAuthorizationFailure();
+          return;
+        }
+        if (historyFailure !== "missing") {
+          throw new RecoveryHttpError(
+            historyResponse.status,
+            "The previous discussion history could not be restored.",
+          );
+        }
+        sessionStorage.removeItem("roundtable.sessionId");
+        invalidateSessionOwnership();
+        setConnectionError("The previous discussion is no longer available.");
+        setStatus("idle");
         return;
       }
-      setConnectionError("The previous discussion is no longer available.");
-      setStatus("idle");
-      return;
-    }
-    if (!response.ok) throw new Error("The previous discussion could not be restored.");
-    const snapshot = (await response.json()) as SessionSnapshot;
-    applySnapshot(snapshot);
-    if (
-      snapshot.phase === "running" ||
-      snapshot.phase === "failed" ||
-      snapshot.phase === "retrying" ||
-      snapshot.phase === "reviewing" ||
-      snapshot.phase === "starting" ||
-      snapshot.phase === "stopping" ||
-      snapshot.phase === "synthesizing"
-    ) {
-      await openStream(id, recoveryToken, recoveryBridge);
+      const failureKind = recoveryFailureKind(response.status);
+      if (failureKind === "authorization") {
+        handleAuthorizationFailure();
+        return;
+      }
+      if (!response.ok) {
+        throw new RecoveryHttpError(
+          response.status,
+          "The previous discussion could not be restored.",
+        );
+      }
+      const snapshot = (await response.json()) as SessionSnapshot;
+      if (!stillOwnsSession(id, generation)) return;
+      applySnapshot(snapshot);
+      if (
+        snapshot.phase === "running" ||
+        snapshot.phase === "failed" ||
+        snapshot.phase === "retrying" ||
+        snapshot.phase === "reviewing" ||
+        snapshot.phase === "starting" ||
+        snapshot.phase === "stopping" ||
+        snapshot.phase === "synthesizing"
+      ) {
+        await openStream(id, recoveryToken, recoveryBridge, generation);
+      }
+    } catch (error) {
+      if (!stillOwnsSession(id, generation)) return;
+      const failureKind = recoveryFailureKind(
+        error instanceof RecoveryHttpError ? error.status : 0,
+      );
+      if (failureKind === "authorization") {
+        handleAuthorizationFailure();
+        return;
+      }
+      scheduleRecovery(
+        id,
+        recoveryToken,
+        recoveryBridge,
+        generation,
+        attempt,
+      );
     }
   }
 
-  async function openStream(id: string, streamToken = token, streamBridge = bridgeUrl) {
-    streamRef.current?.close();
+  async function openStream(
+    id: string,
+    streamToken = token,
+    streamBridge = bridgeUrl,
+    generation = sessionGenerationRef.current,
+  ) {
+    if (!stillOwnsSession(id, generation)) return;
+    closeCurrentStream();
     const ticketResponse = await fetch(`${streamBridge}/sessions/${id}/ticket`, {
       method: "POST",
       headers: { Authorization: `Bearer ${streamToken}` },
     });
-    if (!ticketResponse.ok) throw new Error("Could not open the live discussion stream.");
+    if (!stillOwnsSession(id, generation)) return;
+    const failureKind = recoveryFailureKind(ticketResponse.status);
+    if (failureKind === "authorization") {
+      throw new RecoveryHttpError(
+        ticketResponse.status,
+        "The bridge key is no longer valid.",
+      );
+    }
+    if (!ticketResponse.ok) {
+      throw new RecoveryHttpError(
+        ticketResponse.status,
+        "Could not open the live discussion stream.",
+      );
+    }
     const { ticket } = (await ticketResponse.json()) as { ticket: string };
-    const stream = new EventSource(`${streamBridge}/sessions/${id}/events?ticket=${encodeURIComponent(ticket)}`);
+    if (!stillOwnsSession(id, generation)) return;
+    const stream = new EventSource(
+      `${streamBridge}/sessions/${id}/events?ticket=${encodeURIComponent(ticket)}`,
+    );
+    if (!stillOwnsSession(id, generation)) {
+      stream.close();
+      return;
+    }
     streamRef.current = stream;
     stream.onmessage = (event) => {
+      if (
+        streamRef.current !== stream ||
+        !stillOwnsSession(id, generation)
+      ) {
+        stream.close();
+        return;
+      }
       const update = JSON.parse(event.data) as SessionEvent;
       if (update.type === "message") {
         setMessages((current) =>
@@ -993,20 +1168,22 @@ export default function Home() {
       if (TERMINAL_STATUSES.has(update.status)) {
         setSpeaker(null);
         stream.close();
+        if (streamRef.current === stream) streamRef.current = null;
+        clearRecoveryTimer();
         void loadHistory(streamToken, streamBridge);
       }
     };
     stream.onerror = () => {
-      if (streamRef.current !== stream) return;
+      if (
+        streamRef.current !== stream ||
+        !stillOwnsSession(id, generation)
+      ) {
+        stream.close();
+        return;
+      }
       stream.close();
-      setConnectionError("The live stream was interrupted. Reconnecting…");
-      window.setTimeout(() => {
-        void recoverSession(id, streamToken, streamBridge).catch(() => {
-          sessionStorage.removeItem("roundtable.sessionId");
-          setStatus("error");
-          setConnectionError("The discussion could not be reconnected.");
-        });
-      }, 900);
+      streamRef.current = null;
+      scheduleRecovery(id, streamToken, streamBridge, generation, 0);
     };
   }
 
@@ -1128,13 +1305,14 @@ export default function Home() {
     setHistoryWarning(data.historyWarning || "");
     setViewingHistory(false);
     setIsPreview(false);
+    const generation = beginSessionOwnership(data.id);
     setSessionId(data.id);
     sessionStorage.setItem("roundtable.sessionId", data.id);
     setStatus("running");
     setTurn(0);
     setTotalTurns(Number(rounds) * 3);
     shouldAutoScrollRef.current = true;
-    await openStream(data.id);
+    void recoverSession(data.id, token, bridgeUrl, generation);
   }
 
   async function loadHistory(historyToken = token, historyBridge = bridgeUrl) {
@@ -1163,8 +1341,7 @@ export default function Home() {
   }
 
   function resetToSetup() {
-    streamRef.current?.close();
-    streamRef.current = null;
+    invalidateSessionOwnership();
     sessionStorage.removeItem("roundtable.sessionId");
     const defaultAntigravityModel = health?.models.antigravity.configured || "";
     setSessionId("");
@@ -1211,7 +1388,9 @@ export default function Home() {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!response.ok) throw new Error("That archived discussion is unavailable.");
-      applySnapshot((await response.json()) as SessionSnapshot, true);
+      const snapshot = (await response.json()) as SessionSnapshot;
+      beginSessionOwnership(id);
+      applySnapshot(snapshot, true);
       setHistoryOpen(false);
     } catch (error) {
       setConnectionError(error instanceof Error ? error.message : "Could not open history.");
