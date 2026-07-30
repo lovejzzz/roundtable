@@ -99,6 +99,29 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
       },
     });
     await store.append(id, {
+      type: "session.batch",
+      batch: {
+        phase: "sealed-opening",
+        inputHash: `sha256:${"a".repeat(64)}`,
+        roles: {
+          codex: { role: "codex", status: "completed", messageId: "message-1" },
+        },
+      },
+    });
+    await store.append(id, {
+      type: "session.audit",
+      audit: {
+        status: "complete",
+        reviews: {
+          claude: {
+            role: "claude",
+            status: "completed",
+            concerns: [],
+          },
+        },
+      },
+    });
+    await store.append(id, {
       type: "session.outcome",
       outcome: {
         status: "available",
@@ -169,6 +192,8 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
     assert.match(snapshot.messages[0].checks[0].command, /token=\[redacted\]/);
     assert.match(snapshot.messages[0].checks[0].summary, /Bearer \[redacted\]/);
     assert.equal(snapshot.outcome.decision, "Keep the archive local.");
+    assert.equal(snapshot.sealedBatch.roles.codex.status, "completed");
+    assert.equal(snapshot.briefAudit.reviews.claude.status, "completed");
     assert.equal(snapshot.dissent[0].summary, "Keep this dissent.");
     assert.equal(snapshot.dissentReviews.claude.status, "completed");
     assert.equal(snapshot.dissentJudgments.D1.verdict, "represented");

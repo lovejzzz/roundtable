@@ -11,6 +11,7 @@ import {
   History,
   KeyRound,
   Paperclip,
+  Plus,
   Radio,
   RefreshCw,
   Send,
@@ -73,6 +74,12 @@ type Message = {
   model?: string;
   effort?: string;
   checks?: ReportedCheck[];
+  stage?: "sealed" | "cross-examination";
+  context?: {
+    stage: "sealed" | "cross-examination";
+    inputHash: string;
+    coverage: OutcomeCoverage;
+  };
 };
 
 type OutcomeCoverage = {
@@ -80,7 +87,33 @@ type OutcomeCoverage = {
   includedCharacters: number;
   totalCharacters: number;
   messageCount: number;
+  includedMessageCount?: number;
+  omittedLabels?: string[];
+  shortenedLabels?: string[];
+  maxCharacters?: number;
+  presentationOrder?: string[];
   dissentCount?: number;
+};
+
+type SynthesisAttempt = {
+  role: AgentRole;
+  author: "Codex" | "Claude" | "Antigravity";
+  status: "completed" | "failed";
+  error?: string;
+};
+
+type BriefAuditReview = {
+  role: AgentRole;
+  author: "Codex" | "Claude" | "Antigravity";
+  status: "completed" | "unavailable";
+  at: string;
+  revise: boolean;
+  concerns: {
+    summary: string;
+    reason: string;
+    messageLabels: string[];
+  }[];
+  message?: string;
 };
 
 type DissentItem = {
@@ -118,14 +151,37 @@ type Outcome =
       openQuestions: string[];
       consensus: boolean;
       coverage: OutcomeCoverage;
-      synthesizedBy: "Codex";
+      synthesizedBy: "Codex" | "Claude" | "Antigravity";
+      synthesizedRole?: AgentRole;
+      synthesisAttempts?: SynthesisAttempt[];
+      provisional?: boolean;
+      draft?: {
+        status: "available";
+        decision: string;
+        rationale: string;
+        actions: { owner: "You" | "Codex" | "Claude" | "Antigravity" | "Unassigned"; text: string }[];
+        openQuestions: string[];
+        consensus: boolean;
+      };
+      draftSynthesizedBy?: "Codex" | "Claude" | "Antigravity";
+      audit?: {
+        reviews: Record<string, BriefAuditReview>;
+        concernCount: number;
+      };
+      revision?: {
+        attempted: boolean;
+        status: "pending" | "not-needed" | "completed" | "failed" | "skipped";
+        revisedBy?: "Codex" | "Claude" | "Antigravity";
+        attempts?: SynthesisAttempt[];
+      };
     }
   | {
       status: "unavailable";
       reason: "skipped" | "failed" | "stopped";
       message: string;
       coverage: OutcomeCoverage;
-      synthesizedBy: "Codex";
+      synthesizedBy: "Codex" | "Claude" | "Antigravity" | null;
+      synthesisAttempts?: SynthesisAttempt[];
     };
 
 type BridgeHealth = {
@@ -167,6 +223,8 @@ type FailedTurn = {
 
 type SessionEvent =
   | { type: "message"; message: Message }
+  | { type: "session.batch"; batch: unknown }
+  | { type: "session.audit"; audit: unknown }
   | {
       type: "session.dissent";
       items: DissentItem[];
@@ -221,6 +279,8 @@ type SessionSnapshot = {
   completedTurns: number;
   messages: Message[];
   outcome: Outcome | null;
+  sealedBatch?: unknown;
+  briefAudit?: unknown;
   pendingSteering: Message[];
   reviewDissent?: boolean;
   dissent?: DissentItem[];
@@ -311,13 +371,7 @@ const MAX_PROMPT_ATTACHMENTS = 5;
 const MAX_PROMPT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
 
-function launchSearchValue(name: string) {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get(name)?.trim() || "";
-}
-
-function launchRounds() {
-  const value = launchSearchValue("rounds");
+function normalizedLaunchRounds(value: string) {
   return ["1", "2", "3", "4", "5"].includes(value) ? value : "3";
 }
 
@@ -523,9 +577,12 @@ function OutcomeCard({
           <h2 id={compact ? "outcome-title-compact" : "outcome-title"}>Outcome</h2>
         </div>
         {outcome?.status === "available" && (
-          <span className={`consensus-badge ${outcome.consensus ? "" : "split"}`}>
-            {outcome.consensus ? "Consensus" : "No consensus"}
-          </span>
+          <div className="outcome-badges">
+            {outcome.provisional && <span className="audit-badge">Draft under audit</span>}
+            <span className={`consensus-badge ${outcome.consensus ? "" : "split"}`}>
+              {outcome.consensus ? "Consensus" : "No consensus"}
+            </span>
+          </div>
         )}
       </div>
 
@@ -536,7 +593,8 @@ function OutcomeCard({
             <span />
             <span />
           </span>
-          Codex is turning the completed discussion into decisions and next actions.
+          A participant is drafting or revising the brief; another participant will take over if
+          this synthesis fails.
         </div>
       )}
 
@@ -547,7 +605,7 @@ function OutcomeCard({
             <span />
             <span />
           </span>
-          The agents are checking which stated positions a brief might flatten or miss.
+          The agents are independently auditing the draft against labeled transcript evidence.
         </div>
       )}
 
@@ -583,6 +641,13 @@ function OutcomeCard({
 
       {outcome?.status === "available" && (
         <>
+          <p className="synthesis-provenance">
+            {outcome.revision?.status === "completed"
+              ? `Revised once by ${outcome.revision.revisedBy} after ${outcome.audit?.concernCount || 0} audited concern${outcome.audit?.concernCount === 1 ? "" : "s"}.`
+              : outcome.provisional
+                ? `${outcome.synthesizedBy} drafted this brief; two independent audits are running.`
+                : `${outcome.synthesizedBy} produced the brief${outcome.audit ? ` after ${Object.keys(outcome.audit.reviews).length} independent audits` : ""}.`}
+          </p>
           <div className="outcome-section">
             <span>Decision</span>
             <p>{outcome.decision}</p>
@@ -615,6 +680,43 @@ function OutcomeCard({
                 ))}
               </ul>
             </div>
+          )}
+          {outcome.audit && (
+            <details className="brief-audit">
+              <summary>
+                Brief audit · {outcome.audit.concernCount} material concern
+                {outcome.audit.concernCount === 1 ? "" : "s"}
+              </summary>
+              <div>
+                {Object.values(outcome.audit.reviews).map((review) => (
+                  <section key={review.role}>
+                    <strong>{review.author}</strong>
+                    <small>{review.status}</small>
+                    {review.status === "unavailable" && <p>{review.message}</p>}
+                    {review.status === "completed" && review.concerns.length === 0 && (
+                      <p>No material correction requested.</p>
+                    )}
+                    {review.concerns.map((concern, index) => (
+                      <article key={`${review.role}-${index}`}>
+                        <p>{concern.summary}</p>
+                        <small>
+                          [{concern.messageLabels.join(", ")}] {concern.reason}
+                        </small>
+                      </article>
+                    ))}
+                  </section>
+                ))}
+              </div>
+            </details>
+          )}
+          {outcome.revision?.status === "completed" && outcome.draft && (
+            <details className="brief-audit original-draft">
+              <summary>Original preserved draft</summary>
+              <div>
+                <strong>{outcome.draft.decision}</strong>
+                <p>{outcome.draft.rationale}</p>
+              </div>
+            </details>
           )}
         </>
       )}
@@ -728,12 +830,12 @@ export default function Home() {
   const [speaker, setSpeaker] = useState<AgentRole | null>(null);
   const [turn, setTurn] = useState(0);
   const [totalTurns, setTotalTurns] = useState(9);
-  const [projectPath, setProjectPath] = useState(() => launchSearchValue("project"));
-  const [topic, setTopic] = useState(() => launchSearchValue("topic") || DEFAULT_TOPIC);
+  const [projectPath, setProjectPath] = useState("");
+  const [topic, setTopic] = useState(DEFAULT_TOPIC);
   const [promptAttachments, setPromptAttachments] = useState<PromptAttachment[]>([]);
   const [attachmentManifestId, setAttachmentManifestId] = useState("");
   const [attachmentError, setAttachmentError] = useState("");
-  const [rounds, setRounds] = useState(launchRounds);
+  const [rounds, setRounds] = useState("3");
   const [codexModel, setCodexModel] = useState("");
   const [claudeModel, setClaudeModel] = useState("");
   const [antigravityModel, setAntigravityModel] = useState("");
@@ -741,6 +843,8 @@ export default function Home() {
   const [claudeEffort, setClaudeEffort] = useState("");
   const [antigravityEffort, setAntigravityEffort] = useState("");
   const [steering, setSteering] = useState("");
+  const [roundsToAdd, setRoundsToAdd] = useState("1");
+  const [addingRounds, setAddingRounds] = useState(false);
   const [connectOpen, setConnectOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
@@ -831,7 +935,11 @@ export default function Home() {
     });
   }
 
-  async function connect(nextToken = token, nextBridge = bridgeUrl) {
+  async function connect(
+    nextToken = token,
+    nextBridge = bridgeUrl,
+    requestedProjectPath = projectPath,
+  ) {
     if (!nextToken.trim()) {
       setConnectionError("Paste the bridge key printed by npm run talk.");
       setConnectOpen(true);
@@ -856,7 +964,7 @@ export default function Home() {
       setBridgeUrl(normalizedBridge);
       sessionStorage.setItem("roundtable.bridge", normalizedBridge);
       sessionStorage.setItem("roundtable.token", normalizedToken);
-      if (!projectPath) setProjectPath(data.defaultProject);
+      if (!requestedProjectPath) setProjectPath(data.defaultProject);
       setCodexModel((current) => current || data.models?.codex.configured || "");
       setClaudeModel((current) => current || data.models?.claude.configured || "");
       const defaultAntigravityModel = data.models?.antigravity.configured || "";
@@ -899,18 +1007,29 @@ export default function Home() {
     const params = new URLSearchParams(window.location.search);
     const queryToken = params.get("token");
     const queryBridge = params.get("bridge");
+    const queryProject = params.get("project")?.trim() || "";
+    const queryTopic = params.get("topic")?.trim() || "";
+    const queryRounds = params.get("rounds")?.trim() || "";
+    const querySession = params.get("session")?.trim() || "";
     const initialToken = queryToken || token;
     const initialBridge = queryBridge || bridgeUrl;
 
-    if (queryToken || queryBridge) {
+    if (querySession) {
+      sessionStorage.setItem("roundtable.sessionId", querySession);
+    }
+    if (params.size) {
       window.history.replaceState({}, "", window.location.pathname);
     }
-    const connectTimer = initialToken
-      ? window.setTimeout(() => void connect(initialToken, initialBridge), 0)
-      : undefined;
+    const connectTimer = window.setTimeout(() => {
+      if (queryProject) setProjectPath(queryProject);
+      if (queryTopic) setTopic(queryTopic);
+      if (queryRounds) setRounds(normalizedLaunchRounds(queryRounds));
+      if (querySession) setSessionId(querySession);
+      if (initialToken) void connect(initialToken, initialBridge, queryProject);
+    }, 0);
 
     return () => {
-      if (connectTimer !== undefined) window.clearTimeout(connectTimer);
+      window.clearTimeout(connectTimer);
       invalidateSessionOwnership();
     };
     // Initial bridge discovery runs once.
@@ -1145,6 +1264,9 @@ export default function Home() {
             ? current
             : [...current, update.message],
         );
+        return;
+      }
+      if (update.type === "session.batch" || update.type === "session.audit") {
         return;
       }
       if (update.type === "session.dissent") {
@@ -1483,6 +1605,37 @@ export default function Home() {
     }
   }
 
+  async function addDiscussionRounds(event: FormEvent) {
+    event.preventDefault();
+    if (!sessionId || status !== "running" || viewingHistory || addingRounds) return;
+    setAddingRounds(true);
+    setConnectionError("");
+    try {
+      const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/extend`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ rounds: Number(roundsToAdd) }),
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        totalTurns?: number;
+      };
+      if (!response.ok || typeof data.totalTurns !== "number") {
+        setConnectionError(data.error || "Additional rounds could not be added.");
+        return;
+      }
+      setTotalTurns(data.totalTurns);
+      setRounds(String(data.totalTurns / 3));
+    } catch {
+      setConnectionError("Additional rounds could not be added.");
+    } finally {
+      setAddingRounds(false);
+    }
+  }
+
   async function stopDiscussion() {
     if (!sessionId) return;
     await fetch(`${bridgeUrl}/sessions/${sessionId}/stop`, {
@@ -1559,6 +1712,9 @@ export default function Home() {
         "# Outcome",
         "",
         `**Consensus:** ${outcome.consensus ? "Yes" : "No"}`,
+        `**Synthesized by:** ${outcome.synthesizedBy}`,
+        `**Brief audit:** ${outcome.provisional ? "In progress" : `${Object.keys(outcome.audit?.reviews || {}).length} completed or attempted`}`,
+        `**Revision:** ${outcome.revision?.status || "Not recorded"}`,
         "",
         "## Decision",
         "",
@@ -1589,6 +1745,22 @@ export default function Home() {
           "",
           "> Partial brief: every turn is represented, but long messages were shortened for synthesis.",
         );
+      }
+      if (outcome.audit) {
+        lines.push("", "## Brief audit", "");
+        Object.values(outcome.audit.reviews).forEach((review) => {
+          lines.push(`### ${review.author} — ${review.status}`, "");
+          if (review.message) lines.push(review.message, "");
+          if (review.status === "completed" && !review.concerns.length) {
+            lines.push("No material correction requested.", "");
+          }
+          review.concerns.forEach((concern) => {
+            lines.push(
+              `- **[${concern.messageLabels.join(", ")}] ${concern.summary}** — ${concern.reason}`,
+            );
+          });
+          lines.push("");
+        });
       }
       lines.push("", "---", "");
     } else if (outcome?.status === "unavailable") {
@@ -1635,7 +1807,7 @@ export default function Home() {
     }
     for (const [index, message] of messages.entries()) {
       lines.push(
-        `## [M${index + 1}] ${message.author}${message.round ? ` — Round ${message.round}` : ""}`,
+        `## [M${index + 1}] ${message.author}${message.round ? ` — Round ${message.round}` : ""}${message.stage === "sealed" ? " · Sealed opening" : message.stage === "cross-examination" ? " · Cross-examination" : ""}`,
         "",
         [
           displayTime(message.at),
@@ -1650,6 +1822,12 @@ export default function Home() {
         message.body,
         "",
       );
+      if (message.context?.coverage.truncated) {
+        lines.push(
+          `> Partial input: omitted ${message.context.coverage.omittedLabels?.join(", ") || "earlier context"}.`,
+          "",
+        );
+      }
       if (message.checks?.length) {
         const brokered = message.checks.some(
           (check) => check.provenance === "bridge-broker",
@@ -1761,7 +1939,10 @@ export default function Home() {
         </div>
       </header>
 
-      {connected && health?.history?.available && historyPreference === "unset" && (
+      {connected &&
+        !sessionId &&
+        health?.history?.available &&
+        historyPreference === "unset" && (
         <section className="history-consent" aria-label="Local discussion history">
           <div>
             <strong>Keep discussions locally?</strong>
@@ -2012,6 +2193,11 @@ export default function Home() {
                 </div>
               </div>
             </div>
+            <p className="model-hint">
+              Round one is sealed and independent. Later rounds cross-examine the revealed
+              positions; every completion draft receives two independent audits and at most one
+              revision.
+            </p>
 
             <label className={`dissent-toggle${reviewDissent ? " selected" : ""}`}>
               <input
@@ -2041,7 +2227,7 @@ export default function Home() {
               {status === "synthesizing"
                 ? "Building outcome"
                 : status === "reviewing"
-                  ? "Reviewing dissent"
+                  ? "Auditing outcome"
                 : status === "failed"
                   ? "Turn paused"
                   : status === "retrying"
@@ -2303,6 +2489,31 @@ export default function Home() {
                   </dd>
                 </div>
               </dl>
+              {roomMode === "session" && status === "running" && (
+                <form className="add-rounds-control" onSubmit={addDiscussionRounds}>
+                  <label htmlFor="rounds-to-add">Add rounds</label>
+                  <div>
+                    <select
+                      id="rounds-to-add"
+                      value={roundsToAdd}
+                      onChange={(event) => setRoundsToAdd(event.target.value)}
+                      disabled={addingRounds}
+                      aria-label="Rounds to add"
+                    >
+                      {[1, 2, 3, 4, 5].map((value) => (
+                        <option value={value} key={value}>
+                          {value}
+                        </option>
+                      ))}
+                    </select>
+                    <button type="submit" disabled={addingRounds}>
+                      <Plus size={14} />
+                      {addingRounds ? "Adding…" : "Add"}
+                    </button>
+                  </div>
+                  <small>Extends this room without losing its transcript.</small>
+                </form>
+              )}
               {!busy && (
                 <button className="new-discussion-button" type="button" onClick={resetToSetup}>
                   <Sparkles size={15} />
@@ -2312,7 +2523,7 @@ export default function Home() {
               <p className="session-summary-note">
                 {roomMode === "archive"
                   ? "Archived rooms cannot steer, retry, or stop agent work."
-                  : "Configuration is locked for this room. Use the transcript controls to steer or stop."}
+                  : "Models and project stay locked. You can add rounds while the room is live."}
               </p>
             </div>
           )}
@@ -2404,6 +2615,11 @@ export default function Home() {
                     <strong>[M{index + 1}] {message.author}</strong>
                     <small>
                       {message.round ? `ROUND ${message.round} · ` : ""}
+                      {message.stage === "sealed"
+                        ? "SEALED OPENING · "
+                        : message.stage === "cross-examination"
+                          ? "CROSS-EXAMINATION · "
+                          : ""}
                       {displayTime(message.at)}
                       {message.model
                         ? ` · ${friendlyModelName(message.role === "human" ? "codex" : message.role, message.model)}`
@@ -2414,6 +2630,12 @@ export default function Home() {
                 </div>
                 <div className="message-content">
                   <p>{message.body}</p>
+                  {message.context?.coverage.truncated && (
+                    <p className="message-context-warning">
+                      Partial input · omitted{" "}
+                      {message.context.coverage.omittedLabels?.join(", ") || "earlier context"}
+                    </p>
+                  )}
                   <ReportedChecks message={message} />
                 </div>
               </article>
@@ -2493,7 +2715,15 @@ export default function Home() {
                   </span>
                   <div>
                     <strong>{AGENT_LABELS[speaker]}</strong>
-                    <small>READING THE ROOM</small>
+                    <small>
+                      {status === "synthesizing"
+                        ? "PREPARING THE BRIEF"
+                        : status === "reviewing"
+                          ? "AUDITING THE BRIEF"
+                          : turn < 3
+                            ? "SEALED INDEPENDENT OPENING"
+                            : "CROSS-EXAMINING THE ROOM"}
+                    </small>
                   </div>
                 </div>
                 <div className="thinking-line">
@@ -2575,7 +2805,7 @@ export default function Home() {
           </section>
 
           <section className="context-block">
-            <span className="context-label">TURN ORDER</span>
+            <span className="context-label">DELIBERATION ROUTE</span>
             <ol className="turn-order">
               <li className={speaker === "codex" ? "current" : ""}>
                 <span className="codex-number">01</span>

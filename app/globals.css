@@ -1108,6 +1108,65 @@ button {
   font-size: 10px;
 }
 
+.add-rounds-control {
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid #2b3432;
+  background: #111715;
+}
+
+.add-rounds-control > label {
+  display: block;
+  color: #7faaa2;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.add-rounds-control > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.add-rounds-control select,
+.add-rounds-control button {
+  min-height: 34px;
+  border: 1px solid #3a4945;
+  background: #171e1c;
+  color: #d2d6d2;
+  font: inherit;
+}
+
+.add-rounds-control select {
+  padding: 0 9px;
+}
+
+.add-rounds-control button {
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--human);
+  cursor: pointer;
+}
+
+.add-rounds-control button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.add-rounds-control small {
+  display: block;
+  margin-top: 8px;
+  color: #6d7773;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .session-summary-note {
   margin: 12px 0 0;
   color: #6d7067;
@@ -1784,6 +1843,75 @@ button {
   border-top: 1px solid #4a382d;
   color: #c19a7e;
   font-size: 9px;
+  line-height: 1.5;
+}
+
+.outcome-badges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.audit-badge {
+  border: 1px solid #7b6840;
+  background: #231f15;
+  color: #d8bd76;
+  padding: 5px 8px;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.synthesis-provenance,
+.message-context-warning {
+  color: #8b9692;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.message-context-warning {
+  margin-top: 10px;
+  color: #d1a85f;
+}
+
+.brief-audit {
+  margin-top: 16px;
+  border: 1px solid #2b3432;
+  background: #101513;
+}
+
+.brief-audit > summary {
+  padding: 11px 12px;
+  color: #aeb9b5;
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.brief-audit > div {
+  padding: 0 12px 12px;
+}
+
+.brief-audit section,
+.brief-audit article {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #222b28;
+}
+
+.brief-audit strong,
+.brief-audit small {
+  display: block;
+}
+
+.brief-audit small {
+  margin-top: 4px;
+  color: #7f8b87;
   line-height: 1.5;
 }
 

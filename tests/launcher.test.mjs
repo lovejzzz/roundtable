@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import {
+  buildAutostartPayload,
   buildRoundtableUrl,
   createDeferred,
   parseTalkArguments,
   resolveBridgePort,
   signalStartedProcessTree,
+  startRoundtableSession,
   stopStartedProcesses,
   unexpectedChildExitError,
   waitForBridgeHealth,
@@ -23,11 +25,13 @@ test("talk launch options prefill another project without changing the caller cw
         "Audit release readiness",
         "--rounds",
         "2",
+        "--start",
       ],
       "/Users/example/current",
     ),
     {
       help: false,
+      start: true,
       projectPath: "/Users/example/other-project",
       topic: "Audit release readiness",
       rounds: 2,
@@ -50,6 +54,7 @@ test("connected room URL carries encoded launch context", () => {
       projectPath: "/Users/example/Project & Notes",
       topic: "Review auth & release?",
       rounds: 2,
+      sessionId: "session-123",
     }),
   );
 
@@ -59,6 +64,59 @@ test("connected room URL carries encoded launch context", () => {
   assert.equal(url.searchParams.get("project"), "/Users/example/Project & Notes");
   assert.equal(url.searchParams.get("topic"), "Review auth & release?");
   assert.equal(url.searchParams.get("rounds"), "2");
+  assert.equal(url.searchParams.get("session"), "session-123");
+});
+
+test("auto-start uses the requested launch context and configured CLI defaults", async () => {
+  const options = {
+    help: false,
+    start: true,
+    projectPath: "/Users/example/EDUTOOL",
+    topic: "Review product readiness",
+    rounds: 3,
+  };
+  const health = {
+    defaultProject: "/Users/example/fallback",
+    models: {
+      codex: { configured: "gpt-5.6-sol", effort: "high" },
+      claude: { configured: "opus[1m]", effort: "high" },
+      antigravity: { configured: "gemini-3.6-flash-high", effort: "high" },
+    },
+  };
+  assert.deepEqual(buildAutostartPayload(options, health), {
+    projectPath: "/Users/example/EDUTOOL",
+    topic: "Review product readiness",
+    attachments: [],
+    rounds: 3,
+    codexModel: "gpt-5.6-sol",
+    claudeModel: "opus[1m]",
+    antigravityModel: "gemini-3.6-flash-high",
+    codexEffort: "high",
+    claudeEffort: "high",
+    antigravityEffort: "high",
+    keepHistory: false,
+    reviewDissent: false,
+  });
+
+  let request;
+  const sessionId = await startRoundtableSession({
+    bridgeUrl: "http://127.0.0.1:4317",
+    token: "private-token",
+    options,
+    health,
+    fetchImpl: async (url, init) => {
+      request = { url, init };
+      return new Response(JSON.stringify({ id: "session-123" }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+
+  assert.equal(sessionId, "session-123");
+  assert.equal(request.url, "http://127.0.0.1:4317/sessions");
+  assert.equal(request.init.headers.Authorization, "Bearer private-token");
+  assert.deepEqual(JSON.parse(request.init.body), buildAutostartPayload(options, health));
 });
 
 test("launcher bridge port follows the configured environment", () => {

@@ -8,6 +8,7 @@ import {
   LAUNCHER_SHUTDOWN_GRACE_MS,
   parseTalkArguments,
   resolveBridgePort,
+  startRoundtableSession,
   stopStartedProcesses,
   unexpectedChildExitError,
   waitForBridgeHealth,
@@ -32,6 +33,7 @@ Options:
   --project <path>  Prefill the project folder (relative paths use the caller's directory)
   --topic <text>    Prefill the discussion goal
   --rounds <1-5>    Prefill the number of rounds
+  --start           Start immediately with the configured CLI defaults
   --help            Show this help`);
   process.exit(0);
 }
@@ -39,13 +41,6 @@ Options:
 const token = randomBytes(24).toString("base64url");
 const bridgePort = resolveBridgePort();
 const bridgeUrl = `http://127.0.0.1:${bridgePort}`;
-const appUrl = buildRoundtableUrl({
-  bridgeUrl,
-  token,
-  projectPath: launchOptions.projectPath,
-  topic: launchOptions.topic,
-  rounds: launchOptions.rounds,
-});
 const children = new Set();
 const startupFailure = createDeferred();
 const webReady = createDeferred();
@@ -112,21 +107,40 @@ web.stdout.on("data", (chunk) => {
 });
 
 try {
+  const bridgeReady = waitForBridgeHealth({
+    bridgeUrl,
+    token,
+    port: bridgePort,
+    signal: startupController.signal,
+  });
   await waitForLauncherReadiness({
-    bridgeReady: waitForBridgeHealth({
-      bridgeUrl,
-      token,
-      port: bridgePort,
-      signal: startupController.signal,
-    }),
+    bridgeReady,
     webReady: webReady.promise,
     failure: startupFailure.promise,
     onReady: () => {
       ready = true;
     },
   });
+  const health = await bridgeReady;
+  const sessionId = launchOptions.start
+    ? await startRoundtableSession({
+        bridgeUrl,
+        token,
+        options: launchOptions,
+        health,
+      })
+    : "";
+  const appUrl = buildRoundtableUrl({
+    bridgeUrl,
+    token,
+    projectPath: launchOptions.projectPath,
+    topic: launchOptions.topic,
+    rounds: launchOptions.rounds,
+    sessionId,
+  });
 
   console.log("");
+  if (sessionId) console.log(`  Roundtable session: ${sessionId}`);
   console.log(`  Roundtable: ${appUrl}`);
   console.log("");
   if (process.env.ROUNDTABLE_NO_OPEN !== "1") {

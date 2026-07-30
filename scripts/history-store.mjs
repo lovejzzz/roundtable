@@ -88,6 +88,8 @@ function reconstructSnapshot(events, record) {
   const messages = [];
   const pending = new Map();
   let outcome = null;
+  let sealedBatch = null;
+  let briefAudit = null;
   let dissent = [];
   const dissentReviews = {};
   const dissentJudgments = {};
@@ -100,6 +102,8 @@ function reconstructSnapshot(events, record) {
         ...event.session,
         messages: [],
         outcome: null,
+        sealedBatch: null,
+        briefAudit: null,
         dissent: [],
         dissentReviews: {},
         dissentJudgments: {},
@@ -112,6 +116,10 @@ function reconstructSnapshot(events, record) {
       }
     } else if (event.type === "session.outcome") {
       outcome = event.outcome;
+    } else if (event.type === "session.batch") {
+      sealedBatch = event.batch;
+    } else if (event.type === "session.audit") {
+      briefAudit = event.audit;
     } else if (event.type === "session.dissent") {
       for (const item of event.items || []) {
         if (!dissent.some((existing) => existing.id === item.id)) dissent.push(item);
@@ -154,6 +162,8 @@ function reconstructSnapshot(events, record) {
       finalStatus?.turn ?? snapshot.completedTurns ?? messages.filter((message) => message.round).length,
     messages,
     outcome,
+    sealedBatch,
+    briefAudit,
     dissent,
     dissentReviews,
     dissentJudgments,

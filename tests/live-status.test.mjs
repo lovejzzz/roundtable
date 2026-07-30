@@ -14,7 +14,7 @@ test("announces the active agent with one-based turn wording", () => {
       turn: 0,
       totalTurns: 6,
     }),
-    "Turn 1 of 6: Codex is reading the room.",
+    "Turn 1 of 6: Codex is preparing an independent sealed opening.",
   );
   assert.equal(
     liveStatusText({
@@ -24,7 +24,17 @@ test("announces the active agent with one-based turn wording", () => {
       turn: 1,
       totalTurns: 6,
     }),
-    "Turn 2 of 6: Claude is reading the room.",
+    "Turn 2 of 6: Claude is preparing an independent sealed opening.",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "running",
+      speaker: "codex",
+      turn: 3,
+      totalTurns: 6,
+    }),
+    "Turn 4 of 6: Codex is cross-examining the revealed positions.",
   );
 });
 
@@ -102,7 +112,7 @@ test("announces synthesis, dissent review, and terminal states", () => {
       turn: 6,
       totalTurns: 6,
     }),
-    "6 of 6 turns complete. Codex is preparing the Completion Brief.",
+    "6 of 6 turns complete. A participant is preparing or revising the Completion Brief.",
   );
   assert.equal(
     liveStatusText({
@@ -112,7 +122,7 @@ test("announces synthesis, dissent review, and terminal states", () => {
       turn: 6,
       totalTurns: 6,
     }),
-    "Claude is reviewing dissent coverage.",
+    "Claude is independently auditing the Completion Brief.",
   );
   assert.equal(liveStatusText({ mode: "session", status: "complete" }), "Discussion complete. The Completion Brief is available.");
   assert.equal(liveStatusText({ mode: "session", status: "stopped" }), "Discussion stopped.");

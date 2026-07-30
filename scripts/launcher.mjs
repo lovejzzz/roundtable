@@ -5,6 +5,8 @@ export const LAUNCHER_STARTUP_TIMEOUT_MS = 60_000;
 export const LAUNCHER_SHUTDOWN_GRACE_MS = 2_000;
 export const LAUNCHER_FORCE_WAIT_MS = 1_000;
 export const LAUNCHER_TOPIC_MAX_CHARACTERS = 4_000;
+export const DEFAULT_LAUNCH_TOPIC =
+  "Review this project’s architecture and agree on the highest-leverage next steps.";
 
 function requiredArgumentValue(argv, index, option) {
   const value = argv[index + 1];
@@ -17,6 +19,7 @@ function requiredArgumentValue(argv, index, option) {
 export function parseTalkArguments(argv = [], cwd = process.cwd()) {
   const options = {
     help: false,
+    start: false,
     projectPath: "",
     topic: "",
     rounds: null,
@@ -26,6 +29,10 @@ export function parseTalkArguments(argv = [], cwd = process.cwd()) {
     const option = argv[index];
     if (option === "--help" || option === "-h") {
       options.help = true;
+      continue;
+    }
+    if (option === "--start") {
+      options.start = true;
       continue;
     }
     if (option === "--project") {
@@ -70,6 +77,7 @@ export function buildRoundtableUrl({
   projectPath = "",
   topic = "",
   rounds = null,
+  sessionId = "",
 }) {
   const url = new URL(appOrigin);
   url.searchParams.set("bridge", bridgeUrl);
@@ -77,7 +85,52 @@ export function buildRoundtableUrl({
   if (projectPath) url.searchParams.set("project", projectPath);
   if (topic) url.searchParams.set("topic", topic);
   if (rounds !== null) url.searchParams.set("rounds", String(rounds));
+  if (sessionId) url.searchParams.set("session", sessionId);
   return url.toString();
+}
+
+export function buildAutostartPayload(options, health) {
+  return {
+    projectPath: options.projectPath || health.defaultProject,
+    topic: options.topic || DEFAULT_LAUNCH_TOPIC,
+    attachments: [],
+    rounds: options.rounds ?? 3,
+    codexModel: health.models.codex.configured,
+    claudeModel: health.models.claude.configured,
+    antigravityModel: health.models.antigravity.configured,
+    codexEffort: health.models.codex.effort,
+    claudeEffort: health.models.claude.effort,
+    antigravityEffort: health.models.antigravity.effort,
+    keepHistory: false,
+    reviewDissent: false,
+  };
+}
+
+export async function startRoundtableSession({
+  bridgeUrl,
+  token,
+  options,
+  health,
+  fetchImpl = fetch,
+}) {
+  const response = await fetchImpl(`${bridgeUrl}/sessions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(buildAutostartPayload(options, health)),
+  });
+  let data;
+  try {
+    data = await response.json();
+  } catch {
+    throw new Error("Roundtable auto-start returned an invalid bridge response.");
+  }
+  if (!response.ok || !data?.id) {
+    throw new Error(data?.error || "Roundtable could not auto-start the discussion.");
+  }
+  return data.id;
 }
 
 export function resolveBridgePort(environment = process.env) {

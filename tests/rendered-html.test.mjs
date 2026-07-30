@@ -44,6 +44,8 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /aria-label="Antigravity reasoning effort"/i);
   assert.match(html, /Model and effort are sent as separate CLI settings/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
+  assert.match(html, /Round one is sealed and independent/i);
+  assert.match(html, /two independent audits and at most one revision/i);
   assert.match(html, /Add files/i);
   assert.match(html, /aria-label="Add files to the discussion prompt"/i);
   assert.match(html, /1 MB each · 3 MB total/i);
@@ -74,6 +76,14 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.doesNotMatch(packageJson, /site-creator-vinext-starter|react-loading-skeleton/);
   assert.match(page, /Retry failed turn|Retry .* turn|failed-turn-card/i);
   assert.match(page, /Retry or end this turn before adding another note/i);
+  assert.match(page, /async function addDiscussionRounds/);
+  assert.match(page, /sessions\/\$\{sessionId\}\/extend/);
+  assert.match(page, /Extends this room without losing its transcript/i);
+  assert.match(page, /SEALED OPENING/);
+  assert.match(page, /CROSS-EXAMINATION/);
+  assert.match(page, /Draft under audit/i);
+  assert.match(page, /Original preserved draft/i);
+  assert.match(page, /Partial input · omitted/i);
   assert.match(page, /Reported by/);
   assert.match(page, /Agent-reported, not independently verified/i);
   assert.match(page, /Verified by Roundtable broker/i);
@@ -84,9 +94,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /showCompletionBrief/);
   assert.match(page, /promptAttachments/);
   assert.match(page, /attachmentManifestId/);
-  assert.match(page, /launchSearchValue\("project"\)/);
-  assert.match(page, /launchSearchValue\("topic"\)/);
-  assert.match(page, /useState\(launchRounds\)/);
+  assert.match(page, /const queryProject = params\.get\("project"\)/);
+  assert.match(page, /const queryTopic = params\.get\("topic"\)/);
+  assert.match(page, /setRounds\(normalizedLaunchRounds\(queryRounds\)\)/);
   assert.match(page, /Attachment set/);
   assert.match(page, /Attachment manifest/);
   assert.match(page, /contentBase64/);
@@ -131,6 +141,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(styles, /\.visually-hidden/);
   assert.match(styles, /\.environment-policy/);
   assert.match(styles, /\.attachment-manifest/);
+  assert.match(styles, /\.add-rounds-control/);
+  assert.match(styles, /\.brief-audit/);
+  assert.match(styles, /\.message-context-warning/);
   assert.doesNotMatch(styles, /\.agent-stack\s*\{\s*display:\s*none/);
   assert.doesNotMatch(page, /Faithful agent summaries|completed with no concerns/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));

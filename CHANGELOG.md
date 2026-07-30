@@ -4,6 +4,116 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.25] — 2026-07-30
+
+### Discussion
+
+A two-round Roundtable architecture review challenged five hypotheses: fixed
+sequential order creates anchoring, rolling context can silently hide early
+decisions, Codex-only synthesis concentrates judgment and failure, disposable
+copies may cost too much, and an independent opening followed by
+cross-examination may produce better deliberation.
+
+The room agreed to preserve the sandbox model, correct observability and
+synthesis resilience first, then make the sealed-first-pass experiment the
+default architecture. It corrected one proposal during discussion: dissent
+cannot simply run without a brief because its task is specifically to audit a
+frozen brief. The accepted recovery is multi-role synthesis fallback followed
+by brief audit. The owner then requested the complete architecture, including
+one bounded audited revision, as the next release.
+
+### Implementation
+
+- Replaced the first sequential round with a checkpointed sealed opening. All
+  three participants receive the same immutable discussion input hash, peer
+  answers remain hidden, retries reuse the exact frozen prompt, and completed
+  openings remain independently recorded.
+- Turned later rounds into cross-examination over revealed labeled positions.
+  Presentation order is deterministic but shuffled per reader and turn, while
+  canonical `M#` identities remain stable.
+- Added a strict 48,000-character transcript cap with included, omitted,
+  shortened, and presentation-order telemetry. Partial context is attached to
+  the resulting message, shown in the room, persisted in history, and exported.
+- Added explicit escaped untrusted-data boundaries for discussion, draft, and
+  audit inputs. Live agent bodies now receive credential redaction and
+  disposable-path scrubbing before entering peer prompts or snapshots.
+- Replaced Codex-only completion with recorded Codex → Claude → Antigravity
+  fallback attempts. Two non-synthesizing participants independently audit the
+  first valid draft; supported concerns permit exactly one fallback-capable
+  revision, while the original draft, audit findings, provenance, and attempts
+  remain visible and exportable.
+- Persisted sealed-batch and brief-audit checkpoints in append-only history and
+  replayed them during live stream recovery without exposing them as transcript
+  messages.
+- Updated live status, message metadata, completion UI, Markdown export, and
+  documentation for sealed openings, cross-examination, fallback synthesis,
+  audit, revision, and context coverage.
+
+### Verification
+
+- Added focused coverage for strict single-message overflow, omitted labels,
+  deterministic per-reader ordering, escaped boundary injection, shared sealed
+  input hashes, steering isolation, checkpointed retry, live-body redaction,
+  synthesis fallback, sealed audits, one revision, and history reconstruction.
+- All 115 bridge/runtime tests, lint, the production build, both rendered-page
+  checks, and whitespace validation pass with no skips.
+
+## [v0.0.0.24] — 2026-07-30
+
+### Request
+
+Allow the owner to add more rounds while a Roundtable meeting is running,
+without losing the existing transcript or opening a continuation room.
+
+### Implementation
+
+- Added an authenticated live-session extension route that accepts one through
+  five additional rounds and updates the active turn loop in place.
+- Added an **Add rounds** control to the live room summary. The progress rail,
+  session snapshot, and recovered room all adopt the new turn total.
+- Preserved the locked project, topic, model, effort, attachment, history, and
+  dissent configuration; only the live round count can grow.
+- Bounded a discussion to twenty total rounds and rejected extensions after the
+  meeting has entered synthesis or a terminal state.
+
+### Verification
+
+- Bridge coverage holds an active turn, adds two rounds, and proves the original
+  room completes all nine turns with intact round numbering.
+- Validation coverage rejects malformed additions and post-completion changes.
+- UI source and rendered-page coverage pin the control, endpoint, and
+  transcript-preservation disclosure.
+
+## [v0.0.0.23] — 2026-07-30
+
+### Request
+
+Remove the extra start confirmation after an explicit `@roundtable` invocation.
+The invocation itself is the user's authorization to begin the requested local
+discussion.
+
+### Implementation
+
+- Added a validated `--start` launcher flag that creates the bridge session
+  immediately with the requested project, topic, and round count plus each
+  CLI's configured model and effort defaults.
+- Added the live session ID to the connected room URL so the UI recovers the
+  already-running discussion instead of showing the setup confirmation.
+- Kept automatic launches discussion-only with no attachments, dissent review,
+  or local-history retention.
+- Removed server/client launch-context hydration drift by consuming all launch
+  parameters after mount before connecting to the bridge.
+- Updated the personal Roundtable plugin contract so explicit plugin invocation
+  always passes `--start`.
+
+### Verification
+
+- Launcher coverage now checks `--start`, exact session URL round-tripping,
+  bridge payload construction, authorization, and returned session identity.
+- The full bridge suite, lint, production build, rendered-page checks, plugin
+  validation, and a real three-round cross-project launch remain the release
+  gate.
+
 ## [v0.0.0.22] — 2026-07-30
 
 ### Request and platform audit

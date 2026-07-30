@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.22**
+Current release: **v0.0.0.25**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -42,9 +42,10 @@ Use $roundtable for this project.
 The natural-language form `use @roundtable for this project` is also an
 implicit trigger after the plugin is installed. Codex resolves the current Git
 root (or current working folder), opens Roundtable with that project and the
-discussion goal prefilled, and leaves **Start discussion** for you to confirm.
-This preserves the visible model, effort, rounds, history, and attachment
-choices before any CLI call begins. Newly installed or updated plugins are
+discussion goal prefilled, and starts the discussion immediately. Invoking the
+plugin is the authorization boundary: the room uses the three CLIs' configured
+model and effort defaults, the requested round count, no attachments, no dissent
+check, and no local transcript retention. Newly installed or updated plugins are
 picked up in a new Codex task.
 
 The launcher itself supports the same behavior without the plugin:
@@ -53,11 +54,14 @@ The launcher itself supports the same behavior without the plugin:
 node "/path/to/roundtable/scripts/talk.mjs" \
   --project "$PWD" \
   --topic "Review this project's architecture and highest-leverage risks." \
-  --rounds 2
+  --rounds 2 \
+  --start
 ```
 
 Relative `--project` values resolve from the caller's working directory.
-`--rounds` accepts one through five. Set `ROUNDTABLE_HOME` if the personal
+`--rounds` accepts one through five. `--start` begins the discussion as soon as
+the bridge and room are ready; omit it to review the setup screen first. Set
+`ROUNDTABLE_HOME` if the personal
 plugin should use a Roundtable checkout in a different location.
 
 Roundtable uses each CLI's persisted interactive sign-in. Ambient API keys,
@@ -85,22 +89,27 @@ whole-process-tree cleanup.
    Antigravity models whose exact identifier ends in `-low`, `-medium`, or
    `-high` lock the slider to that required level so the room cannot start an
    invalid CLI route.
-5. Codex, Claude, and Antigravity take turns in that order from separate
-   disposable copies of the same project and read the same shared transcript.
-   Every message records its model and reasoning effort.
+5. Round one is a **sealed opening**: Codex, Claude, and Antigravity inspect
+   separate disposable copies of the same project against one immutable input,
+   without seeing peer answers. Later rounds reveal the labeled openings for
+   cross-examination in a deterministic reader-specific order. Every message
+   records its model, reasoning effort, phase, input hash, and context coverage.
 6. Codex may optionally run focused existing checks in its native sandbox.
    Claude and Antigravity may each request one approved argv command;
    Roundtable executes it without a shell in a fresh request-scoped project
    copy, then returns the real result for that participant's final contribution.
-7. Add a steering note at any time. It is added to the transcript before the next agent turn.
+7. Add a steering note at any time. During the sealed opening it waits until
+   cross-examination so it cannot leak one participant's timing into another's
+   independent input; otherwise it is added before the next agent turn.
 8. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
-9. Only after the final agent turn, Codex produces a structured Completion
-   Brief with the decision, rationale, owned next actions, and open questions.
-   It follows the transcript in the conversation scroll and replaces the
-   now-inapplicable steering composer. You can skip it without losing the
-   transcript.
-10. Optionally enable **Dissent check**. After Codex freezes the ordinary brief,
+9. Only after the final agent turn, Roundtable asks Codex for a structured
+   Completion Brief and falls back to Claude, then Antigravity, if a participant
+   fails or returns invalid structure. The two non-synthesizing participants
+   independently audit the draft against labeled transcript evidence. Material
+   concerns permit exactly one fallback-capable revision; the room preserves
+   the original draft, audits, attempts, and final brief.
+10. Optionally enable **Dissent check**. After the audited brief is frozen,
    each agent gets one separate review pass and can identify labeled positions
    the brief missed or flattened. Mark each item **Represented** or **Missed**;
    those judgments are saved locally.
@@ -109,12 +118,31 @@ whole-process-tree cleanup.
    notes visibly separate from the transcript.
 12. Stop the discussion whenever you want.
 
+Ordinary turn context has a strict 48,000-character ceiling. Roundtable keeps
+the newest useful context, shortens an individually oversized newest message,
+and records included, shortened, and omitted labels on the resulting message.
+The room and Markdown export surface partial input instead of silently implying
+complete coverage. Completion synthesis separately preserves coverage across
+every labeled message within its larger budget.
+
+Agent messages and repository-derived text enter later prompts only inside
+escaped, explicitly untrusted data boundaries. The control prompt says that
+peer content cannot issue commands, change roles, or request secrets; human
+messages labeled **You** remain the only transcript-authored steering source.
+Live agent bodies also pass through credential redaction and disposable-path
+scrubbing before they enter snapshots or another participant's prompt. These
+controls reduce instruction propagation but do not claim that lexical
+sanitization alone eliminates prompt injection.
+
 The workspace changes with the room lifecycle. Setup keeps the goal,
 connection, and participant controls beside a conversation preview. Once a
-discussion starts, those controls collapse into a locked session summary so the
-live transcript becomes primary. Opening local history creates a visibly
-read-only archive state, and **New discussion** returns every room surface
-through one reset path.
+discussion starts, those controls collapse into a session summary so the live
+transcript becomes primary. The project, topic, model, effort, attachment,
+history, and dissent settings remain locked, while **Add rounds** can extend a
+live meeting by one through five rounds without forking the room or losing its
+transcript. A room can contain up to twenty rounds. Opening local history
+creates a visibly read-only archive state, and **New discussion** returns every
+room surface through one reset path.
 
 Active discussions survive a refresh in the same browser tab while the bridge
 remains running. If the live event stream drops, the room retains its session,
@@ -166,8 +194,9 @@ its API entirely. `ROUNDTABLE_HISTORY_DIR` can override the user-data location.
 
 The dissent check is a deliberately small measurement experiment, not an
 automatic claim about consensus. It requires local history and adds one
-post-brief review pass per agent. The completion brief is synthesized from the
-normal transcript only and frozen before either review starts.
+post-brief review pass per agent after the automatic two-review draft audit and
+optional one-revision cycle. The completion brief is synthesized from the
+normal transcript only and frozen before dissent review starts.
 
 Every transcript message has a stable session-order label such as `[M4]`.
 Reviewers receive a coverage-preserving excerpt for every label and may return
@@ -190,9 +219,11 @@ Temporary provider, timeout, empty-response, and model errors pause the affected
 turn instead of terminating the room. The failure card shows the agent, sanitized
 error, attempt count, and retry deadline. Retry:
 
-- uses the same agent, model, reasoning level, turn number, and deterministically
-  rebuilt prompt;
+- uses the same agent, model, reasoning level, turn number, immutable input hash,
+  and exact frozen prompt;
 - never duplicates completed messages;
+- checkpoints each sealed participant independently, so a later failure cannot
+  rerun or reveal successful peer openings;
 - keeps steering disabled so the retry input cannot silently change;
 - accepts only one competing retry or end command;
 - remains available after a same-tab refresh while the original bridge is alive.
