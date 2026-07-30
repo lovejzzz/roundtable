@@ -14,6 +14,7 @@ import {
   unexpectedChildExitError,
   waitForBridgeHealth,
   waitForLauncherReadiness,
+  waitForWebHealth,
 } from "./launcher.mjs";
 
 const roundtableRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -45,7 +46,6 @@ const webPort = resolveWebPort();
 const bridgeUrl = `http://127.0.0.1:${bridgePort}`;
 const children = new Set();
 const startupFailure = createDeferred();
-const webReady = createDeferred();
 const startupController = new AbortController();
 let ready = false;
 let shuttingDown = false;
@@ -101,12 +101,7 @@ start("Bridge", process.execPath, ["scripts/bridge.mjs"], {
   ROUNDTABLE_BRIDGE_PORT: String(bridgePort),
 });
 
-const web = start("Web app", "npm", ["run", "dev", "--", "--port", String(webPort)]);
-let webOutput = "";
-web.stdout.on("data", (chunk) => {
-  webOutput = `${webOutput}${chunk.toString()}`.slice(-2_000);
-  if (webOutput.includes("Local:")) webReady.resolve();
-});
+start("Web app", "npm", ["run", "dev", "--", "--port", String(webPort)]);
 
 try {
   const bridgeReady = waitForBridgeHealth({
@@ -115,9 +110,14 @@ try {
     port: bridgePort,
     signal: startupController.signal,
   });
+  const webReady = waitForWebHealth({
+    webUrl: `http://localhost:${webPort}/`,
+    port: webPort,
+    signal: startupController.signal,
+  });
   await waitForLauncherReadiness({
     bridgeReady,
-    webReady: webReady.promise,
+    webReady,
     failure: startupFailure.promise,
     onReady: () => {
       ready = true;

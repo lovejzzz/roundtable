@@ -14,6 +14,7 @@ import {
   unexpectedChildExitError,
   waitForBridgeHealth,
   waitForLauncherReadiness,
+  waitForWebHealth,
 } from "../scripts/launcher.mjs";
 
 test("talk launch options prefill another project without changing the caller cwd", () => {
@@ -187,6 +188,41 @@ test("unrelated successful listener cannot satisfy bridge readiness", async () =
         }),
     }),
     /did not return Roundtable bridge health/,
+  );
+});
+
+test("web readiness polls the app instead of depending on a console banner", async () => {
+  let attempts = 0;
+  await waitForWebHealth({
+    webUrl: "http://127.0.0.1:3100/",
+    port: 3100,
+    timeoutMs: 100,
+    retryMs: 1,
+    fetchImpl: async (url, options) => {
+      attempts += 1;
+      assert.equal(url, "http://127.0.0.1:3100/");
+      assert.equal(options.cache, "no-store");
+      if (attempts === 1) throw new TypeError("fetch failed");
+      if (attempts === 2) return new Response("Starting", { status: 503 });
+      return new Response("Roundtable", { status: 200 });
+    },
+  });
+
+  assert.equal(attempts, 3);
+});
+
+test("web readiness reports the port when the app never becomes healthy", async () => {
+  await assert.rejects(
+    waitForWebHealth({
+      webUrl: "http://127.0.0.1:3100/",
+      port: 3100,
+      timeoutMs: 5,
+      retryMs: 1,
+      fetchImpl: async () => {
+        throw new TypeError("fetch failed");
+      },
+    }),
+    /web app on port 3100 did not become ready/,
   );
 });
 

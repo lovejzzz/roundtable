@@ -206,6 +206,61 @@ async function fetchHealth(fetchImpl, url, token, timeoutMs, signal) {
   }
 }
 
+async function fetchWebRoot(fetchImpl, url, timeoutMs, signal) {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
+  const timer = setTimeout(
+    () => controller.abort(new Error("Web app readiness request timed out.")),
+    timeoutMs,
+  );
+  timer.unref?.();
+  try {
+    return await fetchImpl(url, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
+  }
+}
+
+export async function waitForWebHealth({
+  webUrl,
+  port,
+  timeoutMs = LAUNCHER_STARTUP_TIMEOUT_MS,
+  retryMs = 200,
+  requestTimeoutMs = 1_000,
+  fetchImpl = fetch,
+  signal,
+}) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (signal?.aborted) throw abortError(signal);
+    const remainingMs = timeoutMs - (Date.now() - startedAt);
+    try {
+      const response = await fetchWebRoot(
+        fetchImpl,
+        webUrl,
+        Math.max(1, Math.min(requestTimeoutMs, remainingMs)),
+        signal,
+      );
+      if (response.ok) return;
+    } catch {
+      if (signal?.aborted) throw abortError(signal);
+    }
+
+    if (Date.now() - startedAt >= timeoutMs) break;
+    await delay(Math.min(retryMs, timeoutMs - (Date.now() - startedAt)), signal);
+  }
+
+  throw new Error(
+    `The Roundtable web app on port ${port} did not become ready within ` +
+      `${Math.ceil(timeoutMs / 1_000)} seconds.`,
+  );
+}
+
 export async function waitForBridgeHealth({
   bridgeUrl,
   token,
