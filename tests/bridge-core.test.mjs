@@ -70,6 +70,36 @@ async function startTestBridge(agentRunner, options = {}) {
   };
 }
 
+test("rejects an Antigravity model and effort combination the CLI cannot run", async () => {
+  const agentRunner = {
+    run: async () => "unused",
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Validate the route",
+        rounds: 1,
+        antigravityModel: "gemini-3.6-flash-high",
+        antigravityEffort: "medium",
+      }),
+    });
+    assert.equal(response.status, 400);
+    await assert.doesNotReject(async () => {
+      const payload = await response.json();
+      assert.match(payload.error, /requires high reasoning effort/i);
+    });
+    assert.equal(bridge.sessions.size, 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("queues steering after the active reply and includes it once in the next prompt", async () => {
   let releaseFirstTurn;
   const prompts = [];

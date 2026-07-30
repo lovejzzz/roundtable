@@ -259,6 +259,12 @@ const SAMPLE_MESSAGES: Message[] = [
 
 const DEFAULT_BRIDGE = "http://127.0.0.1:4317";
 const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
+const DEFAULT_TOPIC =
+  "Review this project’s architecture and agree on the highest-leverage next steps.";
+
+function encodedModelEffort(model: string) {
+  return model.toLowerCase().match(/-(low|medium|high)$/)?.[1] || "";
+}
 
 const AGENT_ROLES = ["codex", "claude", "antigravity"] as const;
 const AGENT_LABELS: Record<AgentRole, string> = {
@@ -602,9 +608,7 @@ export default function Home() {
   const [turn, setTurn] = useState(0);
   const [totalTurns, setTotalTurns] = useState(9);
   const [projectPath, setProjectPath] = useState("");
-  const [topic, setTopic] = useState(
-    "Review this project’s architecture and agree on the highest-leverage next steps.",
-  );
+  const [topic, setTopic] = useState(DEFAULT_TOPIC);
   const [rounds, setRounds] = useState("3");
   const [codexModel, setCodexModel] = useState("");
   const [claudeModel, setClaudeModel] = useState("");
@@ -617,8 +621,14 @@ export default function Home() {
   const [copied, setCopied] = useState(false);
   const streamRef = useRef<EventSource | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   const connected = Boolean(health?.ok);
+  const roomMode: "setup" | "session" | "archive" = viewingHistory
+    ? "archive"
+    : isPreview
+      ? "setup"
+      : "session";
   const active =
     !viewingHistory &&
     (status === "running" ||
@@ -626,7 +636,7 @@ export default function Home() {
       status === "retrying" ||
       status === "reviewing");
   const busy = active || status === "synthesizing";
-  const canSteer = status === "running" && turn < totalTurns - 1;
+  const canSteer = !viewingHistory && status === "running" && turn < totalTurns - 1;
   const codexEfforts = health?.models.codex.efforts?.length
     ? health.models.codex.efforts
     : DEFAULT_EFFORT_LEVELS;
@@ -636,6 +646,7 @@ export default function Home() {
   const antigravityEfforts = health?.models.antigravity.efforts?.length
     ? health.models.antigravity.efforts
     : ["low", "medium", "high"];
+  const requiredAntigravityEffort = encodedModelEffort(antigravityModel);
 
   const progress = useMemo(() => {
     if (!totalTurns) return 0;
@@ -666,13 +677,18 @@ export default function Home() {
       if (!projectPath) setProjectPath(data.defaultProject);
       setCodexModel((current) => current || data.models?.codex.configured || "");
       setClaudeModel((current) => current || data.models?.claude.configured || "");
+      const defaultAntigravityModel = data.models?.antigravity.configured || "";
       setAntigravityModel(
-        (current) => current || data.models?.antigravity.configured || "",
+        (current) => current || defaultAntigravityModel,
       );
       setCodexEffort((current) => current || data.models?.codex.effort || "medium");
       setClaudeEffort((current) => current || data.models?.claude.effort || "medium");
       setAntigravityEffort(
-        (current) => current || data.models?.antigravity.effort || "medium",
+        (current) =>
+          encodedModelEffort(antigravityModel || defaultAntigravityModel) ||
+          current ||
+          data.models?.antigravity.effort ||
+          "medium",
       );
       setStatus((current) => (current === "connecting" ? "idle" : current));
       setConnectOpen(false);
@@ -714,7 +730,7 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!feedRef.current) return;
+    if (!feedRef.current || !shouldAutoScrollRef.current) return;
     feedRef.current.scrollTo({
       top: feedRef.current.scrollHeight,
       behavior: "smooth",
@@ -728,13 +744,16 @@ export default function Home() {
     setTopic(snapshot.topic);
     setCodexModel(snapshot.codexModel);
     setClaudeModel(snapshot.claudeModel);
-    setAntigravityModel(
-      snapshot.antigravityModel || health?.models.antigravity.configured || "",
-    );
+    const restoredAntigravityModel =
+      snapshot.antigravityModel || health?.models.antigravity.configured || "";
+    setAntigravityModel(restoredAntigravityModel);
     setCodexEffort(snapshot.codexEffort);
     setClaudeEffort(snapshot.claudeEffort);
     setAntigravityEffort(
-      snapshot.antigravityEffort || health?.models.antigravity.effort || "medium",
+      encodedModelEffort(restoredAntigravityModel) ||
+        snapshot.antigravityEffort ||
+        health?.models.antigravity.effort ||
+        "medium",
     );
     setMessages(snapshot.messages);
     setOutcome(snapshot.outcome);
@@ -915,6 +934,7 @@ export default function Home() {
     setStatus("running");
     setTurn(0);
     setTotalTurns(Number(rounds) * 3);
+    shouldAutoScrollRef.current = true;
     await openStream(data.id);
   }
 
@@ -941,6 +961,45 @@ export default function Home() {
   function chooseHistoryPreference(value: "on" | "off") {
     localStorage.setItem("roundtable.history", value);
     setHistoryPreference(value);
+  }
+
+  function resetToSetup() {
+    streamRef.current?.close();
+    streamRef.current = null;
+    sessionStorage.removeItem("roundtable.sessionId");
+    const defaultAntigravityModel = health?.models.antigravity.configured || "";
+    setSessionId("");
+    setMessages(SAMPLE_MESSAGES);
+    setOutcome(null);
+    setPendingSteering([]);
+    setReviewDissent(false);
+    setDissent([]);
+    setDissentReviews({});
+    setDissentJudgments({});
+    setFailedTurn(null);
+    setHistoryWarning("");
+    setViewingHistory(false);
+    setIsPreview(true);
+    setSpeaker(null);
+    setTurn(0);
+    setTotalTurns(9);
+    setStatus("idle");
+    setProjectPath(health?.defaultProject || "");
+    setTopic(DEFAULT_TOPIC);
+    setRounds("3");
+    setCodexModel(health?.models.codex.configured || "");
+    setClaudeModel(health?.models.claude.configured || "");
+    setAntigravityModel(defaultAntigravityModel);
+    setCodexEffort(health?.models.codex.effort || "medium");
+    setClaudeEffort(health?.models.claude.effort || "medium");
+    setAntigravityEffort(
+      encodedModelEffort(defaultAntigravityModel) ||
+        health?.models.antigravity.effort ||
+        "medium",
+    );
+    setSteering("");
+    setConnectionError("");
+    shouldAutoScrollRef.current = true;
   }
 
   async function openHistoryRecord(id: string) {
@@ -970,11 +1029,7 @@ export default function Home() {
       return;
     }
     if (viewingHistory && sessionId === record.id) {
-      setViewingHistory(false);
-      setIsPreview(true);
-      setMessages(SAMPLE_MESSAGES);
-      setOutcome(null);
-      setStatus("idle");
+      resetToSetup();
     }
     await loadHistory();
   }
@@ -995,11 +1050,7 @@ export default function Home() {
     }
     setHistoryRecords([]);
     if (viewingHistory) {
-      setViewingHistory(false);
-      setIsPreview(true);
-      setMessages(SAMPLE_MESSAGES);
-      setOutcome(null);
-      setStatus("idle");
+      resetToSetup();
     }
   }
 
@@ -1400,7 +1451,14 @@ export default function Home() {
           </div>
 
           <div className="history-drawer-actions">
-            <button type="button" onClick={() => setHistoryOpen(false)}>
+            <button
+              type="button"
+              onClick={() => {
+                resetToSetup();
+                setHistoryOpen(false);
+              }}
+              disabled={busy}
+            >
               New discussion
             </button>
             <button
@@ -1415,8 +1473,10 @@ export default function Home() {
         </section>
       )}
 
-      <div className="workspace-grid">
+      <div className={`workspace-grid ${roomMode}-mode`}>
         <aside className="setup-panel">
+          {roomMode === "setup" ? (
+            <>
           <div className="panel-heading">
             <p className="eyebrow">NEW DISCUSSION</p>
             <span className="step-count">01</span>
@@ -1485,7 +1545,11 @@ export default function Home() {
               </span>
             </label>
 
-            <button className="primary" type="submit" disabled={busy}>
+            <button
+              className="primary"
+              type="submit"
+              disabled={busy}
+            >
               {busy ? <Radio size={17} /> : <Sparkles size={17} />}
               {status === "synthesizing"
                 ? "Building outcome"
@@ -1497,7 +1561,9 @@ export default function Home() {
                     ? "Retrying turn"
                 : active
                   ? "Discussion running"
-                  : "Start the roundtable"}
+                  : connected
+                    ? "Start the roundtable"
+                    : "Connect bridge to start"}
               {!busy && <ArrowRight size={17} />}
             </button>
           </form>
@@ -1596,7 +1662,12 @@ export default function Home() {
                     <input
                       list="antigravity-model-options"
                       value={antigravityModel}
-                      onChange={(event) => setAntigravityModel(event.target.value)}
+                      onChange={(event) => {
+                        const model = event.target.value;
+                        setAntigravityModel(model);
+                        const requiredEffort = encodedModelEffort(model);
+                        if (requiredEffort) setAntigravityEffort(requiredEffort);
+                      }}
                       placeholder="CLI default"
                       disabled={busy}
                       aria-label="Antigravity model"
@@ -1617,11 +1688,16 @@ export default function Home() {
                     onChange={(event) =>
                       setAntigravityEffort(antigravityEfforts[Number(event.target.value)])
                     }
-                    disabled={busy}
+                    disabled={busy || Boolean(requiredAntigravityEffort)}
                     aria-label="Antigravity reasoning effort"
                     style={effortStyle(antigravityEffort, antigravityEfforts)}
                   />
                 </label>
+                <p className="routing-disclosure">
+                  {requiredAntigravityEffort
+                    ? `This model requires ${friendlyEffort(requiredAntigravityEffort)} effort; the slider follows it.`
+                    : "Model and effort are sent as separate CLI settings."}
+                </p>
               </div>
               <span className={`presence ${health?.antigravity.available ? "online" : ""}`} />
             </div>
@@ -1649,21 +1725,78 @@ export default function Home() {
               Model and reasoning choices lock when the room starts.
             </p>
           </div>
+            </>
+          ) : (
+            <div className="session-summary">
+              <div className="panel-heading">
+                <p className="eyebrow">
+                  {roomMode === "archive" ? "ARCHIVED ROOM" : "LIVE ROOM"}
+                </p>
+                <span className="step-count">{roomMode === "archive" ? "READ ONLY" : "LOCKED"}</span>
+              </div>
+              <p className="session-summary-topic">{topic}</p>
+              <dl>
+                <div>
+                  <dt>Project</dt>
+                  <dd>{projectPath.split("/").filter(Boolean).pop() || projectPath}</dd>
+                </div>
+                <div>
+                  <dt>Turns</dt>
+                  <dd>{totalTurns}</dd>
+                </div>
+                <div>
+                  <dt>Codex</dt>
+                  <dd>{friendlyModelName("codex", codexModel)} · {friendlyEffort(codexEffort)}</dd>
+                </div>
+                <div>
+                  <dt>Claude</dt>
+                  <dd>{friendlyModelName("claude", claudeModel)} · {friendlyEffort(claudeEffort)}</dd>
+                </div>
+                <div>
+                  <dt>Antigravity</dt>
+                  <dd>
+                    {friendlyModelName("antigravity", antigravityModel)}
+                    <small className="routing-exact">
+                      model: {antigravityModel || "CLI default"} · effort:{" "}
+                      {antigravityEffort || "CLI default"}
+                    </small>
+                  </dd>
+                </div>
+              </dl>
+              {!busy && (
+                <button className="new-discussion-button" type="button" onClick={resetToSetup}>
+                  <Sparkles size={15} />
+                  New discussion
+                </button>
+              )}
+              <p className="session-summary-note">
+                {roomMode === "archive"
+                  ? "Archived rooms cannot steer, retry, or stop agent work."
+                  : "Configuration is locked for this room. Use the transcript controls to steer or stop."}
+              </p>
+            </div>
+          )}
         </aside>
 
         <section className="conversation-panel">
           <div className="conversation-header">
             <div>
               <p className="eyebrow">
-                {isPreview
+                {roomMode === "setup"
                   ? "CONVERSATION PREVIEW"
-                  : viewingHistory
+                  : roomMode === "archive"
                     ? "ARCHIVED DISCUSSION"
                     : "PROJECT ROOM"}
               </p>
               <h1>Three agents. One project.<br />You set the direction.</h1>
             </div>
             <div className="conversation-actions">
+              {roomMode !== "setup" && !busy && (
+                <button className="utility-button" type="button" onClick={resetToSetup}>
+                  <Sparkles size={15} />
+                  New
+                </button>
+              )}
               {!isPreview && messages.length > 0 && (
                 <>
                   <button className="utility-button" type="button" onClick={copyTranscript}>
@@ -1705,7 +1838,15 @@ export default function Home() {
             />
           </div>
 
-          <div className="message-feed" ref={feedRef}>
+          <div
+            className="message-feed"
+            ref={feedRef}
+            onScroll={(event) => {
+              const feed = event.currentTarget;
+              shouldAutoScrollRef.current =
+                feed.scrollHeight - feed.scrollTop - feed.clientHeight <= 72;
+            }}
+          >
             {messages.length === 0 && !speaker && (
               <div className="empty-state">
                 <Terminal size={25} />
@@ -1760,17 +1901,25 @@ export default function Home() {
                   {AGENT_GLYPHS[failedTurn.role]}
                 </div>
                 <div>
-                  <span className="context-label">TURN {failedTurn.turn + 1} PAUSED</span>
+                  <span className="context-label">
+                    {roomMode === "archive"
+                      ? `ARCHIVED AT TURN ${failedTurn.turn + 1}`
+                      : `TURN ${failedTurn.turn + 1} PAUSED`}
+                  </span>
                   <h2 id="failed-turn-title">
-                    {AGENT_LABELS[failedTurn.role]} failed before replying
+                    {roomMode === "archive"
+                      ? `${AGENT_LABELS[failedTurn.role]} did not complete this archived turn`
+                      : `${AGENT_LABELS[failedTurn.role]} failed before replying`}
                   </h2>
                   <p>{failedTurn.safeError}</p>
-                  <small>
-                    {failedTurn.attempts === 1
-                      ? "First attempt failed"
-                      : `${failedTurn.attempts} attempts failed`}
-                    {" · "}Retry available until {displayTime(failedTurn.expiresAt)}
-                  </small>
+                  {roomMode !== "archive" && (
+                    <small>
+                      {failedTurn.attempts === 1
+                        ? "First attempt failed"
+                        : `${failedTurn.attempts} attempts failed`}
+                      {" · "}Retry available until {displayTime(failedTurn.expiresAt)}
+                    </small>
+                  )}
                   {viewingHistory ? (
                     <p className="failed-turn-readonly">
                       This archived recovery state is read-only.
@@ -1922,6 +2071,10 @@ export default function Home() {
                 <dd>
                   {friendlyModelName("antigravity", antigravityModel)} ·{" "}
                   {friendlyEffort(antigravityEffort || "medium")}
+                  <small className="routing-exact">
+                    model: {antigravityModel || "CLI default"} · effort:{" "}
+                    {antigravityEffort || "CLI default"}
+                  </small>
                 </dd>
               </div>
             </dl>

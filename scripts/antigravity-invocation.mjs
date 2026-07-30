@@ -10,8 +10,18 @@ export const ANTIGRAVITY_REQUIRED_FLAGS = Object.freeze([
   "--print-timeout",
 ]);
 
+export function antigravityModelEffort(model = "") {
+  return String(model).toLowerCase().match(/-(low|medium|high)$/)?.[1] || "";
+}
+
 export function buildAntigravityInvocationArgs({ model = "", effort = "medium", prompt = "" } = {}) {
   const normalizedEffort = SUPPORTED_EFFORTS.has(effort) ? effort : "medium";
+  const encodedEffort = antigravityModelEffort(model);
+  if (encodedEffort && encodedEffort !== normalizedEffort) {
+    throw new Error(
+      `Antigravity model ${model} requires ${encodedEffort} reasoning effort.`,
+    );
+  }
   const args = [
     "--output-format",
     "text",

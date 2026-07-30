@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
+import { antigravityModelEffort } from "./antigravity-invocation.mjs";
 import { redactVisibleString } from "./redaction.mjs";
 
 export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interrupted"]);
@@ -1047,6 +1048,16 @@ export function createBridge({
           !health.models.antigravity.efforts.includes(antigravityEffort)
         ) {
           sendJson(request, response, 400, { error: "Reasoning effort is not supported." });
+          return;
+        }
+        const requiredAntigravityEffort = antigravityModelEffort(antigravityModel);
+        if (
+          requiredAntigravityEffort &&
+          requiredAntigravityEffort !== antigravityEffort
+        ) {
+          sendJson(request, response, 400, {
+            error: `That Antigravity model requires ${requiredAntigravityEffort} reasoning effort.`,
+          });
           return;
         }
 

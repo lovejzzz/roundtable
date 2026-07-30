@@ -15,6 +15,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import { buildAgentEnvironment } from "./agent-environment.mjs";
 import {
   ANTIGRAVITY_REQUIRED_FLAGS,
+  antigravityModelEffort,
   buildAntigravityInvocationArgs,
 } from "./antigravity-invocation.mjs";
 import { withAntigravityPromptFile } from "./antigravity-prompt-file.mjs";
@@ -134,7 +135,10 @@ const antigravityModels = (antigravityModelsResult.success ? antigravityModelsRe
   .filter((line) => /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*-[A-Za-z0-9._:/[\]-]+$/.test(line));
 const antigravityConfiguredModel =
   process.env.ANTIGRAVITY_MODEL || antigravityModels[0] || "";
-const antigravityConfiguredEffort = process.env.ANTIGRAVITY_EFFORT || "medium";
+const antigravityConfiguredEffort =
+  process.env.ANTIGRAVITY_EFFORT ||
+  antigravityModelEffort(antigravityConfiguredModel) ||
+  "medium";
 
 const health = {
   projectWriteGuard: Boolean(sandboxExecPath),

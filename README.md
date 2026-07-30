@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.10**
+Current release: **v0.0.0.11**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -26,6 +26,9 @@ The command starts the local bridge and the web room, then opens the connected r
 1. Choose an absolute project folder and a discussion goal.
 2. Review or change the model shown under each CLI participant. Friendly names such as Claude Opus 5 appear above the exact CLI identifier.
 3. Set each agent's reasoning effort with the slider, from low through extra high to max. The bridge starts from each CLI's configured effort.
+   Antigravity models whose exact identifier ends in `-low`, `-medium`, or
+   `-high` lock the slider to that required level so the room cannot start an
+   invalid CLI route.
 4. Codex, Claude, and Antigravity take turns in that order from separate
    disposable copies of the same project and read the same shared transcript.
    Every message records its model and reasoning effort.
@@ -48,6 +51,13 @@ The command starts the local bridge and the web room, then opens the connected r
    restart. Archived discussions are read-only and keep undelivered steering
    notes visibly separate from the transcript.
 11. Stop the discussion whenever you want.
+
+The workspace changes with the room lifecycle. Setup keeps the goal,
+connection, and participant controls beside a conversation preview. Once a
+discussion starts, those controls collapse into a locked session summary so the
+live transcript becomes primary. Opening local history creates a visibly
+read-only archive state, and **New discussion** returns every room surface
+through one reset path.
 
 Active discussions survive a refresh in the same browser tab while the bridge
 remains running. Completed transcripts can be copied or exported as Markdown from

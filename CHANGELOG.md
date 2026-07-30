@@ -4,6 +4,73 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.11] — 2026-07-29
+
+### Conversation
+
+Prompt: have Codex, Claude, and Antigravity inspect Roundtable and debate how
+they would improve its UI/UX, then audit the recommendations, implement the
+highest-value subset, test it, and release it.
+
+Across two rounds, the three agents converged on a state-driven room rather
+than one permanently dense dashboard. Setup should emphasize connection, goal,
+and participant configuration; a live session should make the transcript
+primary while retaining exact locked routing; and a restored archive should
+look and behave read-only. They also agreed on a central new-discussion reset,
+mobile participant access, visible keyboard focus, and conditional transcript
+auto-scroll.
+
+Claude challenged a broader three-page redesign and unverified claims about
+Antigravity option precedence. The release audit kept Outcome inside the room,
+deferred a modal/dialog overhaul until the app has an interaction primitive,
+and avoided describing undocumented CLI precedence. The council's first run
+then supplied stronger evidence: `gemini-3.6-flash-high` paired with `medium`
+effort was rejected by the installed CLI. That observed failure became a
+focused routing repair at both UI and bridge boundaries.
+
+### Room lifecycle and hierarchy
+
+- The workspace now derives an explicit `setup`, `session`, or `archive` mode
+  from existing room state. Setup uses a two-column configuration/preview
+  layout; live and archived rooms replace the long form with a compact locked
+  session summary and prioritize the transcript.
+- A single `resetToSetup` path closes the stream, forgets recovery state, clears
+  transcript-specific state, restores current bridge defaults, and powers every
+  New discussion action. The history drawer disables that action while a live
+  room is busy so it cannot silently abandon running work.
+- Archived failures use read-only language and omit retry deadlines. Archive
+  state cannot steer, retry, or stop agent work, while post-completion dissent
+  judgments remain intentionally available.
+- Transcript auto-scroll now follows new turns only while the reader is near
+  the bottom. Scrolling up preserves the reading position until the reader
+  returns to the live edge.
+
+### Model clarity and accessibility
+
+- Antigravity displays both its friendly name and the exact `model · effort`
+  route in session and context summaries.
+- When an Antigravity model identifier encodes `low`, `medium`, or `high`, the
+  UI synchronizes and locks the effort slider. Session creation and the final
+  CLI invocation independently reject contradictory values.
+- Bridge startup derives Antigravity's default effort from its discovered model
+  when no environment override is supplied. This fixes the invalid default that
+  interrupted the first council run.
+- Participant model and effort controls remain reachable on narrow screens
+  instead of disappearing. All buttons, inputs, textareas, selects, summaries,
+  and links receive a consistent visible `:focus-visible` outline.
+
+### Verification
+
+- Added invocation and bridge regressions for encoded Antigravity effort,
+  contradictory route rejection, state-driven rendered markup, central reset,
+  proximity-gated scrolling, mobile participant visibility, and focus styling.
+- Ran 38 bridge, archive, environment, invocation, prompt-file lifecycle, copy,
+  sandbox, redaction, and routing tests successfully, followed by lint, a
+  production build, and two rendered-page contract checks.
+- Started the real bridge against this repository. Health reported
+  `gemini-3.6-flash-high · high`; an authenticated contradictory session request
+  returned HTTP 400 before creating a session, confirming the live guard.
+
 ## [v0.0.0.10] — 2026-07-29
 
 ### Conversation

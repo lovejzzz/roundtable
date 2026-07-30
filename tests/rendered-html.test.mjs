@@ -32,7 +32,8 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /<title>Roundtable — Codex, Claude, and Antigravity<\/title>/i);
   assert.match(html, /ROUNDTABLE/);
   assert.match(html, /Three agents\. One project\./);
-  assert.match(html, /Start the roundtable/);
+  assert.match(html, /Connect bridge to start/);
+  assert.match(html, /workspace-grid setup-mode/);
   assert.match(html, />History</i);
   assert.match(html, /Steer the next turn/i);
   assert.match(html, /aria-label="Codex model"/i);
@@ -41,6 +42,7 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /aria-label="Codex reasoning effort"/i);
   assert.match(html, /aria-label="Claude reasoning effort"/i);
   assert.match(html, /aria-label="Antigravity reasoning effort"/i);
+  assert.match(html, /Model and effort are sent as separate CLI settings/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
   assert.match(html, /TEST CAPABILITY/i);
   assert.match(html, /separate disposable project copies/i);
@@ -54,11 +56,12 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /\/og\.png/i);
 });
 
-test("removes every starter-preview marker", async () => {
-  const [page, layout, packageJson] = await Promise.all([
+test("keeps the room implementation production-owned and state-driven", async () => {
+  const [page, layout, packageJson, styles] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/layout.tsx", import.meta.url), "utf8"),
     readFile(new URL("../package.json", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
   assert.doesNotMatch(page, /SkeletonPreview|codex-preview|react-loading-skeleton/);
@@ -77,6 +80,12 @@ test("removes every starter-preview marker", async () => {
   assert.match(page, /No concerns reported/i);
   assert.match(page, /represented/);
   assert.match(page, /missed/);
+  assert.match(page, /const roomMode:/);
+  assert.match(page, /function resetToSetup\(\)/);
+  assert.match(page, /shouldAutoScrollRef/);
+  assert.match(page, /scrollHeight - feed\.scrollTop - feed\.clientHeight <= 72/);
+  assert.match(styles, /:focus-visible/);
+  assert.doesNotMatch(styles, /\.agent-stack\s*\{\s*display:\s*none/);
   assert.doesNotMatch(page, /Faithful agent summaries|completed with no concerns/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
