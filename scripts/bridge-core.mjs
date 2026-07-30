@@ -290,9 +290,18 @@ not independent bridge verification.`
         ? `READ-ONLY PROJECT COPY
 Your CLI is running in a disposable copy of the project with Read, Glob, and Grep only. Use the
 current working directory for inspection; never target the original absolute project path above.
-You cannot run shell commands or tests. This is a deliberate fail-closed boundary until test
-execution can run in a separate brokered process. Do not claim to have run a check and do not emit
-a roundtable-checks block.`
+You cannot invoke shell commands or tests from the model process.
+
+OPTIONAL ROUNDTABLE TEST BROKER
+When one focused existing test, lint, type-check, or build command would validate a claim, request
+it by ending your draft with exactly this versioned block (valid JSON, no text after the fence):
+\`\`\`roundtable-test-request
+{"version":1,"argv":["npm","run","test:bridge"]}
+\`\`\`
+The bridge will execute at most one approved argv request without a shell, in a fresh
+request-scoped project copy with a scratch home and loopback-only network, then return the real
+result for your final answer. This is optional. Never claim the request ran until the bridge
+returns its result. Do not emit a roundtable-checks block.`
         : `DISPOSABLE ANTIGRAVITY SANDBOX
 Your CLI is running in plan mode inside a disposable copy of the project. Use the current working
 directory only; never target the original absolute project path above or another agent's workspace.
@@ -658,7 +667,7 @@ export function createBridge({
           sandboxPaths,
           round,
         });
-        const checks = [...reportedChecks, ...bridgeChecks].slice(0, 6);
+        const checks = [...bridgeChecks, ...reportedChecks].slice(0, 6);
         emit(session, {
           type: "message",
           message: makeMessage(now, role, body, round, model, effort, checks),

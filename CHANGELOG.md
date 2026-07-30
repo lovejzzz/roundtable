@@ -4,6 +4,75 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.14] — 2026-07-30
+
+### Conversation and audit
+
+Prompt: audit and test v0.0.0.13, ask what tools each participant genuinely
+needs, and converge on the highest-leverage v0.0.0.14 improvement.
+
+The first two-round discussion used a real Antigravity broker request and found
+four correctness gaps: broker copies were cached across turns, six
+agent-reported checks could evict bridge-verified provenance, an empty
+post-result reply could resurrect a stale pre-check draft, and retrying a
+failed follow-up could execute the same broker command again. Claude also
+identified that broker commands inherited the host `HOME`/Codex environment,
+which could turn tool-cache denials into misleading test failures.
+
+After implementation, a separate one-round release audit exercised Claude's
+new broker request path with `npm run test:bridge`. The bridge-owned result
+passed with exit 0. Codex and Antigravity confirmed that all three participant
+model routes now use one display structure and that the completed-state layout
+no longer leaves a disabled steering composer over the transcript. Their hold
+recommendation was accepted for direct checkpoint lifecycle coverage and
+release metadata, while the proposal to keep steering visible during
+synthesis was rejected: synthesis begins only after the final agent turn, when
+there is no next turn to steer.
+
+### Participant-neutral broker controller
+
+- Claude and Antigravity can optionally request one approved argv command
+  without gaining shell access in their model processes.
+- Every request gets a new disposable project copy and a writable scratch
+  `HOME`; participant CLI configuration and ambient credentials are omitted.
+- The request copy is removed immediately in `finally`, so mutations cannot
+  leak into later checks.
+- The controller checkpoints the bounded result by participant and turn. A
+  failed follow-up retries from that saved result without re-executing the
+  command, and prompt drift rebuilds the follow-up from the same checkpoint.
+- Empty or request-bearing follow-ups are rejected instead of publishing a
+  draft that never saw the result.
+- Known sandbox startup denials are classified as `blocked`, while ordinary
+  nonzero test exits remain `failed`.
+- Bridge-owned evidence is prepended before agent-reported evidence so the
+  verified record cannot be truncated from the six visible checks.
+
+### Finished-state UI and model routing
+
+- The Completion Brief is absent during setup and every agent turn. After the
+  final turn it appears once, in the transcript scroll, with pending synthesis
+  or the completed outcome.
+- The steering composer disappears when no future agent turn exists and is not
+  rendered in archived rooms, eliminating the overlap and empty-column failure
+  shown in the reported screenshot.
+- Codex, Claude, and Antigravity now share the same friendly
+  `Model · Effort` line plus exact `model: … · effort: …` disclosure.
+- Encoded Antigravity effort suffixes are removed from the friendly model name,
+  preventing `Gemini … · High · High`.
+
+### Verification
+
+- Added direct regressions for fresh request copies, scratch broker
+  environment, denial classification, protected evidence precedence, empty
+  follow-ups, second requests, prompt drift, and retry without re-execution.
+- A host-level bridge run passes all 60 tests, including the Seatbelt and Codex
+  command-sandbox containment probes with no skips.
+- A live Claude broker handshake passed `npm run test:bridge` with verified
+  bridge provenance.
+- Browser QA confirmed zero Completion Brief instances during live turns, one
+  transcript-contained brief after completion, zero finished-state steering
+  composers, and identical model disclosures for all three participants.
+
 ## [v0.0.0.13] — 2026-07-29
 
 ### Conversation and audit

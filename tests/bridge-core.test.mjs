@@ -193,8 +193,9 @@ test("queues steering after the active reply and includes it once in the next pr
     assert.match(prompts[0], /DISPOSABLE TEST SANDBOX/);
     assert.match(prompts[0], /You may run\s+focused existing tests/);
     assert.match(prompts[1], /READ-ONLY PROJECT COPY/);
-    assert.match(prompts[1], /You cannot run shell commands or tests/);
-    assert.match(prompts[1], /do not emit\s+a roundtable-checks block/);
+    assert.match(prompts[1], /You cannot invoke shell commands or tests from the model process/);
+    assert.match(prompts[1], /OPTIONAL ROUNDTABLE TEST BROKER/);
+    assert.match(prompts[1], /do not emit\s+a roundtable-checks block/i);
     assert.doesNotMatch(prompts[1], /You may run\s+focused existing tests/);
     assert.match(prompts[2], /DISPOSABLE ANTIGRAVITY SANDBOX/);
     assert.match(prompts[2], /OPTIONAL ROUNDTABLE TEST BROKER/);
@@ -578,7 +579,18 @@ test("stores bridge-brokered evidence separately from agent-reported checks", as
       }
       if (role === "antigravity") {
         return {
-          text: "The focused bridge suite supports the recommendation.",
+          text: `The focused bridge suite supports the recommendation.
+
+\`\`\`roundtable-checks
+{"version":1,"checks":[
+{"command":"reported-1","status":"passed","summary":"reported"},
+{"command":"reported-2","status":"passed","summary":"reported"},
+{"command":"reported-3","status":"passed","summary":"reported"},
+{"command":"reported-4","status":"passed","summary":"reported"},
+{"command":"reported-5","status":"passed","summary":"reported"},
+{"command":"reported-6","status":"passed","summary":"reported"}
+]}
+\`\`\``,
           checks: [
             {
               command: "npm run test:bridge",
@@ -615,6 +627,7 @@ test("stores bridge-brokered evidence separately from agent-reported checks", as
       return snapshot.phase === "complete" ? snapshot : null;
     });
     assert.equal(completed.messages[2].checks[0].provenance, "bridge-broker");
+    assert.equal(completed.messages[2].checks.length, 6);
     assert.match(
       buildTranscript([completed.messages[2]]),
       /brokered checks were executed by Roundtable/i,

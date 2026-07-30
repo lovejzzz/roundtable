@@ -1454,10 +1454,6 @@ button {
   border-bottom: 1px solid var(--line-soft);
 }
 
-.mobile-outcome {
-  display: none;
-}
-
 .outcome-card {
   margin-top: 28px;
   padding: 18px;
@@ -1465,6 +1461,14 @@ button {
   background:
     linear-gradient(135deg, rgba(199, 239, 87, 0.06), transparent 58%),
     #12140f;
+}
+
+.feed-outcome {
+  padding: 10px 0 24px;
+}
+
+.feed-outcome .outcome-card {
+  margin-top: 18px;
 }
 
 .outcome-heading {
@@ -1925,14 +1929,6 @@ button {
     display: none;
   }
 
-  .mobile-outcome {
-    display: block;
-    padding: 0 34px;
-  }
-
-  .compact-outcome {
-    margin: 18px 0 6px;
-  }
 }
 
 @media (max-width: 760px) {
@@ -1992,8 +1988,7 @@ button {
 
   .conversation-header,
   .message-feed,
-  .steer-bar,
-  .mobile-outcome {
+  .steer-bar {
     padding-left: 20px;
     padding-right: 20px;
   }

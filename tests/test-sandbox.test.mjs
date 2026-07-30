@@ -24,7 +24,9 @@ import {
   buildClaudeSandboxProfile,
   collectAncestorDirectoryEntries,
   cleanupTestSandboxes,
+  createDisposableTestSandbox,
   ensureTestSandbox,
+  removeDisposableTestSandbox,
   resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
 } from "../scripts/test-sandbox.mjs";
@@ -285,6 +287,34 @@ test("creates isolated per-agent project copies and removes them after the room 
     await cleanupTestSandboxes(session);
     await assert.rejects(access(codexRoot));
     await assert.rejects(access(claudeRoot));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("creates fresh request-scoped broker copies and removes each immediately", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-request-sandbox-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath };
+  try {
+    await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+    await writeFile(join(projectPath, "source.txt"), "original\n");
+    const first = await createDisposableTestSandbox(session, "claude-broker", {
+      temporaryDirectory,
+    });
+    await writeFile(join(first.workspace, "source.txt"), "first request\n");
+    await removeDisposableTestSandbox(first);
+    await assert.rejects(access(first.root));
+
+    const second = await createDisposableTestSandbox(session, "claude-broker", {
+      temporaryDirectory,
+    });
+    assert.notEqual(second.root, first.root);
+    assert.equal(await readFile(join(second.workspace, "source.txt"), "utf8"), "original\n");
+    await removeDisposableTestSandbox(second);
+    assert.deepEqual(await readdir(temporaryDirectory), []);
+    assert.equal(session.testSandboxes, undefined);
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }

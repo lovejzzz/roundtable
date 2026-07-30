@@ -183,6 +183,29 @@ export async function ensureTestSandbox(
   const existing = session.testSandboxes.get(role);
   if (existing) return existing.workspace;
 
+  const sandbox = await createDisposableTestSandbox(session, role, {
+    temporaryDirectory,
+    copy,
+    copyTimeoutMs,
+    clock,
+  });
+  session.testSandboxes.set(role, sandbox);
+  return sandbox.workspace;
+}
+
+export async function createDisposableTestSandbox(
+  session,
+  role,
+  {
+    temporaryDirectory = tmpdir(),
+    copy = cp,
+    copyTimeoutMs = 2 * 60 * 1000,
+    clock = Date.now,
+  } = {},
+) {
+  if (!/^[a-z0-9-]+$/i.test(role)) {
+    throw new Error("The sandbox role contains unsupported characters.");
+  }
   const createdRoot = await mkdtemp(
     join(temporaryDirectory, `${TEST_SANDBOX_PREFIX}${role}-`),
   );
@@ -220,8 +243,13 @@ export async function ensureTestSandbox(
     await rm(root, { recursive: true, force: true });
     throw error;
   }
-  session.testSandboxes.set(role, { root, workspace });
-  return workspace;
+  return { root, workspace };
+}
+
+export async function removeDisposableTestSandbox(sandbox) {
+  if (sandbox?.root) {
+    await rm(sandbox.root, { recursive: true, force: true });
+  }
 }
 
 export function getTestSandboxInfo(session, role) {

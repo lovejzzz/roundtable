@@ -29,6 +29,7 @@ test("agent children receive only common and role-scoped environment values", ()
   const codex = buildAgentEnvironment("codex", {}, inherited);
   const claude = buildAgentEnvironment("claude", {}, inherited);
   const antigravity = buildAgentEnvironment("antigravity", {}, inherited);
+  const broker = buildAgentEnvironment("broker", { HOME: "/tmp/broker-home" }, inherited);
 
   assert.equal(codex.CODEX_HOME, inherited.CODEX_HOME);
   assert.equal(codex.CLAUDE_CONFIG_DIR, undefined);
@@ -36,6 +37,9 @@ test("agent children receive only common and role-scoped environment values", ()
   assert.equal(claude.CODEX_HOME, undefined);
   assert.equal(antigravity.CODEX_HOME, undefined);
   assert.equal(antigravity.CLAUDE_CONFIG_DIR, undefined);
+  assert.equal(broker.HOME, "/tmp/broker-home");
+  assert.equal(broker.CODEX_HOME, undefined);
+  assert.equal(broker.CLAUDE_CONFIG_DIR, undefined);
 
   for (const environment of [codex, claude, antigravity]) {
     assert.equal(environment.HOME, inherited.HOME);
@@ -113,7 +117,11 @@ test("bridge probes and managed turns share the role-scoped environment contract
     "utf8",
   );
   assert.equal(source.match(/env: agentEnvironment\(role\)/g)?.length, 1);
-  assert.equal(source.match(/env: agentEnvironment\(environmentRole\)/g)?.length, 1);
+  assert.equal(
+    source.match(/env: environment \|\| agentEnvironment\(environmentRole\)/g)?.length,
+    1,
+  );
+  assert.match(source, /buildAgentEnvironment\("broker", \{ HOME: scratchHome \}\)/);
   assert.match(source, /runSmallCommandResult\(codexPath, \["login", "status"\], "codex"\)/);
   assert.match(source, /runSmallCommandResult\(claudePath, \["auth", "status"\], "claude"\)/);
   assert.match(source, /const codexGuardProbe/);

@@ -133,23 +133,33 @@ function boundedOutput(value, sandboxPaths, limit = 6_000) {
   return output.trim().slice(-limit);
 }
 
+export function sanitizeBrokerResult(result, sandboxPaths = []) {
+  return {
+    ...result,
+    stdout: boundedOutput(result.stdout, sandboxPaths),
+    stderr: boundedOutput(result.stderr, sandboxPaths),
+    ...(result.error ? { error: visible(result.error, 500) } : {}),
+  };
+}
+
 export function buildBrokerResultPrompt({
   originalPrompt,
   argv,
   result,
   sandboxPaths = [],
 }) {
+  const visibleResult = sanitizeBrokerResult(result, sandboxPaths);
   const command = argv ? displayArgv(argv) : "(request rejected)";
-  const status = result.status || "blocked";
-  const stdout = boundedOutput(result.stdout, sandboxPaths);
-  const stderr = boundedOutput(result.stderr, sandboxPaths);
+  const status = visibleResult.status || "blocked";
+  const stdout = visibleResult.stdout;
+  const stderr = visibleResult.stderr;
   const details = [
     `Command: ${command}`,
     `Status: ${status}`,
-    Number.isInteger(result.exitCode) ? `Exit code: ${result.exitCode}` : "",
+    Number.isInteger(visibleResult.exitCode) ? `Exit code: ${visibleResult.exitCode}` : "",
     stdout ? `STDOUT\n${stdout}` : "STDOUT\n(empty)",
     stderr ? `STDERR\n${stderr}` : "STDERR\n(empty)",
-    result.error ? `Broker note: ${visible(result.error, 500)}` : "",
+    visibleResult.error ? `Broker note: ${visibleResult.error}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -186,4 +196,15 @@ export function makeBrokerCheck(argv, result, round) {
     ...(round ? { round } : {}),
     provenance: "bridge-broker",
   };
+}
+
+export function classifyBrokerProcessResult(result) {
+  if (result.exitCode === 0) return "passed";
+  const output = `${result.stderr || ""}\n${result.stdout || ""}`;
+  return result.exitCode === 71 ||
+    /sandbox_apply:|failed to (?:apply|initialize|enter).{0,40}sandbox|spawn (?:EPERM|EACCES)|could not start.{0,40}sandbox/i.test(
+      output,
+    )
+    ? "blocked"
+    : "failed";
 }

@@ -305,12 +305,12 @@ function friendlyModelName(role: AgentRole, model: string) {
   }
   if (role === "antigravity" && normalized.startsWith("gemini-")) {
     return normalized
+      .replace(/-(low|medium|high)$/, "")
       .split("-")
       .map((part, index) =>
         index === 0 ? "Gemini" : part === "pro" ? "Pro" : part === "flash" ? "Flash" : part[0]?.toUpperCase() + part.slice(1),
       )
-      .join(" ")
-      .replace(/ (Low|Medium|High)$/, " · $1");
+      .join(" ");
   }
   return model;
 }
@@ -319,6 +319,25 @@ function friendlyEffort(effort: string) {
   if (effort === "xhigh") return "Extra high";
   if (effort === "ultra") return "Ultra";
   return effort ? effort[0].toUpperCase() + effort.slice(1) : "CLI default";
+}
+
+function ModelRoute({
+  role,
+  model,
+  effort,
+}: {
+  role: AgentRole;
+  model: string;
+  effort: string;
+}) {
+  return (
+    <>
+      {friendlyModelName(role, model)} · {friendlyEffort(effort)}
+      <small className="routing-exact">
+        model: {model || "CLI default"} · effort: {effort || "CLI default"}
+      </small>
+    </>
+  );
 }
 
 function effortIndex(effort: string, levels: string[]) {
@@ -657,6 +676,12 @@ export default function Home() {
       status === "reviewing");
   const busy = active || status === "synthesizing";
   const canSteer = !viewingHistory && status === "running" && turn < totalTurns - 1;
+  const showCompletionBrief =
+    roomMode !== "setup" &&
+    (Boolean(outcome) ||
+      ["synthesizing", "reviewing", "complete", "stopped", "error", "interrupted"].includes(
+        status,
+      ));
   const codexEfforts = health?.models.codex.efforts?.length
     ? health.models.codex.efforts
     : DEFAULT_EFFORT_LEVELS;
@@ -755,7 +780,7 @@ export default function Home() {
       top: feedRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [messages, speaker]);
+  }, [messages, speaker, outcome, status]);
 
   function applySnapshot(snapshot: SessionSnapshot, archived = Boolean(snapshot.archived)) {
     setConnectionError("");
@@ -1805,20 +1830,24 @@ export default function Home() {
                 </div>
                 <div>
                   <dt>Codex</dt>
-                  <dd>{friendlyModelName("codex", codexModel)} · {friendlyEffort(codexEffort)}</dd>
+                  <dd>
+                    <ModelRoute role="codex" model={codexModel} effort={codexEffort} />
+                  </dd>
                 </div>
                 <div>
                   <dt>Claude</dt>
-                  <dd>{friendlyModelName("claude", claudeModel)} · {friendlyEffort(claudeEffort)}</dd>
+                  <dd>
+                    <ModelRoute role="claude" model={claudeModel} effort={claudeEffort} />
+                  </dd>
                 </div>
                 <div>
                   <dt>Antigravity</dt>
                   <dd>
-                    {friendlyModelName("antigravity", antigravityModel)}
-                    <small className="routing-exact">
-                      model: {antigravityModel || "CLI default"} · effort:{" "}
-                      {antigravityEffort || "CLI default"}
-                    </small>
+                    <ModelRoute
+                      role="antigravity"
+                      model={antigravityModel}
+                      effort={antigravityEffort}
+                    />
                   </dd>
                 </div>
               </dl>
@@ -1883,18 +1912,6 @@ export default function Home() {
 
           <div className="progress-rail" aria-label={`Discussion progress ${progress}%`}>
             <span style={{ width: `${progress}%` }} />
-          </div>
-
-          <div className="mobile-outcome">
-            <OutcomeCard
-              outcome={outcome}
-              status={status}
-              dissent={dissent}
-              dissentReviews={dissentReviews}
-              dissentJudgments={dissentJudgments}
-              onJudge={sessionId && outcome && !historyWarning ? judgeDissent : undefined}
-              compact
-            />
           </div>
 
           <div
@@ -2022,43 +2039,57 @@ export default function Home() {
                 </div>
               </article>
             )}
+            {showCompletionBrief && (
+              <div className="feed-outcome">
+                <OutcomeCard
+                  outcome={outcome}
+                  status={status}
+                  dissent={dissent}
+                  dissentReviews={dissentReviews}
+                  dissentJudgments={dissentJudgments}
+                  onJudge={sessionId && outcome && !historyWarning ? judgeDissent : undefined}
+                />
+              </div>
+            )}
           </div>
 
-          <form className="steer-bar" onSubmit={sendSteering}>
-            <div className="steer-label">
-              <span className="human-pulse" />
-              STEER THE NEXT TURN
-            </div>
-            <div className="steer-input">
-              <textarea
-                value={steering}
-                onChange={(event) => setSteering(event.target.value)}
-                placeholder={
-                  canSteer
-                    ? "Add a priority, correction, or question…"
-                    : status === "failed" || status === "retrying"
-                      ? "Retry or end this turn before adding another note…"
-                    : status === "synthesizing"
-                      ? "The discussion is complete while Codex builds the brief…"
-                    : active
-                      ? "Final turn—there is no next agent to steer…"
-                    : "Start a live discussion to add your voice…"
-                }
-                rows={2}
-                disabled={!canSteer}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                    event.preventDefault();
-                    event.currentTarget.form?.requestSubmit();
+          {roomMode !== "archive" && !showCompletionBrief && (
+            <form className="steer-bar" onSubmit={sendSteering}>
+              <div className="steer-label">
+                <span className="human-pulse" />
+                STEER THE NEXT TURN
+              </div>
+              <div className="steer-input">
+                <textarea
+                  value={steering}
+                  onChange={(event) => setSteering(event.target.value)}
+                  placeholder={
+                    canSteer
+                      ? "Add a priority, correction, or question…"
+                      : status === "failed" || status === "retrying"
+                        ? "Retry or end this turn before adding another note…"
+                        : status === "synthesizing"
+                          ? "The discussion is complete while Codex builds the brief…"
+                          : active
+                            ? "Final turn—there is no next agent to steer…"
+                            : "Start a live discussion to add your voice…"
                   }
-                }}
-              />
-              <button type="submit" disabled={!canSteer || !steering.trim()} aria-label="Send steering note">
-                <Send size={18} />
-              </button>
-            </div>
-            <small>⌘ ENTER TO SEND · QUEUED AT THE NEXT TURN BOUNDARY</small>
-          </form>
+                  rows={2}
+                  disabled={!canSteer}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }}
+                />
+                <button type="submit" disabled={!canSteer || !steering.trim()} aria-label="Send steering note">
+                  <Send size={18} />
+                </button>
+              </div>
+              <small>⌘ ENTER TO SEND · QUEUED AT THE NEXT TURN BOUNDARY</small>
+            </form>
+          )}
         </section>
 
         <aside className="context-panel">
@@ -2066,15 +2097,6 @@ export default function Home() {
             <p className="eyebrow">ROOM CONTEXT</p>
             <span className="step-count">02</span>
           </div>
-
-          <OutcomeCard
-            outcome={outcome}
-            status={status}
-            dissent={dissent}
-            dissentReviews={dissentReviews}
-            dissentJudgments={dissentJudgments}
-            onJudge={sessionId && outcome && !historyWarning ? judgeDissent : undefined}
-          />
 
           {historyWarning && (
             <section className="history-warning" role="status">
@@ -2116,24 +2138,23 @@ export default function Home() {
               <div>
                 <dt>Codex</dt>
                 <dd>
-                  {friendlyModelName("codex", codexModel)} · {friendlyEffort(codexEffort || "medium")}
+                  <ModelRoute role="codex" model={codexModel} effort={codexEffort} />
                 </dd>
               </div>
               <div>
                 <dt>Claude</dt>
                 <dd>
-                  {friendlyModelName("claude", claudeModel)} · {friendlyEffort(claudeEffort || "medium")}
+                  <ModelRoute role="claude" model={claudeModel} effort={claudeEffort} />
                 </dd>
               </div>
               <div>
                 <dt>Antigravity</dt>
                 <dd>
-                  {friendlyModelName("antigravity", antigravityModel)} ·{" "}
-                  {friendlyEffort(antigravityEffort || "medium")}
-                  <small className="routing-exact">
-                    model: {antigravityModel || "CLI default"} · effort:{" "}
-                    {antigravityEffort || "CLI default"}
-                  </small>
+                  <ModelRoute
+                    role="antigravity"
+                    model={antigravityModel}
+                    effort={antigravityEffort}
+                  />
                 </dd>
               </div>
             </dl>
@@ -2148,7 +2169,7 @@ export default function Home() {
                 write generated artifacts only inside its native sandbox; Antigravity&apos;s model
                 process stays behind its native and outer guards.
                 {health?.projectWriteGuard
-                  ? " Native permissions plus outer macOS guards read-deny common host credential paths and isolate every workspace. Claude has no shell access; it remains on Read, Glob, and Grep until checks can run beyond the model-client boundary."
+                  ? " Native permissions plus outer macOS guards read-deny common host credential paths and isolate every workspace. Claude has no shell access; it remains on Read, Glob, and Grep while optional checks run beyond the model-client boundary through Roundtable."
                   : " Without a supported OS guard, Claude stays read-only."}
                 {" "}Bridge and ambient API credentials are never passed to agent processes;
                 each CLI uses its own persisted sign-in.
@@ -2162,13 +2183,12 @@ export default function Home() {
               <span className="safe-dot" />
               <p>
                 Focused checks in separate disposable project copies are optional. Codex can run
-                them natively. Antigravity can request one approved argv command; Roundtable runs
+                them natively. Claude and Antigravity can each request one approved argv command; Roundtable runs
                 it without a shell in a fresh broker-only project copy with loopback-only network
                 access and returns the result. External and private-network destinations stay
-                blocked, and test mutations are discarded before Antigravity&apos;s follow-up.
-                Claude remains read-only.{" "}
-                {health?.testSandbox?.claudeReason ||
-                  "Claude checks require a separate brokered runner."}
+                blocked, and test mutations are discarded before the participant&apos;s follow-up.
+                Claude&apos;s model process remains read-only.{" "}
+                {health?.testSandbox?.claudeReason}
               </p>
             </div>
           </section>

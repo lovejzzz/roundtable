@@ -3,10 +3,12 @@ import test from "node:test";
 import {
   buildBrokerNetworkArgs,
   buildBrokerResultPrompt,
+  classifyBrokerProcessResult,
   displayArgv,
   extractTestRequest,
   makeBrokerCheck,
   resolveBrokerArgv,
+  sanitizeBrokerResult,
 } from "../scripts/test-broker.mjs";
 
 test("accepts one bounded argv request without invoking a shell", () => {
@@ -23,6 +25,34 @@ test("accepts one bounded argv request without invoking a shell", () => {
     displayArgv(parsed.request.argv),
     'npm run test:bridge -- "focused case"',
   );
+});
+
+test("stores only bounded redacted broker output in checkpoints", () => {
+  const result = sanitizeBrokerResult(
+    {
+      status: "failed",
+      exitCode: 1,
+      stdout: `${"x".repeat(8_000)}\n/tmp/private-broker/workspace`,
+      stderr: "token=super-secret",
+    },
+    ["/tmp/private-broker"],
+  );
+  assert.ok(result.stdout.length <= 6_000);
+  assert.match(result.stdout, /\$SANDBOX/);
+  assert.doesNotMatch(result.stdout, /private-broker/);
+  assert.doesNotMatch(result.stderr, /super-secret/);
+});
+
+test("distinguishes sandbox infrastructure denial from an ordinary test failure", () => {
+  assert.equal(
+    classifyBrokerProcessResult({ exitCode: 71, stderr: "sandbox_apply: Operation not permitted" }),
+    "blocked",
+  );
+  assert.equal(
+    classifyBrokerProcessResult({ exitCode: 1, stderr: "AssertionError: expected 2, got 3" }),
+    "failed",
+  );
+  assert.equal(classifyBrokerProcessResult({ exitCode: 0 }), "passed");
 });
 
 test("configures loopback-only broker networking", () => {

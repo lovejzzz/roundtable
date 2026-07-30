@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   access,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -23,6 +24,7 @@ import {
   buildAntigravityInvocationArgs,
 } from "./antigravity-invocation.mjs";
 import { withAntigravityPromptFile } from "./antigravity-prompt-file.mjs";
+import { runBrokerCapableParticipant } from "./broker-controller.mjs";
 import { createBridge } from "./bridge-core.mjs";
 import { buildClaudeInvocationArgs } from "./claude-invocation.mjs";
 import { createHistoryStore } from "./history-store.mjs";
@@ -32,16 +34,16 @@ import {
   buildClaudeSandboxProfile,
   collectAncestorDirectoryEntries,
   cleanupTestSandboxes,
+  createDisposableTestSandbox,
   ensureTestSandbox,
   getTestSandboxInfo,
+  removeDisposableTestSandbox,
   resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
 } from "./test-sandbox.mjs";
 import {
   buildBrokerNetworkArgs,
-  buildBrokerResultPrompt,
-  extractTestRequest,
-  makeBrokerCheck,
+  classifyBrokerProcessResult,
   resolveBrokerArgv,
 } from "./test-broker.mjs";
 
@@ -256,10 +258,10 @@ const health = {
   projectWriteGuard: Boolean(sandboxExecPath),
   testSandbox: {
     codex: Boolean(codexPath),
-    claude: false,
+    claude: Boolean(codexPath),
     antigravity: Boolean(antigravityPath),
     claudeReason:
-      "Claude stays on Read, Glob, and Grep until checks have a separate brokered runner.",
+      "Claude stays read-only and may request one focused command through Roundtable's separate broker.",
   },
   models: {
     codex: {
@@ -356,6 +358,7 @@ function runManagedProcess(
   workingDirectory = session.projectPath,
   {
     acceptNonZero = false,
+    environment,
     environmentRole = role,
     timeoutMs = 10 * 60 * 1000,
   } = {},
@@ -372,7 +375,7 @@ function runManagedProcess(
   const child = spawn(command, args, {
     cwd: workingDirectory,
     detached: process.platform !== "win32",
-    env: agentEnvironment(environmentRole),
+    env: environment || agentEnvironment(environmentRole),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const handle = {
@@ -496,7 +499,7 @@ async function runCodex(session, prompt, purpose) {
   }
 }
 
-async function runClaude(session, prompt) {
+async function runClaudeModel(session, prompt) {
   const workingDirectory = await ensureTestSandbox(session, "claude");
   const args = buildClaudeInvocationArgs({
     model: session.claudeModel,
@@ -541,30 +544,40 @@ async function runClaude(session, prompt) {
   return runManagedProcess(session, "claude", claudePath, args, prompt, workingDirectory);
 }
 
-async function runBrokeredCheck(session, workingDirectory, argv) {
+async function runBrokeredCheck(session, requesterRole, argv) {
   if (!codexPath || process.platform !== "darwin") {
     return {
-      status: "blocked",
-      error: "The separate local-only network test broker is unavailable on this host.",
+      result: {
+        status: "blocked",
+        error: "The separate local-only network test broker is unavailable on this host.",
+      },
+      sandboxPaths: [],
     };
   }
-  const siblingRoots = ["codex", "claude", "antigravity"]
-    .map((role) => getTestSandboxInfo(session, role)?.root || "")
-    .filter(Boolean);
+  let brokerSandbox;
   try {
+    brokerSandbox = await createDisposableTestSandbox(
+      session,
+      `${requesterRole}-broker`,
+    );
+    const scratchHome = join(brokerSandbox.root, "home");
+    await mkdir(scratchHome, { recursive: true });
+    const siblingRoots = ["codex", "claude", "antigravity"]
+      .map((role) => getTestSandboxInfo(session, role)?.root || "")
+      .filter(Boolean);
     const resolvedArgv = await resolveBrokerArgv(argv, findExecutable);
     const result = await runManagedProcess(
       session,
-      "antigravity",
+      requesterRole,
       codexPath,
       [
         "sandbox",
         "-P",
         "roundtable_workspace",
         "-C",
-        workingDirectory,
+        brokerSandbox.workspace,
         ...buildCodexPermissionArgs({
-          home: homeDirectory,
+          home: scratchHome,
           projectPath: session.projectPath,
           siblingRoots,
           additionalProtectedPaths: [homeDirectory],
@@ -573,27 +586,37 @@ async function runBrokeredCheck(session, workingDirectory, argv) {
         ...resolvedArgv,
       ],
       "",
-      workingDirectory,
+      brokerSandbox.workspace,
       {
         acceptNonZero: true,
-        environmentRole: "codex",
+        environment: buildAgentEnvironment("broker", { HOME: scratchHome }),
         timeoutMs: 5 * 60 * 1000,
       },
     );
     return {
-      ...result,
-      status: result.exitCode === 0 ? "passed" : "failed",
+      result: {
+        ...result,
+        status: classifyBrokerProcessResult(result),
+      },
+      sandboxPaths: [brokerSandbox.root, brokerSandbox.workspace, scratchHome],
     };
   } catch (error) {
     if (error?.code === "USER_STOP") throw error;
     return {
-      status: "blocked",
-      error: error instanceof Error ? error.message : "The test broker failed.",
+      result: {
+        status: "blocked",
+        error: error instanceof Error ? error.message : "The test broker failed.",
+      },
+      sandboxPaths: brokerSandbox
+        ? [brokerSandbox.root, brokerSandbox.workspace]
+        : [],
     };
+  } finally {
+    await removeDisposableTestSandbox(brokerSandbox);
   }
 }
 
-async function runAntigravity(session, prompt, purpose) {
+async function runAntigravityModel(session, prompt) {
   const workingDirectory = await ensureTestSandbox(session, "antigravity");
   const invoke = (controlPrompt) =>
     withAntigravityPromptFile({
@@ -642,42 +665,7 @@ async function runAntigravity(session, prompt, purpose) {
         );
       },
     });
-
-  const firstReply = await invoke(prompt);
-  if (purpose) return firstReply;
-  const parsed = extractTestRequest(firstReply);
-  if (!parsed.request) return firstReply;
-
-  const brokerWorkingDirectory = parsed.request.error
-    ? ""
-    : await ensureTestSandbox(session, "antigravity-broker");
-  const brokerResult = parsed.request.error
-    ? { status: "blocked", error: parsed.request.error }
-    : await runBrokeredCheck(session, brokerWorkingDirectory, parsed.request.argv);
-  const finalReply = await invoke(
-    buildBrokerResultPrompt({
-      originalPrompt: prompt,
-      argv: parsed.request.argv,
-      result: brokerResult,
-      sandboxPaths: [
-        getTestSandboxInfo(session, "antigravity")?.root,
-        getTestSandboxInfo(session, "antigravity-broker")?.root,
-        workingDirectory,
-        brokerWorkingDirectory,
-      ].filter(Boolean),
-    }),
-  );
-  const finalParsed = extractTestRequest(finalReply);
-  return {
-    text: finalParsed.body || parsed.body,
-    checks: [
-      makeBrokerCheck(
-        parsed.request.argv,
-        brokerResult,
-        Math.floor((session.completedTurns || 0) / 3) + 1,
-      ),
-    ],
-  };
+  return invoke(prompt);
 }
 
 const agentRunner = {
@@ -688,13 +676,32 @@ const agentRunner = {
   },
   run({ session, role, prompt, purpose }) {
     if (role === "codex") return runCodex(session, prompt, purpose);
-    if (role === "claude") return runClaude(session, prompt);
-    return runAntigravity(session, prompt, purpose);
+    if (role === "claude") {
+      return runBrokerCapableParticipant({
+        session,
+        role,
+        prompt,
+        purpose,
+        invoke: (controlPrompt) => runClaudeModel(session, controlPrompt),
+        execute: (argv) => runBrokeredCheck(session, role, argv),
+        participantSandboxPaths: [getTestSandboxInfo(session, role)?.root],
+      });
+    }
+    return runBrokerCapableParticipant({
+      session,
+      role,
+      prompt,
+      purpose,
+      invoke: (controlPrompt) => runAntigravityModel(session, controlPrompt),
+      execute: (argv) => runBrokeredCheck(session, role, argv),
+      participantSandboxPaths: [getTestSandboxInfo(session, role)?.root],
+    });
   },
   stop(session, reason) {
     return terminateSessionProcess(session, reason);
   },
   cleanup(session) {
+    session.brokerTransactions?.clear();
     return cleanupTestSandboxes(session);
   },
 };

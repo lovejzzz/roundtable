@@ -1,4 +1,4 @@
-const AGENT_ROLES = new Set(["codex", "claude", "antigravity"]);
+const AGENT_ROLES = new Set(["codex", "claude", "antigravity", "broker"]);
 
 export const AGENT_COMMON_ENVIRONMENT_KEYS = Object.freeze([
   "HOME",
@@ -30,6 +30,7 @@ export const AGENT_ROLE_ENVIRONMENT_KEYS = Object.freeze({
   codex: Object.freeze(["CODEX_HOME"]),
   claude: Object.freeze(["CLAUDE_CONFIG_DIR"]),
   antigravity: Object.freeze([]),
+  broker: Object.freeze([]),
 });
 
 export const AGENT_AUTHENTICATION_ENVIRONMENT_KEYS = Object.freeze([

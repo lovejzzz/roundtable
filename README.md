@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.13**
+Current release: **v0.0.0.14**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -40,16 +40,17 @@ discussion.
    disposable copies of the same project and read the same shared transcript.
    Every message records its model and reasoning effort.
 5. Codex may optionally run focused existing checks in its native sandbox.
-   Antigravity may request one approved argv command; Roundtable executes it
-   without a shell in a fresh broker-only project copy, then returns the real
-   result for Antigravity's final contribution. Claude remains on Read, Glob,
-   and Grep until the same broker protocol is integrated for its turns.
+   Claude and Antigravity may each request one approved argv command;
+   Roundtable executes it without a shell in a fresh request-scoped project
+   copy, then returns the real result for that participant's final contribution.
 6. Add a steering note at any time. It is added to the transcript before the next agent turn.
 7. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
-8. After the final turn, Codex produces a structured Outcome with the decision,
-   rationale, owned next actions, and open questions. You can skip this brief
-   without losing the transcript.
+8. Only after the final agent turn, Codex produces a structured Completion
+   Brief with the decision, rationale, owned next actions, and open questions.
+   It follows the transcript in the conversation scroll and replaces the
+   now-inapplicable steering composer. You can skip it without losing the
+   transcript.
 9. Optionally enable **Dissent check**. After Codex freezes the ordinary brief,
    each agent gets one separate review pass and can identify labeled positions
    the brief missed or flattened. Mark each item **Represented** or **Missed**;
@@ -170,29 +171,32 @@ boundary. If persisted sign-in is missing or a turn returns a recognizable
 authentication error, Roundtable gives the exact CLI login command to run.
 
 Testing remains optional. Codex can run focused checks and report them from its
-native sandbox. Antigravity's model process may inspect files but is told not to
-invoke terminal tools: a restrictive native command sandbox cannot be applied
-inside Roundtable's already restrictive outer macOS credential guard.
-Antigravity can instead return one bounded `roundtable-test-request` containing
-an argv array. The bridge accepts only exact approved executable names, never
-uses a shell, and runs the command in a newly copied broker-only workspace.
+native sandbox. Claude remains on Read, Glob, and Grep, while Antigravity's
+model process may inspect files but is told not to invoke terminal tools: a
+restrictive native command sandbox cannot be applied inside Roundtable's
+already restrictive outer macOS credential guard. Either read-only participant
+can instead return one bounded `roundtable-test-request` containing an argv
+array. The bridge accepts only exact approved executable names, never uses a
+shell, and runs the command in a newly copied request-scoped workspace with a
+scratch `HOME` and no participant CLI configuration.
 That command can bind and connect to loopback for local test servers, but
 external and private-network destinations, the host home, the original project,
 and every agent workspace remain denied. Test mutations disappear with the
-broker copy and cannot influence Antigravity's follow-up inspection.
-Antigravity's full growing prompt is delivered through a one-use file in its
-own disposable workspace instead of a command-line argument. Claude's prompt
-explicitly discloses its read-only tool set and tells it not to claim test
-execution.
+broker copy and cannot influence the participant's follow-up inspection. A
+checkpointed controller retains the bounded broker result for the current turn,
+so retrying a failed follow-up does not execute the command again. Antigravity's
+full growing prompt is delivered through a one-use file in its own disposable
+workspace instead of a command-line argument.
 
 The v0.0.0.7 audit showed that wrapping Claude and Bash in one outer macOS
 profile cannot isolate shell execution from Claude's required network and
 runtime access. macOS also rejects a second restrictive Seatbelt policy from
 inside that already restricted client. Roundtable therefore fails closed
 instead of treating a command allowlist or disclosure as containment.
-v0.0.0.13 applies the separate broker architecture to Antigravity. Claude
-remains read-only until its turn protocol uses the same separately tracked,
-bridge-owned execution path; it must not fall back to Bash when unavailable.
+v0.0.0.13 applied the separate broker architecture to Antigravity. v0.0.0.14
+extracts a participant-neutral checkpointed controller and gives Claude the
+same separately tracked, bridge-owned request path without adding Bash or
+changing Claude's read-only model process.
 
 ## Check evidence
 
@@ -207,9 +211,9 @@ not independently observe its shell commands. Agent-reported evidence is never
 described as verified, and a disagreement between prose and structured status
 remains visible.
 
-Antigravity broker results use a separate **Verified by Roundtable broker**
+Claude and Antigravity broker results use a separate **Verified by Roundtable broker**
 label. The bridge owns the process, exit code, status, and provenance record;
-Antigravity receives bounded, secret-redacted output only after execution and
+the participant receives bounded, secret-redacted output only after execution and
 cannot mint broker provenance in its prose. Brokered and agent-reported
 evidence remain distinct in later prompts, completion synthesis, history,
 copy, and Markdown export. Malformed transport blocks stay ordinary reply text.
