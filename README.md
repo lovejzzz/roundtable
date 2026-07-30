@@ -2,7 +2,7 @@
 
 Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
 
-Current release: **v0.0.0.8**
+Current release: **v0.0.0.9**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -38,10 +38,14 @@ The command starts the local bridge and the web room, then opens the connected r
 8. After the final turn, Codex produces a structured Outcome with the decision,
    rationale, owned next actions, and open questions. You can skip this brief
    without losing the transcript.
-9. If you opt in, open **History** to revisit recent discussions after a bridge
+9. Optionally enable **Dissent check**. After Codex freezes the ordinary brief,
+   each agent gets one separate review pass and can identify labeled positions
+   the brief missed or flattened. Mark each item **Represented** or **Missed**;
+   those judgments are saved locally.
+10. If you opt in, open **History** to revisit recent discussions after a bridge
    restart. Archived discussions are read-only and keep undelivered steering
    notes visibly separate from the transcript.
-10. Stop the discussion whenever you want.
+11. Stop the discussion whenever you want.
 
 Active discussions survive a refresh in the same browser tab while the bridge
 remains running. Completed transcripts can be copied or exported as Markdown from
@@ -65,6 +69,28 @@ data folder, outside the discussed project. The archive:
 
 Set `ROUNDTABLE_HISTORY=off` before `npm run talk` to disable archive storage and
 its API entirely. `ROUNDTABLE_HISTORY_DIR` can override the user-data location.
+
+## Optional dissent check
+
+The dissent check is a deliberately small measurement experiment, not an
+automatic claim about consensus. It requires local history and adds one
+post-brief review pass per agent. The completion brief is synthesized from the
+normal transcript only and frozen before either review starts.
+
+Every transcript message has a stable session-order label such as `[M4]`.
+Reviewers receive a coverage-preserving excerpt for every label and may return
+bounded, attributed summaries that reference those labels. The room calls these
+agent-stated summaries, not quotes or verified findings. A completed review with
+an empty item list appears as **No concerns reported**; a malformed or failed
+review appears separately as unavailable and does not block the other agent or
+discard the brief.
+
+Each concern receives a bridge-owned `D#` ID and appears beside the brief with
+**Represented** and **Missed** controls. Judgments are appended only after the
+review item is durably stored, survive bridge restarts, and can be changed
+later. If local history becomes incomplete, judgment controls fail closed and
+the warning remains visible in the archive. Copy and Markdown export include
+review coverage, summaries, reasons, and current judgments.
 
 ## Failed-turn recovery
 

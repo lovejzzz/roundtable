@@ -6,6 +6,8 @@ export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interru
 const OUTCOME_OWNERS = new Set(["You", "Codex", "Claude", "Unassigned"]);
 const CHECK_STATUSES = new Set(["passed", "failed", "blocked"]);
 const CHECK_FENCE = /(?:^|\n)```roundtable-checks\s*\n([\s\S]*?)\n```\s*$/;
+const DISSENT_POSITIONS = new Set(["accept", "reject", "uncertain"]);
+const DISSENT_FENCE = /```roundtable-dissent\s*\n([\s\S]*?)\n```/;
 
 function reportedChecksText(message) {
   if (!message.checks?.length) return "";
@@ -28,7 +30,7 @@ export function buildTranscript(messages, maxCharacters = 48_000) {
   let length = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    const block = `${message.author.toUpperCase()}:\n${messageText(message)}`;
+    const block = `[M${index + 1}] ${message.author.toUpperCase()}:\n${messageText(message)}`;
     if (selected.length && length + block.length + 2 > maxCharacters) break;
     selected.unshift(block);
     length += block.length + 2;
@@ -53,7 +55,7 @@ export function buildOutcomeInput(topic, messages, maxCharacters = 96_000) {
   }));
   const totalCharacters = normalized.reduce((sum, message) => sum + message.body.length, 0);
   const metadataLength = normalized.reduce(
-    (sum, message) => sum + `MESSAGE ${message.index + 1} · ${message.author} · ROUND ${message.round ?? "—"}\n`.length + 2,
+    (sum, message) => sum + `[M${message.index + 1}] · ${message.author} · ROUND ${message.round ?? "—"}\n`.length + 2,
     0,
   );
   const fixedLength = `DISCUSSION GOAL\n${topic}\n\nTRANSCRIPT\n`.length + metadataLength;
@@ -63,7 +65,7 @@ export function buildOutcomeInput(topic, messages, maxCharacters = 96_000) {
     : 0;
   const blocks = normalized.map(
     (message) =>
-      `MESSAGE ${message.index + 1} · ${message.author} · ROUND ${message.round ?? "—"}\n${excerptBody(message.body, perMessageBudget)}`,
+      `[M${message.index + 1}] · ${message.author} · ROUND ${message.round ?? "—"}\n${excerptBody(message.body, perMessageBudget)}`,
   );
   const includedCharacters = normalized.reduce(
     (sum, message) => sum + Math.min(message.body.length, perMessageBudget),
@@ -78,6 +80,42 @@ export function buildOutcomeInput(topic, messages, maxCharacters = 96_000) {
       messageCount: normalized.length,
     },
   };
+}
+
+export function extractDissentJson(raw, { validLabels = [] } = {}) {
+  const source = String(raw || "").trim();
+  const match = source.match(DISSENT_FENCE);
+  if (!match) throw new Error("The dissent review did not contain a roundtable-dissent block.");
+  let payload;
+  try {
+    payload = JSON.parse(match[1]);
+  } catch {
+    throw new Error("The dissent review was not valid JSON.");
+  }
+  if (payload?.version !== 1 || !Array.isArray(payload.items) || payload.items.length > 6) {
+    throw new Error("The dissent review has an invalid version or item count.");
+  }
+  const allowedLabels = new Set(validLabels);
+  return payload.items.map((item) => {
+    const messageLabel = String(item?.messageLabel || "").trim().toUpperCase();
+    const position = String(item?.position || "").trim().toLowerCase();
+    const summary = redactVisibleString(item?.summary, 2_400).trim();
+    const reason = String(item?.reason || "").trim();
+    if (
+      !allowedLabels.has(messageLabel) ||
+      !DISSENT_POSITIONS.has(position) ||
+      !summary ||
+      !reason
+    ) {
+      throw new Error("The dissent review contains an invalid item.");
+    }
+    return {
+      messageLabel,
+      position,
+      summary: summary.slice(0, 1_200),
+      reason: redactVisibleString(reason, 4_000).trim().slice(0, 2_000),
+    };
+  });
 }
 
 export function extractOutcomeJson(raw) {
@@ -270,6 +308,33 @@ Use the existing participant name "You" for the human owner. Keep actions in tra
 ${outcomeInput.text}`;
 }
 
+export function buildDissentPrompt(session, role, reviewInput) {
+  const participant = role === "codex" ? "Codex CLI" : "Claude CLI";
+  const validLabels = session.messages.map((_, index) => `M${index + 1}`).join(", ");
+  return `You are ${participant}, performing a narrow dissent-coverage review after a visible project roundtable.
+
+DISCUSSION GOAL
+${session.topic}
+
+FROZEN COMPLETION BRIEF
+${JSON.stringify(session.outcome)}
+
+${reviewInput.text}
+
+YOUR TASK
+Identify up to six important positions already stated in the transcript that the frozen brief
+flattens, omits, or misrepresents. This is not another discussion turn: do not add new proposals,
+do not claim consensus, and do not edit files. Reference only these stable labels: ${validLabels}.
+Every label above has a coverage-preserving excerpt, though long messages may be shortened. It is
+valid to report no items. Your summaries remain agent-stated, not independently verified.
+
+Return exactly this versioned block with valid JSON and no text after it:
+\`\`\`roundtable-dissent
+{"version":1,"items":[{"messageLabel":"M2","position":"reject","summary":"concise faithful summary of the stated position","reason":"why the frozen brief missed or distorted it"}]}
+\`\`\`
+The only positions are "accept", "reject", and "uncertain".`;
+}
+
 export function createBridge({
   token,
   defaultProject,
@@ -343,11 +408,23 @@ export function createBridge({
 
   function emit(session, event) {
     if (event.type === "message") session.messages.push(event.message);
+    if (event.type === "session.dissent") {
+      session.dissent.push(...event.items);
+      session.dissentReviews[event.review.role] = event.review;
+    }
+    if (event.type === "dissent.judged") {
+      session.dissentJudgments[event.dissentId] = {
+        verdict: event.verdict,
+        judgedAt: event.judgedAt,
+      };
+    }
     if (event.type === "session.outcome") session.outcome = event.outcome;
     if (event.type === "session.status") session.lastStatus = event;
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of session.clients) client.write(payload);
-    if (["message", "session.outcome", "session.status"].includes(event.type)) {
+    if (
+      ["message", "session.dissent", "session.outcome", "session.status"].includes(event.type)
+    ) {
       void persistHistory(session, event);
     }
   }
@@ -355,6 +432,7 @@ export function createBridge({
   function historyFailure(session, error) {
     const visible = safeVisibleError(error);
     session.historyWarning = `History incomplete: ${visible}`;
+    session.pendingHistoryWarning = session.historyWarning;
     const payload = {
       type: "session.history",
       warning: session.historyWarning,
@@ -365,7 +443,17 @@ export function createBridge({
 
   function persistHistory(session, event) {
     if (!session.keepHistory || !historyStore.enabled) return Promise.resolve();
-    const write = () => historyStore.append(session.id, event);
+    const write = async () => {
+      await historyStore.append(session.id, event);
+      if (session.pendingHistoryWarning) {
+        const warning = session.pendingHistoryWarning;
+        await historyStore.append(session.id, {
+          type: "history.warning",
+          message: warning,
+        });
+        session.pendingHistoryWarning = "";
+      }
+    };
     session.historyWriteChain = (session.historyWriteChain || Promise.resolve())
       .then(write)
       .catch((error) => historyFailure(session, error));
@@ -581,7 +669,76 @@ export function createBridge({
           },
         });
       }
-      setPhase(session, "complete");
+
+      if (session.reviewDissent) {
+        const validLabels = session.messages.map((_, index) => `M${index + 1}`);
+        const reviewInput = buildOutcomeInput(session.topic, session.messages);
+        for (const role of ["codex", "claude"]) {
+          const reviewedAt = now().toISOString();
+          if (session.outcome?.status !== "available") {
+            emit(session, {
+              type: "session.dissent",
+              review: {
+                role,
+                author: role === "codex" ? "Codex" : "Claude",
+                status: "unavailable",
+                at: reviewedAt,
+                coverage: reviewInput.coverage,
+                message: "The completion brief was unavailable, so this review could not run.",
+              },
+              items: [],
+            });
+            continue;
+          }
+          setPhase(session, "reviewing", {
+            speaker: role,
+            note: `${role === "codex" ? "Codex" : "Claude"} is checking dissent coverage.`,
+          });
+          try {
+            const rawDissent = await agentRunner.run({
+              session,
+              role,
+              purpose: "dissent",
+              prompt: buildDissentPrompt(session, role, reviewInput),
+            });
+            const parsed = extractDissentJson(rawDissent, { validLabels });
+            const items = parsed.map((item) => ({
+              ...item,
+              id: `D${session.nextDissentId++}`,
+              author: role === "codex" ? "Codex" : "Claude",
+              role,
+              at: reviewedAt,
+            }));
+            emit(session, {
+              type: "session.dissent",
+              review: {
+                role,
+                author: role === "codex" ? "Codex" : "Claude",
+                status: "completed",
+                at: reviewedAt,
+                coverage: reviewInput.coverage,
+                itemCount: items.length,
+              },
+              items,
+            });
+          } catch (error) {
+            emit(session, {
+              type: "session.dissent",
+              review: {
+                role,
+                author: role === "codex" ? "Codex" : "Claude",
+                status: "unavailable",
+                at: reviewedAt,
+                coverage: reviewInput.coverage,
+                message: safeVisibleError(error),
+              },
+              items: [],
+            });
+          }
+          if (session.stopRequested) break;
+        }
+      }
+      setPhase(session, session.stopRequested ? "stopped" : "complete");
     } catch (error) {
       flushSteering(session);
       if (session.phase === "stopping" || error?.code === "USER_STOP") {
@@ -634,6 +791,10 @@ export function createBridge({
       messages: session.messages,
       outcome: session.outcome,
       pendingSteering: session.pendingSteering.map((queued) => queued.message),
+      reviewDissent: session.reviewDissent,
+      dissent: session.dissent,
+      dissentReviews: session.dissentReviews,
+      dissentJudgments: session.dissentJudgments,
       failedTurn: session.failedTurn,
       historyWarning: session.historyWarning,
       lastStatus: session.lastStatus,
@@ -669,6 +830,24 @@ export function createBridge({
         response.write(": connected\n\n");
         for (const message of session.messages) {
           response.write(`data: ${JSON.stringify({ type: "message", message })}\n\n`);
+        }
+        if (Object.keys(session.dissentReviews).length) {
+          response.write(
+            `data: ${JSON.stringify({
+              type: "session.dissent",
+              reviews: Object.values(session.dissentReviews),
+              items: session.dissent,
+            })}\n\n`,
+          );
+        }
+        for (const [dissentId, judgment] of Object.entries(session.dissentJudgments)) {
+          response.write(
+            `data: ${JSON.stringify({
+              type: "dissent.judged",
+              dissentId,
+              ...judgment,
+            })}\n\n`,
+          );
         }
         if (session.outcome) {
           response.write(
@@ -713,6 +892,58 @@ export function createBridge({
       }
 
       const historyMatch = url.pathname.match(/^\/history\/([^/]+)$/);
+      const historyJudgmentMatch = url.pathname.match(/^\/history\/([^/]+)\/judgment$/);
+      if (request.method === "POST" && historyJudgmentMatch) {
+        if (!historyStore.enabled) {
+          sendJson(request, response, 409, { error: "Local history is required for judgments." });
+          return;
+        }
+        const id = historyJudgmentMatch[1];
+        const liveSession = sessions.get(id);
+        if (liveSession) {
+          await liveSession.historyWriteChain;
+          if (liveSession.historyWarning) {
+            sendJson(request, response, 409, {
+              error: "The dissent review is not durably stored because local history is incomplete.",
+            });
+            return;
+          }
+        }
+        const snapshot = await historyStore.get(id);
+        if (!snapshot) {
+          sendJson(request, response, 404, { error: "Archived discussion not found." });
+          return;
+        }
+        const payload = await readJson(request);
+        const dissentId = String(payload.dissentId || "").trim();
+        const verdict = String(payload.verdict || "").trim().toLowerCase();
+        if (
+          !snapshot.dissent?.some((item) => item.id === dissentId) ||
+          !["represented", "missed"].includes(verdict)
+        ) {
+          sendJson(request, response, liveSession ? 409 : 400, {
+            error: liveSession
+              ? "That dissent item is not yet durable. Try again after local history catches up."
+              : "Choose a valid dissent item and judgment.",
+          });
+          return;
+        }
+        const event = {
+          type: "dissent.judged",
+          dissentId,
+          verdict,
+          judgedAt: now().toISOString(),
+        };
+        await historyStore.append(id, event);
+        if (liveSession) emit(liveSession, event);
+        sendJson(request, response, 200, {
+          ok: true,
+          dissentId,
+          judgment: { verdict, judgedAt: event.judgedAt },
+        });
+        return;
+      }
+
       if (request.method === "GET" && historyMatch) {
         const snapshot = await historyStore.get(historyMatch[1]);
         if (!snapshot) {
@@ -757,9 +988,16 @@ export function createBridge({
         const codexEffort = String(payload.codexEffort || health.models.codex.effort).trim();
         const claudeEffort = String(payload.claudeEffort || health.models.claude.effort).trim();
         const keepHistory = Boolean(payload.keepHistory && historyStore.enabled);
+        const reviewDissent = Boolean(payload.reviewDissent);
 
         if (!topic) {
           sendJson(request, response, 400, { error: "Add a discussion goal first." });
+          return;
+        }
+        if (reviewDissent && !keepHistory) {
+          sendJson(request, response, 400, {
+            error: "The dissent experiment requires local history so judgments remain durable.",
+          });
           return;
         }
         const projectPath = await resolveProject(String(payload.projectPath || "").trim());
@@ -805,7 +1043,13 @@ export function createBridge({
           stopRequested: false,
           skipOutcomeRequested: false,
           keepHistory,
+          reviewDissent,
+          dissent: [],
+          dissentReviews: {},
+          dissentJudgments: {},
+          nextDissentId: 1,
           historyWarning: "",
+          pendingHistoryWarning: "",
           historyWriteChain: Promise.resolve(),
           createdAt: now().toISOString(),
           clients: new Set(),

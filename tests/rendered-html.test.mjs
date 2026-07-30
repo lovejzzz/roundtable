@@ -69,6 +69,12 @@ test("removes every starter-preview marker", async () => {
   assert.match(page, /Claude has no shell access/i);
   assert.match(page, /Claude remains read-only/i);
   assert.match(page, /Agent-reported checks — \$\{message\.author\}/i);
+  assert.match(page, /Summaries · not independently verified/i);
+  assert.match(page, /Agent-stated summaries; not independently verified/i);
+  assert.match(page, /No concerns reported/i);
+  assert.match(page, /represented/);
+  assert.match(page, /missed/);
+  assert.doesNotMatch(page, /Faithful agent summaries|completed with no concerns/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
   await access(new URL("../public/og.png", import.meta.url));
   await access(new URL("../scripts/bridge.mjs", import.meta.url));

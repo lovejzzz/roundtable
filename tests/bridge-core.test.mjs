@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildOutcomeInput,
+  buildDissentPrompt,
   buildTranscript,
   createBridge,
+  extractDissentJson,
   extractOutcomeJson,
   extractReportedChecks,
 } from "../scripts/bridge-core.mjs";
@@ -212,8 +214,32 @@ test("builds coverage-aware outcome input and validates fenced JSON", () => {
   );
   assert.equal(input.coverage.truncated, true);
   assert.equal(input.coverage.messageCount, 2);
-  assert.match(input.text, /MESSAGE 1 · Codex/);
-  assert.match(input.text, /MESSAGE 2 · Claude/);
+  assert.match(input.text, /\[M1\] · Codex/);
+  assert.match(input.text, /\[M2\] · Claude/);
+  assert.match(input.text, /\[M1\][\s\S]*excerpt shortened[\s\S]*\[M2\]/);
+
+  const reviewPrompt = buildDissentPrompt(
+    {
+      topic: "Choose the next feature",
+      outcome: {
+        status: "available",
+        decision: "A frozen decision",
+        rationale: "Test it.",
+        actions: [],
+        openQuestions: [],
+        consensus: true,
+      },
+      messages: [
+        { author: "Codex", body: "A".repeat(2_000) },
+        { author: "Claude", body: "B".repeat(2_000) },
+      ],
+    },
+    "codex",
+    input,
+  );
+  assert.match(reviewPrompt, /FROZEN COMPLETION BRIEF/);
+  assert.match(reviewPrompt, /\[M1\][\s\S]*excerpt shortened[\s\S]*\[M2\]/);
+  assert.match(reviewPrompt, /Reference only these stable labels: M1, M2/);
 
   const outcome = extractOutcomeJson(`\`\`\`json
 {"decision":"Add an outcome","rationale":"It creates actionability.","actions":[{"owner":"You","text":"Review the result."}],"openQuestions":["How should retry work?"],"consensus":false}
@@ -229,6 +255,205 @@ test("builds coverage-aware outcome input and validates fenced JSON", () => {
       ),
     /invalid action item/,
   );
+});
+
+test("validates stable dissent references without contaminating synthesis input", () => {
+  const parsed = extractDissentJson(
+    `\`\`\`roundtable-dissent
+{"version":1,"items":[{"messageLabel":"M2","position":"reject","summary":"Keep the brief unchanged.","reason":"A separate judgment is more honest."}]}
+\`\`\``,
+    { validLabels: ["M1", "M2"] },
+  );
+  assert.deepEqual(parsed, [
+    {
+      messageLabel: "M2",
+      position: "reject",
+      summary: "Keep the brief unchanged.",
+      reason: "A separate judgment is more honest.",
+    },
+  ]);
+  const redacted = extractDissentJson(
+    '```roundtable-dissent\n{"version":1,"items":[{"messageLabel":"M1","position":"uncertain","summary":"token=secret-value","reason":"Bearer secret-bearer may leak"}]}\n```',
+    { validLabels: ["M1"] },
+  );
+  assert.doesNotMatch(JSON.stringify(redacted), /secret-value|secret-bearer/);
+  const input = buildOutcomeInput(
+    "Test dissent coverage",
+    [{ author: "Codex", round: 1, body: "A".repeat(4_000) }],
+    1_400,
+  );
+  assert.doesNotMatch(input.text, /D1|AGENT-STATED DISSENT|Keep the brief unchanged/);
+  assert.throws(
+    () =>
+      extractDissentJson(
+        '```roundtable-dissent\n{"version":1,"items":[{"messageLabel":"M9","position":"reject","summary":"x","reason":"y"}]}\n```',
+        { validLabels: ["M1"] },
+      ),
+    /invalid item/,
+  );
+});
+
+test("isolates a malformed dissent pass and preserves the frozen brief", async () => {
+  const historyStore = {
+    enabled: true,
+    retention: { maxRecords: 50, maxDays: 30 },
+    async append() {},
+    async list() {
+      return [];
+    },
+    async get() {
+      return null;
+    },
+    async delete() {
+      return false;
+    },
+    async clear() {
+      return 0;
+    },
+  };
+  const agentRunner = {
+    async run({ role, purpose }) {
+      if (purpose === "synthesis") {
+        return '{"decision":"Keep the frozen brief","rationale":"It survived.","actions":[],"openQuestions":[],"consensus":true}';
+      }
+      if (purpose === "dissent" && role === "codex") return "malformed";
+      if (purpose === "dissent") {
+        return '```roundtable-dissent\n{"version":1,"items":[]}\n```';
+      }
+      return `${role} reply`;
+    },
+    async stop() {},
+  };
+  const bridge = await startTestBridge(agentRunner, { historyStore });
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        topic: "Isolate review failure",
+        rounds: 1,
+        keepHistory: true,
+        reviewDissent: true,
+      }),
+    });
+    const { id } = await response.json();
+    const snapshot = await waitFor(async () => {
+      const value = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      }).then((result) => result.json());
+      return value.phase === "complete" ? value : null;
+    });
+    assert.equal(snapshot.outcome.decision, "Keep the frozen brief");
+    assert.equal(snapshot.dissentReviews.codex.status, "unavailable");
+    assert.equal(snapshot.dissentReviews.claude.status, "completed");
+    assert.equal(snapshot.dissentReviews.claude.itemCount, 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("runs opt-in dissent reviews and durably accepts human judgments", async () => {
+  const events = new Map();
+  const synthesisPrompts = [];
+  const historyStore = {
+    enabled: true,
+    retention: { maxRecords: 50, maxDays: 30 },
+    async append(id, event) {
+      events.set(id, [...(events.get(id) || []), event]);
+    },
+    async list() {
+      return [];
+    },
+    async get(id) {
+      const stored = events.get(id);
+      if (!stored) return null;
+      const creation = stored.find((event) => event.type === "session.created")?.session;
+      const dissent = stored
+        .filter((event) => event.type === "session.dissent")
+        .flatMap((event) => event.items);
+      return creation ? { ...creation, dissent } : null;
+    },
+    async delete() {
+      return false;
+    },
+    async clear() {
+      return 0;
+    },
+  };
+  const agentRunner = {
+    async run({ role, purpose, prompt }) {
+      if (purpose === "dissent") {
+        return `\`\`\`roundtable-dissent
+{"version":1,"items":[{"messageLabel":"M1","position":"uncertain","summary":"${role} concern","reason":"Preserve this exact concern."}]}
+\`\`\``;
+      }
+      if (purpose === "synthesis") {
+        synthesisPrompts.push(prompt);
+        return '{"decision":"Judge the experiment","rationale":"The dissent remains visible.","actions":[],"openQuestions":[],"consensus":true}';
+      }
+      return `${role} normal reply`;
+    },
+    async stop() {},
+  };
+  const bridge = await startTestBridge(agentRunner, { historyStore });
+
+  try {
+    const rejected = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Review dissent",
+        rounds: 1,
+        reviewDissent: true,
+      }),
+    });
+    assert.equal(rejected.status, 400);
+    assert.match((await rejected.json()).error, /requires local history/i);
+
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Review dissent",
+        rounds: 1,
+        reviewDissent: true,
+        keepHistory: true,
+      }),
+    });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    const snapshot = await waitFor(async () => {
+      const current = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      }).then((value) => value.json());
+      return current.phase === "complete" ? current : null;
+    });
+    assert.equal(snapshot.reviewDissent, true);
+    assert.deepEqual(snapshot.dissent.map((item) => item.id), ["D1", "D2"]);
+    assert.deepEqual(snapshot.dissent.map((item) => item.author), ["Codex", "Claude"]);
+    assert.equal(snapshot.dissentReviews.codex.status, "completed");
+    assert.equal(snapshot.dissentReviews.claude.status, "completed");
+    assert.doesNotMatch(synthesisPrompts[0], /\[D1\]|codex concern|roundtable-dissent/i);
+
+    const judgmentResponse = await fetch(`${bridge.baseUrl}/history/${id}/judgment`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ dissentId: "D1", verdict: "missed" }),
+    });
+    assert.equal(judgmentResponse.status, 200);
+    const judged = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+      headers: authHeaders(),
+    }).then((value) => value.json());
+    assert.equal(judged.dissentJudgments.D1.verdict, "missed");
+    assert.equal(
+      events.get(id).filter((event) => event.type === "dissent.judged").length,
+      1,
+    );
+  } finally {
+    await bridge.close();
+  }
 });
 
 test("extracts bounded agent-reported checks without losing malformed replies", () => {

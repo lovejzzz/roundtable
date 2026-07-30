@@ -48,6 +48,33 @@ type OutcomeCoverage = {
   includedCharacters: number;
   totalCharacters: number;
   messageCount: number;
+  dissentCount?: number;
+};
+
+type DissentItem = {
+  id: string;
+  author: "Codex" | "Claude";
+  role: Exclude<Speaker, "human">;
+  at: string;
+  messageLabel: string;
+  position: "accept" | "reject" | "uncertain";
+  summary: string;
+  reason: string;
+};
+
+type DissentReview = {
+  role: Exclude<Speaker, "human">;
+  author: "Codex" | "Claude";
+  status: "completed" | "unavailable";
+  at: string;
+  coverage: OutcomeCoverage;
+  itemCount?: number;
+  message?: string;
+};
+
+type DissentJudgment = {
+  verdict: "represented" | "missed";
+  judgedAt: string;
 };
 
 type Outcome =
@@ -101,6 +128,18 @@ type FailedTurn = {
 
 type SessionEvent =
   | { type: "message"; message: Message }
+  | {
+      type: "session.dissent";
+      items: DissentItem[];
+      review?: DissentReview;
+      reviews?: DissentReview[];
+    }
+  | {
+      type: "dissent.judged";
+      dissentId: string;
+      verdict: DissentJudgment["verdict"];
+      judgedAt: string;
+    }
   | { type: "session.outcome"; outcome: Outcome }
   | { type: "session.history"; warning: string }
   | {
@@ -119,6 +158,7 @@ type SessionStatus =
   | "running"
   | "failed"
   | "retrying"
+  | "reviewing"
   | "synthesizing"
   | "complete"
   | "stopped"
@@ -139,6 +179,10 @@ type SessionSnapshot = {
   messages: Message[];
   outcome: Outcome | null;
   pendingSteering: Message[];
+  reviewDissent?: boolean;
+  dissent?: DissentItem[];
+  dissentReviews?: Record<string, DissentReview>;
+  dissentJudgments?: Record<string, DissentJudgment>;
   failedTurn?: FailedTurn | null;
   historyWarning: string;
   archived?: boolean;
@@ -292,10 +336,18 @@ function ReportedChecks({ message }: { message: Message }) {
 function OutcomeCard({
   outcome,
   status,
+  dissent,
+  dissentReviews,
+  dissentJudgments,
+  onJudge,
   compact = false,
 }: {
   outcome: Outcome | null;
   status: SessionStatus;
+  dissent: DissentItem[];
+  dissentReviews: Record<string, DissentReview>;
+  dissentJudgments: Record<string, DissentJudgment>;
+  onJudge?: (dissentId: string, verdict: DissentJudgment["verdict"]) => void;
   compact?: boolean;
 }) {
   return (
@@ -326,6 +378,17 @@ function OutcomeCard({
         </div>
       )}
 
+      {status === "reviewing" && !outcome && (
+        <div className="outcome-pending" role="status">
+          <span className="thinking-line" aria-hidden="true">
+            <span />
+            <span />
+            <span />
+          </span>
+          The agents are checking which stated positions a brief might flatten or miss.
+        </div>
+      )}
+
       {!outcome && status === "failed" && (
         <p className="outcome-empty">
           The transcript is safe. Retry or end the paused turn to continue.
@@ -340,7 +403,7 @@ function OutcomeCard({
 
       {!outcome &&
         !TERMINAL_STATUSES.has(status) &&
-        !["failed", "retrying", "synthesizing"].includes(status) && (
+        !["failed", "retrying", "reviewing", "synthesizing"].includes(status) && (
         <p className="outcome-empty">
           A completion brief will appear here after the agents finish.
         </p>
@@ -399,6 +462,69 @@ function OutcomeCard({
           Partial brief: every turn is represented, but long messages were shortened for synthesis.
         </p>
       )}
+
+      {Object.keys(dissentReviews).length > 0 && outcome && (
+        <div className="dissent-section">
+          <div className="dissent-heading">
+            <span>Agent-stated dissent</span>
+            <small>Summaries · not independently verified</small>
+          </div>
+          <p className="dissent-intro">
+            Mark whether each concern is represented in the completion brief above.
+          </p>
+          {(["codex", "claude"] as const).map((role) => {
+            const review = dissentReviews[role];
+            if (!review) return null;
+            const agentItems = dissent.filter((item) => item.role === role);
+            return (
+              <div className="dissent-review" key={role}>
+                <div className="dissent-review-status">
+                  <strong>{review.author}</strong>
+                  <span className={review.status}>{review.status}</span>
+                  {review.coverage.truncated && <span>partial input</span>}
+                </div>
+                {review.status === "unavailable" && (
+                  <p className="dissent-review-message">{review.message}</p>
+                )}
+                {review.status === "completed" && agentItems.length === 0 && (
+                  <p className="dissent-review-message">Review completed. No concerns reported.</p>
+                )}
+                {agentItems.length > 0 && (
+                  <ol>
+                    {agentItems.map((item) => {
+                      const judgment = dissentJudgments[item.id];
+                      return (
+                        <li key={item.id}>
+                          <div className="dissent-meta">
+                            <strong>{item.id}</strong>
+                            <span>{item.position}</span>
+                            <span>[{item.messageLabel}]</span>
+                          </div>
+                          <p>{item.summary}</p>
+                          <small>{item.reason}</small>
+                          <div className="dissent-actions" aria-label={`Judge ${item.id}`}>
+                            {(["represented", "missed"] as const).map((verdict) => (
+                              <button
+                                type="button"
+                                key={verdict}
+                                className={judgment?.verdict === verdict ? "selected" : ""}
+                                onClick={() => onJudge?.(item.id, verdict)}
+                                disabled={!onJudge}
+                              >
+                                {verdict === "represented" ? "Represented" : "Missed"}
+                              </button>
+                            ))}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -421,6 +547,10 @@ export default function Home() {
   const [messages, setMessages] = useState<Message[]>(SAMPLE_MESSAGES);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [pendingSteering, setPendingSteering] = useState<Message[]>([]);
+  const [reviewDissent, setReviewDissent] = useState(false);
+  const [dissent, setDissent] = useState<DissentItem[]>([]);
+  const [dissentReviews, setDissentReviews] = useState<Record<string, DissentReview>>({});
+  const [dissentJudgments, setDissentJudgments] = useState<Record<string, DissentJudgment>>({});
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const [historyWarning, setHistoryWarning] = useState("");
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
@@ -454,7 +584,10 @@ export default function Home() {
   const connected = Boolean(health?.ok);
   const active =
     !viewingHistory &&
-    (status === "running" || status === "failed" || status === "retrying");
+    (status === "running" ||
+      status === "failed" ||
+      status === "retrying" ||
+      status === "reviewing");
   const busy = active || status === "synthesizing";
   const canSteer = status === "running" && turn < totalTurns - 1;
   const codexEfforts = health?.models.codex.efforts?.length
@@ -554,6 +687,10 @@ export default function Home() {
     setMessages(snapshot.messages);
     setOutcome(snapshot.outcome);
     setPendingSteering(snapshot.pendingSteering || []);
+    setReviewDissent(Boolean(snapshot.reviewDissent));
+    setDissent(snapshot.dissent || []);
+    setDissentReviews(snapshot.dissentReviews || {});
+    setDissentJudgments(snapshot.dissentJudgments || {});
     setFailedTurn(snapshot.failedTurn || snapshot.lastStatus.failedTurn || null);
     setHistoryWarning(snapshot.historyWarning || "");
     setViewingHistory(archived);
@@ -589,6 +726,7 @@ export default function Home() {
       snapshot.phase === "running" ||
       snapshot.phase === "failed" ||
       snapshot.phase === "retrying" ||
+      snapshot.phase === "reviewing" ||
       snapshot.phase === "starting" ||
       snapshot.phase === "stopping" ||
       snapshot.phase === "synthesizing"
@@ -615,6 +753,30 @@ export default function Home() {
             ? current
             : [...current, update.message],
         );
+        return;
+      }
+      if (update.type === "session.dissent") {
+        setDissent((current) => {
+          const known = new Set(current.map((item) => item.id));
+          return [...current, ...update.items.filter((item) => !known.has(item.id))];
+        });
+        setDissentReviews((current) => {
+          const reviews = update.reviews || (update.review ? [update.review] : []);
+          return Object.fromEntries([
+            ...Object.entries(current),
+            ...reviews.map((review) => [review.role, review]),
+          ]);
+        });
+        return;
+      }
+      if (update.type === "dissent.judged") {
+        setDissentJudgments((current) => ({
+          ...current,
+          [update.dissentId]: {
+            verdict: update.verdict,
+            judgedAt: update.judgedAt,
+          },
+        }));
         return;
       }
       if (update.type === "session.outcome") {
@@ -672,6 +834,7 @@ export default function Home() {
         codexEffort,
         claudeEffort,
         keepHistory: historyPreference === "on",
+        reviewDissent,
       }),
     });
     const data = (await response.json()) as {
@@ -686,6 +849,9 @@ export default function Home() {
     setMessages([]);
     setOutcome(null);
     setPendingSteering([]);
+    setDissent([]);
+    setDissentReviews({});
+    setDissentJudgments({});
     setFailedTurn(null);
     setHistoryWarning(data.historyWarning || "");
     setViewingHistory(false);
@@ -823,6 +989,34 @@ export default function Home() {
     }
   }
 
+  async function judgeDissent(
+    dissentId: string,
+    verdict: DissentJudgment["verdict"],
+  ) {
+    if (!sessionId) return;
+    setConnectionError("");
+    const response = await fetch(`${bridgeUrl}/history/${sessionId}/judgment`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ dissentId, verdict }),
+    });
+    const data = (await response.json()) as {
+      error?: string;
+      judgment?: DissentJudgment;
+    };
+    if (!response.ok || !data.judgment) {
+      setConnectionError(data.error || "The dissent judgment could not be saved.");
+      return;
+    }
+    setDissentJudgments((current) => ({
+      ...current,
+      [dissentId]: data.judgment!,
+    }));
+  }
+
   function transcriptMarkdown() {
     const lines = [
       "# Roundtable transcript",
@@ -831,6 +1025,7 @@ export default function Home() {
       `**Goal:** ${topic}`,
       `**Codex:** ${friendlyModelName("codex", codexModel)} · ${friendlyEffort(codexEffort)}`,
       `**Claude:** ${friendlyModelName("claude", claudeModel)} · ${friendlyEffort(claudeEffort)}`,
+      `**Dissent check:** ${reviewDissent ? "On" : "Off"}`,
       "",
     ];
     if (outcome?.status === "available") {
@@ -873,9 +1068,48 @@ export default function Home() {
     } else if (outcome?.status === "unavailable") {
       lines.push("# Outcome", "", outcome.message, "", "---", "");
     }
-    for (const message of messages) {
+    if (Object.keys(dissentReviews).length) {
       lines.push(
-        `## ${message.author}${message.round ? ` — Round ${message.round}` : ""}`,
+        "# Agent-stated dissent",
+        "",
+        "Agent-stated summaries; not independently verified.",
+        "",
+      );
+      (["codex", "claude"] as const).forEach((role) => {
+        const review = dissentReviews[role];
+        if (!review) return;
+        lines.push(
+          `## ${review.author} review — ${review.status}`,
+          "",
+          review.coverage.truncated ? "Input coverage: partial excerpts." : "Input coverage: complete.",
+          "",
+        );
+        if (review.status === "unavailable") {
+          lines.push(review.message || "Review unavailable.", "");
+        }
+        const agentItems = dissent.filter((item) => item.role === role);
+        if (review.status === "completed" && !agentItems.length) {
+          lines.push("Review completed. No concerns reported.", "");
+        }
+        agentItems.forEach((item) => {
+          const judgment = dissentJudgments[item.id];
+          lines.push(
+            `### ${item.id} · ${item.position} · [${item.messageLabel}]`,
+            "",
+            item.summary,
+            "",
+            item.reason,
+            "",
+            `**Human judgment:** ${judgment?.verdict || "Not judged"}`,
+            "",
+          );
+        });
+      });
+      lines.push("---", "");
+    }
+    for (const [index, message] of messages.entries()) {
+      lines.push(
+        `## [M${index + 1}] ${message.author}${message.round ? ` — Round ${message.round}` : ""}`,
         "",
         [
           displayTime(message.at),
@@ -950,6 +1184,8 @@ export default function Home() {
           <span className={`live-dot ${busy ? "is-live" : ""}`} />
           {status === "synthesizing"
             ? "SYNTHESIZING OUTCOME"
+            : status === "reviewing"
+              ? `${speaker === "claude" ? "CLAUDE" : "CODEX"} REVIEWING DISSENT`
             : status === "failed"
               ? `TURN ${(failedTurn?.turn ?? turn) + 1} PAUSED`
               : status === "retrying"
@@ -1175,10 +1411,31 @@ export default function Home() {
               </div>
             </div>
 
+            <label className={`dissent-toggle${reviewDissent ? " selected" : ""}`}>
+              <input
+                type="checkbox"
+                checked={reviewDissent}
+                disabled={busy || !health?.history?.available}
+                onChange={(event) => {
+                  const enabled = event.target.checked;
+                  setReviewDissent(enabled);
+                  if (enabled) chooseHistoryPreference("on");
+                }}
+              />
+              <span>
+                <strong>Dissent check</strong>
+                <small>
+                  Adds one review pass per agent and saves your represented/missed judgments locally.
+                </small>
+              </span>
+            </label>
+
             <button className="primary" type="submit" disabled={busy}>
               {busy ? <Radio size={17} /> : <Sparkles size={17} />}
               {status === "synthesizing"
                 ? "Building outcome"
+                : status === "reviewing"
+                  ? "Reviewing dissent"
                 : status === "failed"
                   ? "Turn paused"
                   : status === "retrying"
@@ -1332,7 +1589,15 @@ export default function Home() {
           </div>
 
           <div className="mobile-outcome">
-            <OutcomeCard outcome={outcome} status={status} compact />
+            <OutcomeCard
+              outcome={outcome}
+              status={status}
+              dissent={dissent}
+              dissentReviews={dissentReviews}
+              dissentJudgments={dissentJudgments}
+              onJudge={sessionId && outcome && !historyWarning ? judgeDissent : undefined}
+              compact
+            />
           </div>
 
           <div className="message-feed" ref={feedRef}>
@@ -1343,14 +1608,14 @@ export default function Home() {
                 <p>Your first agent turn will appear here.</p>
               </div>
             )}
-            {messages.map((message) => (
+            {messages.map((message, index) => (
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">
                   <span className={`agent-glyph ${message.role}-glyph`}>
                     {message.role === "codex" ? "C" : message.role === "claude" ? "A" : "Y"}
                   </span>
                   <div>
-                    <strong>{message.author}</strong>
+                    <strong>[M{index + 1}] {message.author}</strong>
                     <small>
                       {message.round ? `ROUND ${message.round} · ` : ""}
                       {displayTime(message.at)}
@@ -1489,7 +1754,14 @@ export default function Home() {
             <span className="step-count">02</span>
           </div>
 
-          <OutcomeCard outcome={outcome} status={status} />
+          <OutcomeCard
+            outcome={outcome}
+            status={status}
+            dissent={dissent}
+            dissentReviews={dissentReviews}
+            dissentJudgments={dissentJudgments}
+            onJudge={sessionId && outcome && !historyWarning ? judgeDissent : undefined}
+          />
 
           {historyWarning && (
             <section className="history-warning" role="status">

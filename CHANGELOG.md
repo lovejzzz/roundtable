@@ -4,6 +4,76 @@ Every Roundtable release represents one complete iteration: a visible Codex–Cl
 discussion, the implementation selected from that discussion, and verification of
 the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.9] — 2026-07-29
+
+### Conversation
+
+Prompt: review what the agents want for Roundtable, then implement the smallest
+honest experiment for learning whether completion briefs lose important
+dissent.
+
+Across three rounds, Codex and Claude rejected a premature full decision ledger.
+They selected a five-discussion experiment instead: stable message labels, one
+optional dissent-only pass from each agent, agent-stated dissent beside the
+normal brief, and durable owner judgments marking each item represented or
+missed. History is mandatory for experiment sessions so those judgments remain
+meaningful after completion.
+
+The first six-turn live implementation gate found that the draft contaminated
+its own measurement by feeding dissent back into synthesis and called
+model-written summaries “verbatim.” It also exposed asynchronous history races,
+silent empty or failed reviews, whole-message omissions in long review inputs,
+and live/archive redaction differences. That gate completed with 12 dissent
+items and a real judgment that survived archive reload.
+
+A corrected one-round gate then verified transcript-only synthesis, frozen
+briefs, both isolated review passes, labeled coverage-preserving input, and the
+represented/missed controls. Its final narrow blocker was unsupported reader
+copy (“faithful” and “no concerns”); the release uses “agent-stated summaries”
+and “no concerns reported,” with contract tests for both.
+
+### Dissent coverage experiment
+
+- Every transcript message now has a deterministic session-order label such as
+  `[M1]` in agent prompts, the room, and Markdown export.
+- A new opt-in **Dissent check** runs only when local history is enabled. Codex
+  first produces the ordinary completion brief from the transcript alone; that
+  brief is frozen before one dissent-only pass runs for Codex and one for Claude.
+- Each reviewer receives an excerpt from every labeled message, plus explicit
+  truncation coverage. Review output is bounded, secret-redacted before live
+  display, attributed, and described as an agent-stated summary rather than a
+  quote or verified fact.
+- Each pass persists a separate `completed` or `unavailable` record with input
+  coverage, so “no concerns reported” is distinguishable from a failed review.
+  One malformed or failed review cannot discard the brief or block the other
+  agent.
+- Dissent appears beside the unchanged brief with bridge-minted `D#` IDs,
+  source-message labels, position, summary, and reason.
+
+### Durable owner judgments
+
+- Represented/missed judgments use an authenticated post-completion history
+  endpoint and append `dissent.judged` events with last-write-wins restoration.
+- The endpoint waits for pending dissent writes, fails closed when history is
+  incomplete, awaits the judgment append before success, and broadcasts changes
+  to other connected tabs.
+- History reads now execute inside the store's serialization queue. Rebuilds
+  deduplicate dissent IDs, preserve per-agent review status, and retain a
+  latched history warning after storage recovers.
+- The room disables judgment controls when durability is uncertain. Copy and
+  export include review status, input coverage, every dissent item, and the
+  current owner judgment.
+
+### Verification
+
+- Added dissent schema, stable-label, prompt-coverage, transcript-only synthesis,
+  redaction, failure-isolation, durable judgment, review reconstruction, and
+  reader-copy regressions.
+- Ran 30 bridge, archive, environment, invocation, copy, sandbox, and redaction
+  tests, lint, a production build, and two rendered-page checks successfully.
+- Ran two real Codex–Claude gates. The corrected gate rendered seven dissent
+  items in the browser; a “Missed” judgment remained selected after reload.
+
 ## [v0.0.0.8] — 2026-07-29
 
 ### Conversation

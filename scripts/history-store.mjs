@@ -87,6 +87,9 @@ function reconstructSnapshot(events, record) {
   const messages = [];
   const pending = new Map();
   let outcome = null;
+  let dissent = [];
+  const dissentReviews = {};
+  const dissentJudgments = {};
   let lastStatus = null;
   let historyWarning = record?.historyWarning || "";
 
@@ -96,6 +99,9 @@ function reconstructSnapshot(events, record) {
         ...event.session,
         messages: [],
         outcome: null,
+        dissent: [],
+        dissentReviews: {},
+        dissentJudgments: {},
         pendingSteering: [],
         historyWarning: "",
       };
@@ -105,6 +111,19 @@ function reconstructSnapshot(events, record) {
       }
     } else if (event.type === "session.outcome") {
       outcome = event.outcome;
+    } else if (event.type === "session.dissent") {
+      for (const item of event.items || []) {
+        if (!dissent.some((existing) => existing.id === item.id)) dissent.push(item);
+      }
+      if (event.review?.role) dissentReviews[event.review.role] = event.review;
+      for (const review of event.reviews || []) {
+        if (review?.role) dissentReviews[review.role] = review;
+      }
+    } else if (event.type === "dissent.judged") {
+      dissentJudgments[event.dissentId] = {
+        verdict: event.verdict,
+        judgedAt: event.judgedAt || event.at,
+      };
     } else if (event.type === "session.status") {
       lastStatus = event;
     } else if (event.type === "steering.queued") {
@@ -134,6 +153,9 @@ function reconstructSnapshot(events, record) {
       finalStatus?.turn ?? snapshot.completedTurns ?? messages.filter((message) => message.round).length,
     messages,
     outcome,
+    dissent,
+    dissentReviews,
+    dissentJudgments,
     pendingSteering: [...pending.values()],
     lastStatus: finalStatus,
     historyWarning,
@@ -271,30 +293,32 @@ export function createHistoryStore({
     },
     async get(id) {
       if (!enabled) return null;
-      await serialize(initialize);
-      const recordId = safeRecordId(id);
-      const record = index.records.find((item) => item.id === recordId);
-      if (!record) return null;
-      const raw = await readFile(eventPath(recordId), "utf8");
-      const events = [];
-      let incomplete = false;
-      for (const line of raw.split("\n").filter(Boolean)) {
-        try {
-          events.push(JSON.parse(line));
-        } catch {
-          incomplete = true;
-          break;
+      return serialize(async () => {
+        await initialize();
+        const recordId = safeRecordId(id);
+        const record = index.records.find((item) => item.id === recordId);
+        if (!record) return null;
+        const raw = await readFile(eventPath(recordId), "utf8");
+        const events = [];
+        let incomplete = false;
+        for (const line of raw.split("\n").filter(Boolean)) {
+          try {
+            events.push(JSON.parse(line));
+          } catch {
+            incomplete = true;
+            break;
+          }
         }
-      }
-      const snapshot = reconstructSnapshot(events, record);
-      if (incomplete) {
-        const recoveryWarning =
-          "History incomplete: the last stored event was damaged; the valid prefix was recovered.";
-        snapshot.historyWarning = [snapshot.historyWarning, recoveryWarning]
-          .filter(Boolean)
-          .join(" ");
-      }
-      return snapshot;
+        const snapshot = reconstructSnapshot(events, record);
+        if (incomplete) {
+          const recoveryWarning =
+            "History incomplete: the last stored event was damaged; the valid prefix was recovered.";
+          snapshot.historyWarning = [snapshot.historyWarning, recoveryWarning]
+            .filter(Boolean)
+            .join(" ");
+        }
+        return snapshot;
+      });
     },
     async delete(id) {
       if (!enabled) return false;

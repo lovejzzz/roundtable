@@ -96,6 +96,40 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
       },
     });
     await store.append(id, {
+      type: "session.dissent",
+      review: {
+        role: "claude",
+        author: "Claude",
+        status: "completed",
+        at: "2026-07-29T12:04:00.000Z",
+        coverage: {
+          truncated: false,
+          includedCharacters: 10,
+          totalCharacters: 10,
+          messageCount: 1,
+        },
+        itemCount: 1,
+      },
+      items: [
+        {
+          id: "D1",
+          author: "Claude",
+          role: "claude",
+          at: "2026-07-29T12:04:00.000Z",
+          messageLabel: "M1",
+          position: "reject",
+          summary: "Keep this dissent.",
+          reason: "It could be missed.",
+        },
+      ],
+    });
+    await store.append(id, {
+      type: "dissent.judged",
+      dissentId: "D1",
+      verdict: "represented",
+      judgedAt: "2026-07-29T12:04:30.000Z",
+    });
+    await store.append(id, {
       type: "session.status",
       status: "complete",
       turn: 2,
@@ -114,6 +148,9 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
     assert.match(snapshot.messages[0].checks[0].command, /token=\[redacted\]/);
     assert.match(snapshot.messages[0].checks[0].summary, /Bearer \[redacted\]/);
     assert.equal(snapshot.outcome.decision, "Keep the archive local.");
+    assert.equal(snapshot.dissent[0].summary, "Keep this dissent.");
+    assert.equal(snapshot.dissentReviews.claude.status, "completed");
+    assert.equal(snapshot.dissentJudgments.D1.verdict, "represented");
 
     const directoryMode = (await stat(directory)).mode & 0o777;
     const logMode = (await stat(join(directory, `${id}.ndjson`))).mode & 0o777;

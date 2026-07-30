@@ -272,7 +272,7 @@ async function runCodex(session, prompt, purpose) {
     const siblingRoot = getTestSandboxInfo(session, "claude")?.root || "";
     args.push(
       ...buildCodexPermissionArgs({
-        readOnly: purpose === "synthesis",
+        readOnly: Boolean(purpose),
         siblingRoot,
         projectPath: session.projectPath,
       }),
