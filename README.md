@@ -162,14 +162,39 @@ progressbar semantics, and automatic transcript scrolling becomes instant when
 the operating system requests reduced motion. Opening an archive does not replay
 its transcript through the live announcement channel.
 
-## Measuring workflow efficiency
+## Measuring decision quality and workflow value
 
-Roundtable v0.0.0.26 defines how to measure its value; it does **not** claim a
-measured productivity lift yet. The unit of value is a product change that
-reaches a predeclared acceptance standard, not a discussion, message, token,
-commit, or line of code.
+Roundtable is not primarily a way to produce an answer faster. Its central
+hypothesis is that independent perspectives, visible disagreement,
+cross-examination, evidence-based consolidation, and adversarial audit produce
+decisions and product changes that are more **rounded** and more difficult to
+break.
 
-### What the research says
+In measurable terms, rounded means:
+
+- **accurate:** the result is factually and technically correct;
+- **complete:** important requirements, risks, alternatives, and edge cases are
+  covered;
+- **procedurally objective:** conclusions survive independent viewpoints and
+  are tied to evidence rather than one model's confidence;
+- **robust:** the result survives hidden tests, adversarial review, and unusual
+  scenarios;
+- **traceable:** consequential claims and decisions can be connected to code,
+  tests, or labeled discussion evidence;
+- **honest about uncertainty:** unresolved dissent and weak evidence remain
+  visible instead of being flattened into false consensus.
+
+Multiple models can share training biases and make the same mistake, so
+Roundtable does not guarantee truth or literal objectivity. Its claim is
+procedural: sealed openings reduce anchoring, cross-examination makes
+disagreement useful, and audited synthesis makes unsupported consensus harder
+to pass through unnoticed.
+
+v0.0.0.26 defines how to test that hypothesis; it does **not** claim a measured
+quality or productivity lift yet. The unit of value is a robust accepted product
+change, not a discussion, message, token, commit, or line of code.
+
+### What existing productivity research warns us
 
 Published results differ sharply by task and setting:
 
@@ -186,8 +211,10 @@ shape—2,294 issue-and-pull-request problems from 12 repositories with executab
 evaluation—but benchmark pass rate alone does not measure orchestration,
 consolidation, end-to-end delivery, or downstream product value.
 
-Together, these studies rule out a credible universal multiplier. Roundtable
-must be tested as the system the user actually operates:
+Together, these studies rule out a credible universal speed multiplier and show
+why activity, self-reported helpfulness, and benchmark success are insufficient.
+Roundtable must be tested on decision quality and delivered product quality as
+the system the user actually operates:
 
 ```text
 single-model baseline: human ↔ one coding model
@@ -199,9 +226,10 @@ Roundtable treatment:  human ↔ Codex butler ↔ multiple deliberating models
 ```
 
 The question is whether Codex, acting as the user's butler and consolidator,
-can use the multi-model discussion to deliver better product changes than the
-same human working with one model. It is not a comparison of isolated model
-answers, and it is not primarily a measure of human active hours.
+can use the multi-model discussion to deliver more accurate, complete, robust,
+and evidence-grounded product changes than the same human working with one
+model. It is not a comparison of isolated model answers, and it is not primarily
+a race against human active hours.
 
 ### Controlled comparison
 
@@ -247,39 +275,75 @@ product or UX decisions. Three primary arms with two runs per task produce
 instrumentation problems and estimate variance, but it is a pilot—not a
 guaranteed statistically powered conclusion.
 
-### Metrics and calculation
+### Primary outcome: robust accepted changes
 
-An **accepted change** must pass all predeclared functional and regression
-checks, satisfy the task rubric, clear a blinded review threshold, and require
-no undisclosed manual repair. Report post-merge rollback, escaped-defect, and
-usage or product-outcome data separately when it becomes available.
+A **robust accepted change** must:
 
-The primary comparison has three separately visible dimensions:
+1. satisfy every predeclared must-have requirement;
+2. pass hidden functional and regression tests;
+3. clear a blinded correctness, completeness, maintainability, and
+   regression-risk review;
+4. survive a separate adversarial review written to find counterexamples,
+   omitted cases, and unsupported assumptions;
+5. require no undisclosed manual rescue.
 
-- **delivery success:** first-pass and final acceptance rates;
-- **product quality:** blinded requirement, maintainability, and regression-risk
-  scores plus hidden tests;
-- **workflow speed:** end-to-end elapsed time from delegation to merge-ready
-  output, including Roundtable discussion and Codex consolidation.
-
-For one quantitative headline, normalize the predeclared blinded quality score
-to `0–1`; a failed acceptance gate receives zero:
+The primary headline is therefore quality and resilience, not speed:
 
 ```text
-quality-adjusted completion = accepted × normalized quality score
-workflow throughput = Σ quality-adjusted completions / Σ end-to-end elapsed hours
-lift (%) = 100 × (Roundtable throughput / single-model throughput - 1)
+robust outcome rate = robust accepted changes / all attempted changes
+
+robustness lift (%) =
+  100 × (Roundtable robust outcome rate / single-model robust outcome rate - 1)
 ```
 
-Always publish the acceptance, quality, and elapsed-time components beside this
-composite so a high score cannot hide slow delivery or weak quality. The same
-human is part of both systems; human interventions and steering are useful
-autonomy diagnostics, not the primary denominator.
+Always report the absolute percentage-point difference as well. If the
+single-model rate is zero, the ratio is undefined and only the absolute
+difference and confidence interval are reported.
+
+The blinded scoring rubric should keep its dimensions separate:
+
+- **accuracy:** correctness of claims, decisions, and implementation;
+- **coverage:** satisfied requirements, addressed risks, and handled edge
+  cases;
+- **procedural objectivity:** evidence use, consideration of alternatives, and
+  resistance to unsupported confidence;
+- **robustness:** hidden-test, adversarial-review, and regression performance;
+- **traceability:** consequential claims connected to inspectable evidence;
+- **calibration:** uncertainty and unresolved dissent represented honestly.
+
+Do not hide these dimensions inside one unexplained score. A weighted aggregate
+may be published only when its weights were declared before the experiment and
+the complete scorecard appears beside it.
+
+### Consolidation gain
+
+Roundtable should also prove that consolidation adds value beyond merely
+sampling more models. A blinded evaluator scores every sealed opening, an
+optional equal-call parallel-answer baseline, the first Completion Brief, and
+the final audited brief with the same rubric:
+
+```text
+best-input gain = final audited score - best individual opening score
+audit gain = final audited score - first Completion Brief score
+```
+
+These measurements reveal whether cross-examination and audit actually improve
+the strongest available input, merely choose it, or make it worse. For product
+delivery, compare the resulting implementation with the best single-model
+implementation under the same hidden acceptance gate.
+
+### Secondary constraints
+
+Time, subscription cost, and human intervention still matter: a more robust
+workflow must remain usable. They are reported as constraints and tradeoffs,
+not treated as the definition of value.
 
 Also report:
 
 - first-pass and final acceptance rate;
 - hidden-test pass rate and blinded review score;
+- adversarial challenges found, resolved, and left unresolved;
+- requirement and risk coverage;
 - time to first valid patch and time to merge-ready;
 - total elapsed minutes, user interventions, steering actions, and repair loops;
 - participant calls, failures, fallbacks, and subscription quota exhaustion;
@@ -326,9 +390,12 @@ primary outcome:
 - **opening divergence:** materially different proposals in the sealed round;
 - **cross-examination correction:** claims retracted or corrected after peer
   evidence;
+- **best-input gain:** improvement over the strongest sealed opening;
 - **audit yield and precision:** supported concerns found, and the share later
   judged material;
 - **revision lift:** blinded quality change from draft to audited final brief;
+- **calibration:** confidence appropriate to the available evidence and
+  unresolved dissent;
 - **fallback rate:** synthesis or participant failures requiring recovery;
 - **context loss:** shortened or omitted labeled inputs;
 - **deliberation waste:** no divergence, no material audit finding, and no
@@ -341,9 +408,10 @@ the diagnostics and an audit trail. A causal efficiency comparison still needs
 an experiment record linking the discussion to its implementation commit,
 arm and delivery ceiling, butler interventions, participant availability and
 quota failures, actual subscription allocation, hidden acceptance result,
-blinded score, and downstream release outcome. Until those records exist and
-the controlled runs are completed, the honest Roundtable efficiency result is
-**not yet measured**.
+dimension-level blinded scores, adversarial-review result, best-input and audit
+gain, and downstream release outcome. Until those records exist and the
+controlled runs are completed, the honest Roundtable quality and robustness
+result is **not yet measured**.
 
 ## Local discussion history
 

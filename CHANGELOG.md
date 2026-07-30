@@ -31,10 +31,12 @@ changes from pre-existing code.
   repositories cannot prevent a discussion from starting.
 - The README now defines an evidence-based comparison between a human working
   with one coding model and a human delegating to Codex as a butler that
-  consolidates a multi-model Roundtable and manages delivery. It separates
-  accepted product output from activity, treats CLI subscriptions as fixed
-  recurring fees instead of inventing token-priced API costs, and states
-  explicitly that v0.0.0.26 has not yet established a causal efficiency lift.
+  consolidates a multi-model Roundtable and manages delivery. Robust accepted
+  outcomes, dimension-level accuracy and coverage, adversarial resilience,
+  evidence traceability, preserved dissent, and consolidation gain are primary;
+  time and fixed CLI subscription fees are secondary constraints. The README
+  states explicitly that v0.0.0.26 has not yet established a causal quality or
+  productivity lift.
 
 ### Verification
 
