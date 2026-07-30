@@ -4,6 +4,129 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.21] — 2026-07-30
+
+### Conversation
+
+Prompt: audit v0.0.0.20 for one concrete, highest-leverage startup reliability
+and developer-experience improvement at the CLI capability and authentication
+probe boundary. Agents were asked to inspect the bridge, launcher, related
+tests, README, and latest changelog; decide whether every probe needs a bounded
+deadline, output limit, termination contract, and sanitized diagnostic; preserve
+fail-closed authentication and capability behavior; never expose command output,
+credentials, bridge keys, or broader environment state; consider concurrent
+probes, slow valid CLIs, macOS process behavior, and testability; use optional
+sandboxed checks when useful; and avoid speculative refactors.
+
+Across two rounds and six complete contributions, Codex, Claude, and
+Antigravity agreed that the launcher-wide 60-second deadline did not bound
+individual probe memory or identify the stalled command. Codex found nine
+concurrent version, help, model, and authentication probes with unbounded output,
+plus the later Codex permission-profile probe. Claude connected the required
+timeout and escalation behavior to the bridge's existing managed-process
+pattern, identified diagnostic precedence as necessary to avoid calling a
+timeout an old CLI or missing login, and then found a third sequential barrier:
+the initial `sandbox-exec` capability check. Antigravity confirmed that a
+20-second per-probe limit could therefore consume all three 20-second stages and
+lose the intended diagnostic behind the aggregate launcher deadline.
+
+Round two corrected an early claim that vinext compilation was serialized
+behind bridge probing: `talk.mjs` starts both children back-to-back. The decisive
+15-second rationale was instead the three sequential probe barriers before the
+bridge listens, leaving 15 seconds inside the aggregate deadline. The complete
+transcript and coverage-preserving Completion Brief were read only after all six
+turns and synthesis finished. The brief accurately recorded that exact timeout
+length did not receive explicit final consensus from Codex after the third
+barrier was found.
+
+### Independent audit
+
+- Accepted a side-effect-free bounded-probe helper in the bridge layer. The
+  bridge owns probe labels, filtered CLI environments, capability semantics, and
+  health diagnostics; no launcher protocol or permission boundary needed to
+  change.
+- Accepted a fixed 15-second deadline rather than the initially proposed
+  20 seconds. Repository inspection confirmed three potentially sequential
+  child stages—`sandbox-exec`, the concurrent CLI probe group, and the Codex
+  permission guard—before `server.listen`; three 20-second stalls can consume
+  the launcher's entire 60-second transaction.
+- Accepted a 64 KiB combined stdout/stderr byte limit with immediate failure,
+  direct-child `SIGTERM`, two-second `SIGKILL` escalation, and resolution only
+  after the child closes. Infrastructure failures discard all captured bytes so
+  partial help or model output cannot reach downstream parsers.
+- Accepted infrastructure-only reasons for timeout, output limit, and spawn
+  failure. Fixed caller-owned labels take precedence over derived compatibility
+  or authentication states, while ordinary nonzero exits still carry their
+  prior semantics and login guidance.
+- Accepted non-gating, sanitized warnings for failed version probes. A missing
+  version must not disable an otherwise usable CLI, but a stalled or noisy
+  version command should still be identifiable in the supervised terminal.
+- Narrowed the proposed role-aware helper. The helper accepts an already
+  filtered environment, keeping role and credential policy in `bridge.mjs`
+  rather than duplicating security decisions in process utility code.
+- Rejected retaining the head or tail of overflowed output. Because overflow is
+  an infrastructure failure, returning any partial bytes could change model or
+  capability parsing; the implementation retains output only for bounded,
+  normally closed probes.
+- Rejected detached per-probe process groups and launcher changes. Probes remain
+  inside the bridge's launcher-owned group for aggregate cleanup, while the
+  bounded helper targets its direct child for the local deadline.
+
+### Implementation
+
+- Added `scripts/probe-command.mjs` with injectable defaults for a 15-second
+  timeout, 64 KiB combined output, and two-second termination grace. It returns
+  structured results without exception or command-output text and uses fixed
+  formatting for diagnostics.
+- Routed the macOS project-guard capability check, nine concurrent CLI probes,
+  and the sequential Codex permission-profile probe through the same bounded
+  helper. CLI probes still receive only their existing role-scoped environment.
+- Gave capability, authentication, model-access, and permission-profile
+  infrastructure failures precedence in health diagnostics. Version and
+  project-guard probe failures emit sanitized startup warnings without exposing
+  arguments, paths, environment values, output, or raw spawn errors.
+- Added eight direct regressions for normal and nonzero exits, timeout with
+  discarded output, combined-stream overflow, TERM-resistant escalation,
+  independent concurrency, fixed secret-free diagnostics, precedence and
+  missing-path behavior, and ignored-output capability checks. Updated the
+  environment contract test and enumerated the new file in `test:bridge`.
+- Updated the README's release and startup reliability claims.
+
+### Verification
+
+- All 105 bridge tests pass with no skips on the unnested macOS host, including
+  Claude, Codex, Antigravity, launcher, broker-network, credential, symlink,
+  attachment, history, recovery, and host containment regressions.
+- All 13 focused probe and environment tests pass. Lint is clean, the production
+  build succeeds, both rendered-page checks pass, and `git diff --check` is
+  clean.
+- Live validation restarted the real supervised launcher on bridge port 4417
+  without opening a browser. Authenticated health reported the macOS project
+  guard and all three real CLIs available, the connected room returned HTTP 200,
+  and `Control-C` removed both listeners.
+- A second live launch placed a temporary `/usr/bin/yes` alias ahead of the real
+  Claude executable. All noisy probe children hit the 64 KiB limit and exited;
+  bridge health failed Claude closed with
+  `Claude capability probe exceeded the 64 KiB output limit.`, the terminal
+  added only the fixed version warning, and no captured output or fixture
+  process survived. The temporary alias and directory were removed.
+- No visible room behavior changed, so this cycle used authenticated live HTTP,
+  real launcher fault injection, and the existing rendered-page suite rather
+  than browser interaction QA.
+
+### Remaining limitations
+
+- The 15-second deadline is intentionally fixed. An unusually slow but valid CLI
+  can be marked unavailable for that launch and must be retried by restarting
+  Roundtable; there is no runtime probe retry or supported timeout override.
+- Probe termination targets the direct child. A CLI that creates and detaches
+  its own descendant could leave that descendant briefly alive; the supervised
+  launcher's process-group cleanup remains the aggregate fallback when startup
+  itself fails.
+- Version-probe infrastructure failures are warnings rather than availability
+  failures. Capability, authentication, model-access, permission-profile, and
+  project-guard checks remain fail-closed.
+
 ## [v0.0.0.20] — 2026-07-30
 
 ### Conversation

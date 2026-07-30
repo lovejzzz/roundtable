@@ -47,6 +47,12 @@ import {
   classifyBrokerProcessResult,
   resolveBrokerArgv,
 } from "./test-broker.mjs";
+import {
+  availabilityDiagnostic,
+  firstProbeFailureDiagnostic,
+  probeFailureDiagnostic,
+  runBoundedProbe,
+} from "./probe-command.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
@@ -98,35 +104,11 @@ async function findExecutable(name) {
   return "";
 }
 
-function runSmallCommandResult(command, args, role) {
-  return new Promise((resolve) => {
-    if (!command) return resolve({ output: "", success: false });
-    const child = spawn(command, args, {
-      env: agentEnvironment(role),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let output = "";
-    child.stdout.on("data", (chunk) => {
-      output += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk;
-    });
-    child.on("error", () => resolve({ output: "", success: false }));
-    child.on("close", (code) => resolve({ output: output.trim(), success: code === 0 }));
-  });
-}
-
-async function runSmallCommand(command, args, role) {
-  return (await runSmallCommandResult(command, args, role)).output;
-}
-
-function commandSucceeds(command, args) {
-  return new Promise((resolve) => {
-    if (!command) return resolve(false);
-    const child = spawn(command, args, { stdio: "ignore" });
-    child.on("error", () => resolve(false));
-    child.on("close", (code) => resolve(code === 0));
+function runCliProbe(command, args, role) {
+  return runBoundedProbe({
+    command,
+    args,
+    environment: agentEnvironment(role),
   });
 }
 
@@ -135,15 +117,15 @@ const claudePath = await findExecutable("claude");
 const antigravityPath = await findExecutable("agy");
 const sandboxExecCandidate =
   process.platform === "darwin" ? await findExecutable("sandbox-exec") : "";
+const sandboxExecProbe = sandboxExecCandidate
+  ? await runBoundedProbe({
+      command: sandboxExecCandidate,
+      args: ["-p", "(version 1)(allow default)", "/usr/bin/true"],
+      captureOutput: false,
+    })
+  : null;
 const sandboxExecPath =
-  sandboxExecCandidate &&
-  (await commandSucceeds(sandboxExecCandidate, [
-    "-p",
-    "(version 1)(allow default)",
-    "/usr/bin/true",
-  ]))
-    ? sandboxExecCandidate
-    : "";
+  sandboxExecCandidate && sandboxExecProbe?.success ? sandboxExecCandidate : "";
 const codexConfigText = await readFile(
   join(codexHome, "config.toml"),
   "utf8",
@@ -171,27 +153,33 @@ if (claudeSettingsText) {
 }
 
 const [
-  codexVersion,
-  claudeVersion,
-  antigravityVersion,
-  codexHelp,
-  claudeHelp,
-  antigravityHelp,
+  codexVersionResult,
+  claudeVersionResult,
+  antigravityVersionResult,
+  codexHelpResult,
+  claudeHelpResult,
+  antigravityHelpResult,
   antigravityModelsResult,
   codexAuthResult,
   claudeAuthResult,
 ] =
   await Promise.all([
-  runSmallCommand(codexPath, ["--version"], "codex"),
-  runSmallCommand(claudePath, ["--version"], "claude"),
-  runSmallCommand(antigravityPath, ["--version"], "antigravity"),
-  runSmallCommand(codexPath, ["exec", "--help"], "codex"),
-  runSmallCommand(claudePath, ["--help"], "claude"),
-  runSmallCommand(antigravityPath, ["--help"], "antigravity"),
-  runSmallCommandResult(antigravityPath, ["models"], "antigravity"),
-  runSmallCommandResult(codexPath, ["login", "status"], "codex"),
-  runSmallCommandResult(claudePath, ["auth", "status"], "claude"),
+  runCliProbe(codexPath, ["--version"], "codex"),
+  runCliProbe(claudePath, ["--version"], "claude"),
+  runCliProbe(antigravityPath, ["--version"], "antigravity"),
+  runCliProbe(codexPath, ["exec", "--help"], "codex"),
+  runCliProbe(claudePath, ["--help"], "claude"),
+  runCliProbe(antigravityPath, ["--help"], "antigravity"),
+  runCliProbe(antigravityPath, ["models"], "antigravity"),
+  runCliProbe(codexPath, ["login", "status"], "codex"),
+  runCliProbe(claudePath, ["auth", "status"], "claude"),
 ]);
+const codexVersion = codexVersionResult.output;
+const claudeVersion = claudeVersionResult.output;
+const antigravityVersion = antigravityVersionResult.output;
+const codexHelp = codexHelpResult.output;
+const claudeHelp = claudeHelpResult.output;
+const antigravityHelp = antigravityHelpResult.output;
 const antigravityModels = (antigravityModelsResult.success ? antigravityModelsResult.output : "")
   .split(/\r?\n/)
   .map((line) => line.trim().replace(/^[-*]\s*/, ""))
@@ -218,7 +206,7 @@ const antigravityCompatible = Boolean(
 const codexGuardProbe =
   process.platform !== "darwin" || !codexCompatible
     ? { success: Boolean(codexCompatible) }
-    : await runSmallCommandResult(
+    : await runCliProbe(
         codexPath,
         [
           "sandbox",
@@ -244,12 +232,23 @@ const codexGuardProbe =
       );
 const codexSafeCompatible = Boolean(codexCompatible && codexGuardProbe.success);
 
-function availabilityDiagnostic({ label, path, compatible, authenticated, login }) {
-  if (!path) return `${label} is not installed or is not available on PATH.`;
-  if (!compatible) return `${label} does not expose the required safe CLI capabilities.`;
-  if (!authenticated) return `${label} is not signed in. Run \`${login}\`, then restart the bridge.`;
-  return "";
-}
+const startupWarnings = [
+  ...(sandboxExecCandidate && sandboxExecProbe?.reason
+    ? [
+        probeFailureDiagnostic(
+          "macOS project-guard capability probe",
+          sandboxExecProbe.reason,
+        ),
+      ]
+    : []),
+  ...[
+    ["Codex version probe", codexPath, codexVersionResult],
+    ["Claude version probe", claudePath, claudeVersionResult],
+    ["Antigravity version probe", antigravityPath, antigravityVersionResult],
+  ]
+    .filter(([, path, result]) => path && result.reason)
+    .map(([label, , result]) => probeFailureDiagnostic(label, result.reason)),
+].filter(Boolean);
 
 const health = {
   environmentPolicy: {
@@ -288,6 +287,11 @@ const health = {
     diagnostic: availabilityDiagnostic({
       label: "Codex CLI",
       path: codexPath,
+      probeFailure: firstProbeFailureDiagnostic([
+        ["Codex capability probe", codexHelpResult],
+        ["Codex authentication probe", codexAuthResult],
+        ["Codex permission-profile probe", codexGuardProbe],
+      ]),
       compatible: codexSafeCompatible,
       authenticated: codexAuthResult.success,
       login: "codex login",
@@ -299,6 +303,10 @@ const health = {
     diagnostic: availabilityDiagnostic({
       label: "Claude CLI",
       path: claudePath,
+      probeFailure: firstProbeFailureDiagnostic([
+        ["Claude capability probe", claudeHelpResult],
+        ["Claude authentication probe", claudeAuthResult],
+      ]),
       compatible: claudeCompatible,
       authenticated: claudeAuthResult.success,
       login: "claude auth login",
@@ -310,6 +318,10 @@ const health = {
     diagnostic: availabilityDiagnostic({
       label: "Antigravity CLI",
       path: antigravityPath,
+      probeFailure: firstProbeFailureDiagnostic([
+        ["Antigravity capability probe", antigravityHelpResult],
+        ["Antigravity model-access probe", antigravityModelsResult],
+      ]),
       compatible: antigravityCompatible,
       authenticated: antigravityModelsResult.success,
       login: "agy",
@@ -754,6 +766,7 @@ server.listen(port, host, () => {
   for (const role of ["codex", "claude", "antigravity"]) {
     if (health[role].diagnostic) console.log(`  ${health[role].diagnostic}`);
   }
+  for (const warning of startupWarnings) console.log(`  ${warning}`);
   console.log("");
   console.log("  Open the app with:");
   console.log(

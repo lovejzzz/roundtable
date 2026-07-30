@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.20**
+Current release: **v0.0.0.21**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -33,7 +33,12 @@ access tokens, database URLs, registry credentials, and unrelated terminal
 settings are not passed to agent processes. At startup, the bridge checks the
 installed capabilities, persisted Codex and Claude login state, Antigravity
 model access, and the executable Codex permission profile before accepting a
-discussion.
+discussion. Every startup command probe has a 15-second deadline and a 64 KiB
+combined-output limit. A stalled or noisy probe is terminated, its captured
+output is discarded, and the affected CLI fails closed with a fixed labeled
+diagnostic; ordinary nonzero authentication results retain their existing login
+guidance. The launcher keeps its separate 60-second aggregate deadline and
+whole-process-tree cleanup.
 
 ## How a discussion works
 
