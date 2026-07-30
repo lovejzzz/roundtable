@@ -1,0 +1,138 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  autoScrollBehavior,
+  liveStatusText,
+} from "../lib/live-status.mjs";
+
+test("announces the active agent with one-based turn wording", () => {
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "running",
+      speaker: "codex",
+      turn: 0,
+      totalTurns: 6,
+    }),
+    "Turn 1 of 6: Codex is reading the room.",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "running",
+      speaker: "claude",
+      turn: 1,
+      totalTurns: 6,
+    }),
+    "Turn 2 of 6: Claude is reading the room.",
+  );
+});
+
+test("announces a reply using the bridge completed-turn count", () => {
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "running",
+      turn: 2,
+      totalTurns: 6,
+      lastReplyAuthor: "Claude",
+    }),
+    "Claude replied. 2 of 6 turns complete.",
+  );
+});
+
+test("keeps initial, setup, and archived states silent", () => {
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "running",
+      turn: 0,
+      totalTurns: 6,
+    }),
+    "",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "setup",
+      status: "running",
+      speaker: "codex",
+      totalTurns: 6,
+    }),
+    "",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "archive",
+      status: "complete",
+      turn: 6,
+      totalTurns: 6,
+    }),
+    "",
+  );
+});
+
+test("announces failed and retried turns without leaking failure details", () => {
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "failed",
+      failedRole: "antigravity",
+      turn: 2,
+      totalTurns: 6,
+    }),
+    "Antigravity could not complete turn 3. Retry or end the discussion.",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "retrying",
+      speaker: "antigravity",
+      turn: 2,
+      totalTurns: 6,
+    }),
+    "Retrying turn 3 with Antigravity.",
+  );
+});
+
+test("announces synthesis, dissent review, and terminal states", () => {
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "synthesizing",
+      turn: 6,
+      totalTurns: 6,
+    }),
+    "6 of 6 turns complete. Codex is preparing the Completion Brief.",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "reviewing",
+      speaker: "claude",
+      turn: 6,
+      totalTurns: 6,
+    }),
+    "Claude is reviewing dissent coverage.",
+  );
+  assert.equal(liveStatusText({ mode: "session", status: "complete" }), "Discussion complete. The Completion Brief is available.");
+  assert.equal(liveStatusText({ mode: "session", status: "stopped" }), "Discussion stopped.");
+  assert.equal(liveStatusText({ mode: "session", status: "error" }), "Discussion ended with an error.");
+  assert.equal(liveStatusText({ mode: "session", status: "interrupted" }), "Discussion interrupted.");
+});
+
+test("derives identical text for an identical recovered snapshot", () => {
+  const snapshot = {
+    mode: "session",
+    status: "running",
+    speaker: "antigravity",
+    turn: 2,
+    totalTurns: 6,
+    lastReplyAuthor: "Claude",
+  };
+  assert.equal(liveStatusText(snapshot), liveStatusText(structuredClone(snapshot)));
+});
+
+test("uses instant auto-scroll when reduced motion is requested", () => {
+  assert.equal(autoScrollBehavior(true), "auto");
+  assert.equal(autoScrollBehavior(false), "smooth");
+});

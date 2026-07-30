@@ -30,6 +30,10 @@ import {
   useRef,
   useState,
 } from "react";
+import {
+  autoScrollBehavior,
+  liveStatusText,
+} from "../lib/live-status.mjs";
 
 type AgentRole = "codex" | "claude" | "antigravity";
 type Speaker = AgentRole | "human";
@@ -749,10 +753,22 @@ export default function Home() {
     : ["low", "medium", "high"];
   const requiredAntigravityEffort = encodedModelEffort(antigravityModel);
 
+  const completedTurnCount = Math.min(Math.max(turn, 0), totalTurns);
   const progress = useMemo(() => {
     if (!totalTurns) return 0;
-    return Math.min(100, Math.round((turn / totalTurns) * 100));
-  }, [turn, totalTurns]);
+    return Math.min(100, Math.round((completedTurnCount / totalTurns) * 100));
+  }, [completedTurnCount, totalTurns]);
+  const lastAgentReplyAuthor =
+    messages.filter((message) => message.role !== "human").at(-1)?.author || "";
+  const liveStatus = liveStatusText({
+    mode: roomMode,
+    status,
+    speaker: speaker || "",
+    failedRole: failedTurn?.role || "",
+    turn,
+    totalTurns,
+    lastReplyAuthor: lastAgentReplyAuthor,
+  });
 
   async function connect(nextToken = token, nextBridge = bridgeUrl) {
     if (!nextToken.trim()) {
@@ -834,7 +850,9 @@ export default function Home() {
     if (!feedRef.current || !shouldAutoScrollRef.current) return;
     feedRef.current.scrollTo({
       top: feedRef.current.scrollHeight,
-      behavior: "smooth",
+      behavior: autoScrollBehavior(
+        window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+      ),
     });
   }, [messages, speaker, outcome, status]);
 
@@ -1683,6 +1701,14 @@ export default function Home() {
       )}
 
       <div className={`workspace-grid ${roomMode}-mode`}>
+        <div
+          className="visually-hidden"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+        >
+          {liveStatus}
+        </div>
         <aside className="setup-panel">
           {roomMode === "setup" ? (
             <>
@@ -2128,13 +2154,25 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="progress-rail" aria-label={`Discussion progress ${progress}%`}>
+          <div
+            className="progress-rail"
+            role="progressbar"
+            aria-label="Discussion progress"
+            aria-valuemin={0}
+            aria-valuemax={totalTurns}
+            aria-valuenow={completedTurnCount}
+            aria-valuetext={`${completedTurnCount} of ${totalTurns} turns complete`}
+          >
             <span style={{ width: `${progress}%` }} />
           </div>
 
           <div
             className="message-feed"
             ref={feedRef}
+            role="log"
+            aria-label="Discussion transcript"
+            aria-live="off"
+            tabIndex={0}
             onScroll={(event) => {
               const feed = event.currentTarget;
               shouldAutoScrollRef.current =

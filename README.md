@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.16**
+Current release: **v0.0.0.17**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -75,6 +75,13 @@ through one reset path.
 Active discussions survive a refresh in the same browser tab while the bridge
 remains running. Completed transcripts can be copied or exported as Markdown from
 the room header.
+
+The live room exposes concise, polite turn-status announcements without reading
+whole agent replies aloud. Its transcript is a labeled keyboard-focusable log
+with a visible inset focus ring, progress reports completed turns through native
+progressbar semantics, and automatic transcript scrolling becomes instant when
+the operating system requests reduced motion. Opening an archive does not replay
+its transcript through the live announcement channel.
 
 ## Local discussion history
 

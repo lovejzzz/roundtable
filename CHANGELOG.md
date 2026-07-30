@@ -4,6 +4,103 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.17] — 2026-07-30
+
+### Conversation
+
+Prompt: audit v0.0.0.16 for one highest-leverage accessibility and live-room
+UI/UX improvement, especially the dynamic transcript, turn/progress status,
+focus and announcement behavior, and motion-aware auto-scroll. Agents were
+asked to ground claims in the current page, styles, bridge events, changelog,
+and tests; inspect the project; use optional sandboxed checks when useful; and
+avoid cosmetic churn or changes to permission and credential boundaries.
+
+Across two rounds and six complete contributions, Codex, Claude, and
+Antigravity converged on one accessible live-transcript contract. Codex found
+that the bridge emits clean turn-start and turn-completion boundaries that the
+UI exposed only visually. Claude showed that making the whole transcript a
+polite live region would duplicate announcements, read hundreds of words per
+reply, and replay restored messages after a reconnect. Claude also found that
+the overflowing transcript was not keyboard-focusable. Later turns corrected
+the progress wording, focus-ring specificity, stable status-node placement,
+and the test strategy for a setup-only server render.
+
+Antigravity's two bridge-brokered `npm run test:bridge` checks passed with 67
+tests and 3 environment-dependent containment skips inside the nested broker.
+Codex separately reported a successful production build and two rendered-page
+checks; its attempted local server bind was blocked by the participant sandbox.
+Those agent records were treated as discussion evidence, not as the release
+gate.
+
+### Independent audit
+
+- Accepted one stable, visually hidden atomic status region because it announces
+  concise turn starts, replies, retries, synthesis, dissent review, and terminal
+  states without moving keyboard focus.
+- Accepted a labeled `role="log"` transcript only with `aria-live="off"`.
+  This preserves sequential-log semantics while preventing full-reply,
+  duplicate, reconnect, and archive announcements.
+- Accepted `tabIndex={0}` only together with a dedicated inset
+  `:focus-visible` ring. The transcript is a real overflow scroll region, and
+  an invisible new tab stop would have been a regression.
+- Accepted native progressbar value semantics and wording based on completed
+  turns. The bridge uses the same `turn` value as a zero-based current index at
+  start and as the completed count after reply, so “N of M turns complete” is
+  accurate in both states.
+- Accepted selecting instant programmatic scrolling when
+  `prefers-reduced-motion: reduce` matches. The previous explicit
+  `behavior: "smooth"` could not be overridden by the CSS media rule.
+- Rejected making the transcript itself polite or automatically shifting focus
+  as disruptive and duplicative.
+- Narrowed claims about “one announcement per reply” to deterministic pure text
+  derivation plus rendered/source contracts. The repository has no browser
+  accessibility event harness, so unit tests cannot prove assistive-technology
+  queue behavior.
+- Rejected the Completion Brief's unresolved zero-maximum progress question as
+  inapplicable: the progress rail renders only in live or archived sessions,
+  both of which have a positive configured turn count.
+- Added one independent correction not raised in the final brief: queued human
+  steering is excluded when choosing the latest agent author, so it cannot be
+  announced as an agent reply.
+
+### Implementation
+
+- Added a pure live-status formatter for correctly indexed start, completion,
+  failed-turn, retry, synthesis, review, and terminal announcements. Setup,
+  preview, and archive modes deliberately return silence.
+- Mounted the live status node before the setup/session branch so assistive
+  technology can register it before the first turn changes its text.
+- Made the transcript a labeled, focusable log with live reading disabled and a
+  visible focus ring drawn inside the scroll port.
+- Replaced the progress rail's ineffective generic label with progressbar
+  minimum, maximum, current-value, and completed-turn text.
+- Preserved the existing 72-pixel live-edge gate while routing reduced-motion
+  users to instant auto-scroll and other users to the existing smooth behavior.
+- Added seven direct status and motion tests to the enumerated bridge suite, plus
+  server-rendered and source/style contract checks.
+- Updated the README's release and accessibility capability claims.
+
+### Verification
+
+- All 77 bridge tests pass with no skips on the unnested host, including the
+  Claude, Codex, Antigravity, broker-network, attachment, history, retry,
+  credential, and macOS containment regressions.
+- All 7 focused status/motion tests pass. Lint is clean, the production build
+  succeeds, both rendered-page checks pass, and `git diff --check` is clean.
+- Browser QA against the real local bridge confirmed one labeled transcript
+  log with live reading off, a stable atomic polite status node, completed-turn
+  progressbar values, keyboard focus on the transcript, a visible 2-pixel inset
+  focus ring, and no console warnings or errors.
+
+### Remaining limitations
+
+- Pure derivation and browser DOM checks do not emulate a specific screen
+  reader's speech queue. The contract prevents known duplicate and hydration
+  paths, but final announcement timing remains dependent on the user's browser
+  and assistive technology.
+- Reduced-motion routing is directly unit-tested; this release did not automate
+  an operating-system accessibility preference inside the in-app browser.
+
 ## [v0.0.0.16] — 2026-07-30
 
 ### Conversation
