@@ -17,6 +17,7 @@ export async function runBrokerCapableParticipant({
   if (purpose) return invoke(prompt);
   session.brokerTransactions ||= new Map();
   const transactionKey = `${role}:${session.completedTurns || 0}`;
+  const expectedAttachmentManifestId = session.attachmentManifestId || "";
   let transaction = session.brokerTransactions.get(transactionKey);
 
   if (!transaction) {
@@ -29,6 +30,18 @@ export async function runBrokerCapableParticipant({
           sandboxPaths: [],
         }
       : await execute(parsed.request.argv);
+    const executedAttachmentManifestId =
+      brokerExecution.attachmentManifestId || "";
+    if (
+      !parsed.request.error &&
+      executedAttachmentManifestId !== expectedAttachmentManifestId &&
+      !(
+        brokerExecution.result?.status === "blocked" &&
+        !executedAttachmentManifestId
+      )
+    ) {
+      throw new Error("The broker attachment manifest did not match the active discussion.");
+    }
     const round = Math.floor((session.completedTurns || 0) / 3) + 1;
     const sandboxPaths = [
       ...participantSandboxPaths,
@@ -40,9 +53,14 @@ export async function runBrokerCapableParticipant({
       argv: parsed.request.argv,
       result: savedResult,
       sandboxPaths,
-      check: makeBrokerCheck(parsed.request.argv, savedResult, round),
+      attachmentManifestId: expectedAttachmentManifestId,
+      check: makeBrokerCheck(parsed.request.argv, savedResult, round, {
+        attachmentManifestId: executedAttachmentManifestId,
+      }),
     };
     session.brokerTransactions.set(transactionKey, transaction);
+  } else if (transaction.attachmentManifestId !== expectedAttachmentManifestId) {
+    throw new Error("The saved broker result belongs to a different attachment manifest.");
   } else if (transaction.originalPrompt !== prompt) {
     transaction.originalPrompt = prompt;
   }

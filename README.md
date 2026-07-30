@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.15**
+Current release: **v0.0.0.16**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -34,7 +34,8 @@ discussion.
 2. Optionally attach up to five prompt files (1 MB each, 3 MB combined).
    Roundtable copies them into every disposable agent workspace and lists their
    generated relative paths in the control prompt. File bytes never enter the
-   visible transcript or local history.
+   visible transcript or local history. A canonical content manifest identifies
+   the attachment set without retaining the uploaded bytes.
 3. Review or change the model shown under each CLI participant. Friendly names such as Claude Opus 5 appear above the exact CLI identifier.
 4. Set each agent's reasoning effort with the slider, from low through extra high to max. The bridge starts from each CLI's configured effort.
    Antigravity models whose exact identifier ends in `-low`, `-medium`, or
@@ -85,6 +86,8 @@ data folder, outside the discussed project. The archive:
 - never stores bridge credentials or SSE tickets in structural event fields;
 - lists only topic, project name, date, status, and message count until you open a
   record;
+- retains attachment metadata and one canonical manifest ID, never uploaded
+  bytes or base64 payloads;
 - retains at most 50 discussions for 30 days;
 - recovers the valid prefix of a log if its final write was interrupted;
 - marks nonterminal discussions as interrupted after a bridge restart;
@@ -165,6 +168,14 @@ after they become stale without touching live or reply-output directories.
 Links into intentionally omitted generated trees also fail closed rather than
 silently changing meaning in the copy.
 
+When a discussion has prompt files, Roundtable restores the entire private
+attachment namespace from immutable in-memory payloads before every participant
+invocation. The restore removes stale workspace mutations and links, writes
+owner-only no-follow files, and verifies their content manifest before starting
+the CLI. This happens only in disposable copies; the selected project is never
+changed, and sessions without uploads leave a copied project-owned
+`.roundtable-attachments` directory alone.
+
 Configured CLI homes are resolved once and protected from the other two agents
 through both their lexical paths and canonical symlink targets. A Claude config
 home nested beneath a shared ancestor such as `~/.config/claude` receives a
@@ -223,6 +234,12 @@ evidence remain distinct in later prompts, completion synthesis, history,
 copy, and Markdown export. Malformed transport blocks stay ordinary reply text.
 Commands and summaries are length-bounded and temporary roots appear as
 `$SANDBOX`.
+
+When a broker command actually runs with prompt files, its evidence also records
+the canonical attachment manifest used in that fresh broker copy. A failed
+follow-up reuses the saved result and manifest without running the command
+again. A check blocked before workspace preparation makes no attachment-manifest
+claim.
 
 The bridge binds only to `127.0.0.1` and requires a fresh random key on every run.
 

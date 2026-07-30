@@ -4,6 +4,98 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.16] — 2026-07-30
+
+### Conversation
+
+Prompt: audit v0.0.0.15 for one highest-leverage reliability, recovery, or
+evidence-provenance improvement at the boundary between prompt attachments,
+disposable participant/broker workspaces, failed-turn retry, and local history.
+Agents were asked to inspect the repository, challenge unsupported claims, use
+optional sandboxed checks when useful, and avoid broader permissions or
+credential exposure.
+
+Across two rounds, Codex, Claude, and Antigravity converged on an attachment
+identity and restoration invariant. The initial proposal added a content
+manifest, but Claude showed that one-time materialization still lets a writable
+participant copy mutate the prompt files seen by later turns and retries.
+Codex then identified that naïve host-side rewriting could follow a
+participant-created link, and Claude extended that analysis to hardlinks and to
+project-owned files already under `.roundtable-attachments`.
+
+Claude's bridge-brokered `npm run test:bridge` passed in its nested broker with
+61 tests and 3 environment-dependent containment skips. Codex separately
+reported 11 focused passing tests from its own sandbox. Those results were kept
+distinct: the former was bridge-verified but nested, while the latter was
+agent-reported and did not yet exercise attachment identity.
+
+### Independent audit
+
+- Accepted the manifest and per-invocation restoration proposal because the
+  existing bridge materialized participant attachments only once and reused
+  the same writable copy across later turns and failed-turn retries.
+- Accepted destructive restore semantics only inside disposable copies and
+  only when uploads exist. The bridge removes and privately recreates the whole
+  attachment namespace before each CLI invocation, so stale files, symlinks,
+  hardlinks, and project-owned residue cannot survive into the next invocation.
+  The selected project is never changed.
+- Accepted fail-closed digest, file-type, link-count, size, and path checks
+  before a participant or broker process starts.
+- Accepted binding the canonical manifest ID to bridge-brokered checks,
+  checkpointed retry state, live snapshots, opted-in history, the locked room,
+  and Markdown exports.
+- Narrowed the durable record to one manifest ID. Per-file hashes remain
+  internal because the aggregate identifier is sufficient provenance and
+  avoids adding unnecessary file fingerprints to local history.
+- Rejected both suggested `bridge-broker-stale` and post-cleanup retry modes.
+  Failed-turn retry is awaited before cleanup, so the immutable payloads and
+  saved broker transaction are still live. A real internal mismatch fails
+  closed; a pre-execution infrastructure denial remains an explicit blocked
+  check; and a valid saved result is reused without running the command again.
+- Corrected v0.0.0.15's unconditional no-skip wording. Host containment probes
+  pass without skips on an unnested host and self-skip where a parent sandbox
+  prevents the required nested probe.
+
+### Implementation
+
+- Attachment normalization now computes SHA-256 for each in-memory payload and
+  a deterministic manifest ID over ordered name, media type, generated path,
+  size, and content digest fields.
+- Every Codex, Claude, and Antigravity invocation—including broker follow-ups,
+  failed-turn retries, synthesis, and dissent review—restores attachments from
+  the immutable in-memory payloads first.
+- Restoration removes only the disposable copy's attachment directory,
+  recreates it with owner-only permissions, writes exclusive no-follow files,
+  and verifies regular single-link files against the expected manifest.
+  Sessions without uploads leave any copied project-owned namespace untouched.
+- Fresh broker copies use the same materialization invariant. Executed broker
+  evidence carries the manifest used for the command, and the checkpoint keeps
+  that identity when a failed follow-up is retried without re-execution.
+- Live and archived rooms retain only the canonical manifest ID and attachment
+  metadata, never uploaded bytes or base64. The locked summary, evidence card,
+  copy action, and Markdown export expose the applicable identifier.
+
+### Verification
+
+- All 70 bridge tests pass with no skips on the unnested host, including the
+  Claude, Codex, Antigravity, broker-network, symlink, hardlink, mutation,
+  retry, history-privacy, and credential-containment regressions.
+- Focused attachment, broker-controller, history, and bridge-core checks pass.
+- Lint is clean, the production build succeeds, and both rendered-page checks
+  pass.
+- Browser QA used the real file picker and bridge to create, lock, restore, and
+  stop an attachment-bearing room. The shortened manifest remained readable
+  in the desktop room summary without overflow, and the browser console
+  reported no warnings or errors.
+
+### Remaining limitations
+
+- A content digest proves that two Roundtable records refer to the same bytes;
+  it does not establish that the human-provided file was truthful or safe.
+- A broker check blocked before its disposable workspace is prepared has no
+  attachment-manifest claim. It remains visibly blocked rather than receiving
+  provenance for an execution that never occurred.
+
 ## [v0.0.0.15] — 2026-07-30
 
 ### Request and audit
@@ -44,8 +136,9 @@ remain free of opaque base64 payloads.
 - Added normalization, traversal-resistant filename, media-type injection,
   duplicate, malformed input, size/count, materialization, prompt disclosure,
   snapshot privacy, and all-participant prompt regressions.
-- All 64 bridge tests pass with no skips, including host sandbox-containment
-  probes.
+- On an unnested host, all 64 bridge tests pass with no skips, including host
+  sandbox-containment probes. Environment-dependent probes self-skip when a
+  parent sandbox prevents the required nested profile.
 - Lint, the production build, and both rendered-page checks pass.
 - Browser QA confirmed the upload control, limits, prompt hierarchy, keyboard
   labels, and desktop layout render correctly without displacing the primary

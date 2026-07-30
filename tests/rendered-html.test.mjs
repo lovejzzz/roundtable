@@ -80,6 +80,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /Claude and Antigravity can each request one approved argv command/i);
   assert.match(page, /showCompletionBrief/);
   assert.match(page, /promptAttachments/);
+  assert.match(page, /attachmentManifestId/);
+  assert.match(page, /Attachment set/);
+  assert.match(page, /Attachment manifest/);
   assert.match(page, /contentBase64/);
   assert.match(page, /Remove .*attachment\.name/);
   assert.match(page, /feed-outcome/);
@@ -98,6 +101,7 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /scrollHeight - feed\.scrollTop - feed\.clientHeight <= 72/);
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /\.environment-policy/);
+  assert.match(styles, /\.attachment-manifest/);
   assert.doesNotMatch(styles, /\.agent-stack\s*\{\s*display:\s*none/);
   assert.doesNotMatch(page, /Faithful agent summaries|completed with no concerns/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));

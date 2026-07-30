@@ -132,4 +132,11 @@ test("returns bounded broker evidence and a final-answer prompt", () => {
     round: 2,
     provenance: "bridge-broker",
   });
+  const attachmentManifestId = `sha256:${"c".repeat(64)}`;
+  assert.equal(
+    makeBrokerCheck(["npm", "test"], result, 2, {
+      attachmentManifestId,
+    }).attachmentManifestId,
+    attachmentManifestId,
+  );
 });

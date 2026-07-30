@@ -180,7 +180,12 @@ roundtable-test-request or roundtable-checks block, and do not claim that your o
 the command.`;
 }
 
-export function makeBrokerCheck(argv, result, round) {
+export function makeBrokerCheck(
+  argv,
+  result,
+  round,
+  { attachmentManifestId = "" } = {},
+) {
   const status = result.status || "blocked";
   return {
     command: argv ? displayArgv(argv) : "(request rejected)",
@@ -195,6 +200,7 @@ export function makeBrokerCheck(argv, result, round) {
             "Roundtable could not execute this request in the separate test sandbox.",
     ...(round ? { round } : {}),
     provenance: "bridge-broker",
+    ...(attachmentManifestId ? { attachmentManifestId } : {}),
   };
 }
 

@@ -49,9 +49,20 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
   });
 
   try {
+    const attachmentManifestId = `sha256:${"d".repeat(64)}`;
     await store.initialize();
     await store.append(id, {
-      ...creationEvent(id),
+      ...creationEvent(id, {
+        attachments: [
+          {
+            name: "brief.txt",
+            mediaType: "text/plain",
+            size: 8,
+            path: ".roundtable-attachments/1-brief.txt",
+          },
+        ],
+        attachmentManifestId,
+      }),
       token: "bridge-token-secret",
       ticket: "sse-ticket-secret",
       nested: {
@@ -153,6 +164,7 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
     assert.equal(snapshot.dissent[0].summary, "Keep this dissent.");
     assert.equal(snapshot.dissentReviews.claude.status, "completed");
     assert.equal(snapshot.dissentJudgments.D1.verdict, "represented");
+    assert.equal(snapshot.attachmentManifestId, attachmentManifestId);
 
     const directoryMode = (await stat(directory)).mode & 0o777;
     const logMode = (await stat(join(directory, `${id}.ndjson`))).mode & 0o777;
@@ -164,6 +176,8 @@ test("stores owner-only event logs and restores a completed snapshot", async () 
       raw,
       /bridge-token-secret|nested-secret|credential-secret|history-secret-value|history-bearer-secret/,
     );
+    assert.match(raw, new RegExp(attachmentManifestId));
+    assert.doesNotMatch(raw, /contentBase64|attachmentPayloads|YXR0YWNoZWQgZmlsZQ==/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

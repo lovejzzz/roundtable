@@ -133,9 +133,11 @@ test("returns the first actionable CLI readiness diagnostic", async () => {
 test("keeps attachment bytes private while listing disposable paths in every prompt", async () => {
   const prompts = [];
   let preparedPayload;
+  let preparedManifestId;
   const agentRunner = {
     prepare: async (session) => {
       preparedPayload = session.attachmentPayloads[0];
+      preparedManifestId = session.attachmentManifestId;
     },
     run: async ({ prompt, purpose }) => {
       prompts.push(prompt);
@@ -172,7 +174,7 @@ test("keeps attachment bytes private while listing disposable paths in every pro
       }),
     });
     assert.equal(response.status, 201);
-    const { id } = await response.json();
+    const { id, attachmentManifestId } = await response.json();
     const completed = await waitFor(async () => {
       const snapshot = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
         headers: authHeaders(),
@@ -181,6 +183,9 @@ test("keeps attachment bytes private while listing disposable paths in every pro
     });
 
     assert.equal(preparedPayload.bytes.toString("utf8"), "# Private prompt file\n");
+    assert.match(preparedPayload.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(preparedManifestId, attachmentManifestId);
+    assert.match(attachmentManifestId, /^sha256:[a-f0-9]{64}$/);
     assert.deepEqual(completed.attachments, [
       {
         name: "brief.md",
@@ -190,6 +195,8 @@ test("keeps attachment bytes private while listing disposable paths in every pro
       },
     ]);
     assert.equal("attachmentPayloads" in completed, false);
+    assert.equal(completed.attachmentManifestId, attachmentManifestId);
+    assert.doesNotMatch(JSON.stringify(completed), /IyBQcml2YXRlIHByb21wdCBmaWxl/);
     for (const prompt of prompts.slice(0, 3)) {
       assert.match(prompt, /PROMPT ATTACHMENTS/);
       assert.match(prompt, /\.roundtable-attachments\/1-brief\.md/);

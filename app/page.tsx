@@ -50,6 +50,7 @@ type ReportedCheck = {
   exitCode?: number;
   round?: number;
   provenance?: "agent-reported" | "bridge-broker";
+  attachmentManifestId?: string;
 };
 
 type Message = {
@@ -199,6 +200,7 @@ type SessionSnapshot = {
   projectPath: string;
   topic: string;
   attachments?: Omit<PromptAttachment, "id" | "contentBase64">[];
+  attachmentManifestId?: string;
   codexModel: string;
   claudeModel: string;
   antigravityModel: string;
@@ -449,6 +451,11 @@ function ReportedChecks({ message }: { message: Message }) {
               </span>
               {check.round && <span>Round {check.round}</span>}
               {Number.isInteger(check.exitCode) && <span>Exit {check.exitCode}</span>}
+              {check.attachmentManifestId && (
+                <span title={check.attachmentManifestId}>
+                  Attachments {check.attachmentManifestId.slice(0, 18)}…
+                </span>
+              )}
             </div>
             <code>{check.command}</code>
             <p>{check.summary}</p>
@@ -695,6 +702,7 @@ export default function Home() {
   const [projectPath, setProjectPath] = useState("");
   const [topic, setTopic] = useState(DEFAULT_TOPIC);
   const [promptAttachments, setPromptAttachments] = useState<PromptAttachment[]>([]);
+  const [attachmentManifestId, setAttachmentManifestId] = useState("");
   const [attachmentError, setAttachmentError] = useState("");
   const [rounds, setRounds] = useState("3");
   const [codexModel, setCodexModel] = useState("");
@@ -841,6 +849,7 @@ export default function Home() {
         id: `${snapshot.id}-${index}`,
       })),
     );
+    setAttachmentManifestId(snapshot.attachmentManifestId || "");
     setAttachmentError("");
     setCodexModel(snapshot.codexModel);
     setClaudeModel(snapshot.claudeModel);
@@ -1073,6 +1082,7 @@ export default function Home() {
     const data = (await response.json()) as {
       id?: string;
       error?: string;
+      attachmentManifestId?: string;
       historyWarning?: string;
     };
     if (!response.ok || !data.id) {
@@ -1090,6 +1100,7 @@ export default function Home() {
       })),
     );
     setAttachmentError("");
+    setAttachmentManifestId(data.attachmentManifestId || "");
     setOutcome(null);
     setPendingSteering([]);
     setDissent([]);
@@ -1157,6 +1168,7 @@ export default function Home() {
     setProjectPath(health?.defaultProject || "");
     setTopic(DEFAULT_TOPIC);
     setPromptAttachments([]);
+    setAttachmentManifestId("");
     setAttachmentError("");
     setRounds("3");
     setCodexModel(health?.models.codex.configured || "");
@@ -1305,6 +1317,9 @@ export default function Home() {
             `**Attachments:** ${promptAttachments
               .map((attachment) => `${attachment.name} (${attachmentSize(attachment.size)})`)
               .join(", ")}`,
+            ...(attachmentManifestId
+              ? [`**Attachment manifest:** \`${attachmentManifestId}\``]
+              : []),
           ]
         : []),
       `**Codex:** ${friendlyModelName("codex", codexModel)} · ${friendlyEffort(codexEffort)}`,
@@ -1433,6 +1448,9 @@ export default function Home() {
               Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""
             }${check.round ? ` · Round ${check.round}` : ""} — ${check.summary}`,
           );
+          if (check.attachmentManifestId) {
+            lines.push(`  - Attachment manifest: \`${check.attachmentManifestId}\``);
+          }
         });
         lines.push("");
       }
@@ -2009,6 +2027,14 @@ export default function Home() {
                       </li>
                     ))}
                   </ul>
+                  {attachmentManifestId && (
+                    <p
+                      className="attachment-manifest"
+                      title={attachmentManifestId}
+                    >
+                      Attachment set {attachmentManifestId.slice(0, 18)}…
+                    </p>
+                  )}
                 </div>
               )}
               <dl>

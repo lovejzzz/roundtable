@@ -1,10 +1,31 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
+import { chmod, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
+import { dirname, relative, resolve } from "node:path";
 
 export const MAX_PROMPT_ATTACHMENTS = 5;
 export const MAX_PROMPT_ATTACHMENT_BYTES = 1024 * 1024;
 export const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
 export const PROMPT_ATTACHMENTS_DIRECTORY = ".roundtable-attachments";
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function manifestEntries(payloads) {
+  return payloads.map((payload) => ({
+    name: payload.name,
+    mediaType: payload.mediaType,
+    path: payload.path,
+    size: payload.size,
+    sha256: payload.sha256,
+  }));
+}
+
+export function promptAttachmentManifestId(payloads = []) {
+  if (!payloads.length) return "";
+  return `sha256:${sha256(JSON.stringify(manifestEntries(payloads)))}`;
+}
 
 function safeAttachmentFilename(name, index) {
   const normalized = String(name || "")
@@ -33,7 +54,7 @@ function decodeBase64(value) {
 
 export function normalizePromptAttachments(value) {
   if (value === undefined || value === null) {
-    return { attachments: [], payloads: [] };
+    return { attachments: [], payloads: [], attachmentManifestId: "" };
   }
   if (!Array.isArray(value)) {
     throw new Error("Prompt attachments must be a list.");
@@ -75,18 +96,88 @@ export function normalizePromptAttachments(value) {
     }
 
     const path = `${PROMPT_ATTACHMENTS_DIRECTORY}/${safeAttachmentFilename(name, index)}`;
+    const attachmentSha256 = sha256(bytes);
     attachments.push({ name, mediaType, size: bytes.length, path });
-    payloads.push({ path, bytes });
+    payloads.push({
+      name,
+      mediaType,
+      size: bytes.length,
+      path,
+      sha256: attachmentSha256,
+      bytes,
+    });
   });
-  return { attachments, payloads };
+  return {
+    attachments,
+    payloads,
+    attachmentManifestId: promptAttachmentManifestId(payloads),
+  };
 }
 
-export async function materializePromptAttachments(workspace, payloads = []) {
-  for (const payload of payloads) {
-    const destination = join(workspace, payload.path);
-    await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-    await writeFile(destination, payload.bytes, { mode: 0o600 });
+function attachmentDestination(workspace, path) {
+  const attachmentRoot = resolve(workspace, PROMPT_ATTACHMENTS_DIRECTORY);
+  const destination = resolve(workspace, path);
+  if (
+    dirname(destination) !== attachmentRoot ||
+    relative(attachmentRoot, destination).startsWith("..")
+  ) {
+    throw new Error("An attachment path escaped its private workspace namespace.");
   }
+  return destination;
+}
+
+export async function materializePromptAttachments(
+  workspace,
+  payloads = [],
+  expectedManifestId = promptAttachmentManifestId(payloads),
+) {
+  const attachmentManifestId = promptAttachmentManifestId(payloads);
+  if (!payloads.length) {
+    if (expectedManifestId) {
+      throw new Error("The attachment manifest did not match the available payloads.");
+    }
+    return "";
+  }
+  if (!expectedManifestId || attachmentManifestId !== expectedManifestId) {
+    throw new Error("The attachment manifest did not match the available payloads.");
+  }
+
+  const attachmentRoot = resolve(workspace, PROMPT_ATTACHMENTS_DIRECTORY);
+  await rm(attachmentRoot, { recursive: true, force: true });
+  await mkdir(attachmentRoot, { mode: 0o700 });
+  await chmod(attachmentRoot, 0o700);
+
+  for (const payload of payloads) {
+    if (
+      payload.size !== payload.bytes.length ||
+      payload.sha256 !== sha256(payload.bytes)
+    ) {
+      throw new Error("An attachment payload failed manifest verification.");
+    }
+    const destination = attachmentDestination(workspace, payload.path);
+    const handle = await open(
+      destination,
+      constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_WRONLY |
+        (constants.O_NOFOLLOW || 0),
+      0o600,
+    );
+    try {
+      await handle.writeFile(payload.bytes);
+    } finally {
+      await handle.close();
+    }
+    await chmod(destination, 0o600);
+    const info = await lstat(destination);
+    if (!info.isFile() || info.nlink !== 1 || info.size !== payload.size) {
+      throw new Error("A materialized attachment was not a private regular file.");
+    }
+    if (sha256(await readFile(destination)) !== payload.sha256) {
+      throw new Error("A materialized attachment failed content verification.");
+    }
+  }
+  return attachmentManifestId;
 }
 
 export function promptAttachmentsSection(attachments = []) {

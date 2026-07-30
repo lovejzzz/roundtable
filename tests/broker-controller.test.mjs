@@ -8,7 +8,8 @@ const draftWithRequest = `A focused check should settle this.
 \`\`\``;
 
 test("retries a failed follow-up from the saved broker result without re-executing", async () => {
-  const session = { completedTurns: 1 };
+  const attachmentManifestId = `sha256:${"a".repeat(64)}`;
+  const session = { completedTurns: 1, attachmentManifestId };
   let executions = 0;
   let invocations = 0;
   const invoke = async (prompt) => {
@@ -24,6 +25,7 @@ test("retries a failed follow-up from the saved broker result without re-executi
     return {
       result: { status: "passed", exitCode: 0, stdout: "all passed", stderr: "" },
       sandboxPaths: ["/tmp/request-copy"],
+      attachmentManifestId,
     };
   };
   const request = {
@@ -42,6 +44,11 @@ test("retries a failed follow-up from the saved broker result without re-executi
   assert.equal(invocations, 3);
   assert.equal(reply.text, "The saved passing result supports the recommendation.");
   assert.equal(reply.checks[0].provenance, "bridge-broker");
+  assert.equal(reply.checks[0].attachmentManifestId, attachmentManifestId);
+  assert.equal(
+    session.brokerTransactions.get("claude:1").attachmentManifestId,
+    attachmentManifestId,
+  );
 });
 
 test("rebuilds a drifted follow-up prompt from the checkpoint without rerunning", async () => {
@@ -103,4 +110,56 @@ test("rejects empty or request-bearing broker follow-ups", async () => {
       /no final contribution|another command/i,
     );
   }
+});
+
+test("fails closed when broker execution reports a different attachment manifest", async () => {
+  const session = {
+    completedTurns: 0,
+    attachmentManifestId: `sha256:${"a".repeat(64)}`,
+  };
+  let invocations = 0;
+  await assert.rejects(
+    runBrokerCapableParticipant({
+      session,
+      role: "claude",
+      prompt: "Audit",
+      invoke: async () => {
+        invocations += 1;
+        return draftWithRequest;
+      },
+      execute: async () => ({
+        result: { status: "passed", exitCode: 0 },
+        sandboxPaths: [],
+        attachmentManifestId: `sha256:${"b".repeat(64)}`,
+      }),
+    }),
+    /manifest did not match/i,
+  );
+  assert.equal(invocations, 1);
+  assert.equal(session.brokerTransactions.size, 0);
+});
+
+test("keeps a pre-execution broker denial distinct from manifest mismatch", async () => {
+  const session = {
+    completedTurns: 0,
+    attachmentManifestId: `sha256:${"a".repeat(64)}`,
+  };
+  let invocations = 0;
+  const reply = await runBrokerCapableParticipant({
+    session,
+    role: "claude",
+    prompt: "Audit",
+    invoke: async () => {
+      invocations += 1;
+      return invocations === 1
+        ? draftWithRequest
+        : "The check was blocked before attachment-bound execution.";
+    },
+    execute: async () => ({
+      result: { status: "blocked", error: "sandbox unavailable" },
+      sandboxPaths: [],
+    }),
+  });
+  assert.equal(reply.checks[0].status, "blocked");
+  assert.equal("attachmentManifestId" in reply.checks[0], false);
 });

@@ -450,8 +450,18 @@ function runManagedProcess(
   });
 }
 
+async function prepareParticipantInvocation(session, role) {
+  const workingDirectory = await ensureTestSandbox(session, role);
+  await materializePromptAttachments(
+    workingDirectory,
+    session.attachmentPayloads,
+    session.attachmentManifestId,
+  );
+  return workingDirectory;
+}
+
 async function runCodex(session, prompt, purpose) {
-  const workingDirectory = await ensureTestSandbox(session, "codex");
+  const workingDirectory = await prepareParticipantInvocation(session, "codex");
   const outputDirectory = await mkdtemp(join(tmpdir(), "roundtable-agent-reply-"));
   const outputFile = join(outputDirectory, "last-message.txt");
   try {
@@ -501,7 +511,7 @@ async function runCodex(session, prompt, purpose) {
 }
 
 async function runClaudeModel(session, prompt) {
-  const workingDirectory = await ensureTestSandbox(session, "claude");
+  const workingDirectory = await prepareParticipantInvocation(session, "claude");
   const args = buildClaudeInvocationArgs({
     model: session.claudeModel,
     effort: session.claudeEffort,
@@ -561,9 +571,10 @@ async function runBrokeredCheck(session, requesterRole, argv) {
       session,
       `${requesterRole}-broker`,
     );
-    await materializePromptAttachments(
+    const attachmentManifestId = await materializePromptAttachments(
       brokerSandbox.workspace,
       session.attachmentPayloads,
+      session.attachmentManifestId,
     );
     const scratchHome = join(brokerSandbox.root, "home");
     await mkdir(scratchHome, { recursive: true });
@@ -604,6 +615,7 @@ async function runBrokeredCheck(session, requesterRole, argv) {
         status: classifyBrokerProcessResult(result),
       },
       sandboxPaths: [brokerSandbox.root, brokerSandbox.workspace, scratchHome],
+      attachmentManifestId,
     };
   } catch (error) {
     if (error?.code === "USER_STOP") throw error;
@@ -622,7 +634,7 @@ async function runBrokeredCheck(session, requesterRole, argv) {
 }
 
 async function runAntigravityModel(session, prompt) {
-  const workingDirectory = await ensureTestSandbox(session, "antigravity");
+  const workingDirectory = await prepareParticipantInvocation(session, "antigravity");
   const invoke = (controlPrompt) =>
     withAntigravityPromptFile({
       workingDirectory,
@@ -676,11 +688,9 @@ async function runAntigravityModel(session, prompt) {
 const agentRunner = {
   prepare(session) {
     return Promise.all(
-      ["codex", "claude", "antigravity"].map(async (role) => {
-        const workspace = await ensureTestSandbox(session, role);
-        await materializePromptAttachments(workspace, session.attachmentPayloads);
-        return workspace;
-      }),
+      ["codex", "claude", "antigravity"].map((role) =>
+        ensureTestSandbox(session, role),
+      ),
     );
   },
   run({ session, role, prompt, purpose }) {

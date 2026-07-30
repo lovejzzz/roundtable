@@ -34,7 +34,10 @@ function reportedChecksText(message) {
         `- [${check.status.toUpperCase()}][${
           check.provenance === "bridge-broker" ? "BRIDGE-BROKERED" : "AGENT-REPORTED"
         }] ${check.command} — ${check.summary}` +
-        (Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""),
+        (Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : "") +
+        (check.attachmentManifestId
+          ? ` (attachment manifest ${check.attachmentManifestId})`
+          : ""),
     ),
   ].join("\n");
 }
@@ -848,6 +851,7 @@ export function createBridge({
       projectPath: session.projectPath,
       topic: session.topic,
       attachments: session.attachments,
+      attachmentManifestId: session.attachmentManifestId,
       createdAt: session.createdAt,
       codexModel: session.codexModel,
       claudeModel: session.claudeModel,
@@ -1133,6 +1137,7 @@ export function createBridge({
           topic,
           attachments: normalizedAttachments.attachments,
           attachmentPayloads: normalizedAttachments.payloads,
+          attachmentManifestId: normalizedAttachments.attachmentManifestId,
           codexModel,
           claudeModel,
           antigravityModel,
@@ -1175,6 +1180,7 @@ export function createBridge({
         });
         sendJson(request, response, 201, {
           id,
+          attachmentManifestId: session.attachmentManifestId,
           historyWarning: session.historyWarning,
         });
         setImmediate(() => void runSession(session));
