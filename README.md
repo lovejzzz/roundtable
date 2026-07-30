@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.18**
+Current release: **v0.0.0.19**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -19,7 +19,14 @@ is `agy`. From this folder:
 npm run talk
 ```
 
-The command starts the local bridge and the web room, then opens the connected room in your browser. Press `Control-C` in the terminal to stop both.
+The command starts the local bridge and web room as one supervised launch. It
+prints and opens the connected room only after the web server is ready and the
+new bridge answers an authenticated health check. A port conflict, startup
+timeout, spawn failure, or unexpected child exit stops both process trees and
+reports the failing stage instead of leaving a partial room running. Press
+`Control-C` in the terminal to stop both. Set `ROUNDTABLE_BRIDGE_PORT` when the
+default bridge port 4317 is unavailable; the advertised room uses the same
+configured port.
 
 Roundtable uses each CLI's persisted interactive sign-in. Ambient API keys,
 access tokens, database URLs, registry credentials, and unrelated terminal

@@ -4,6 +4,121 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.19] — 2026-07-30
+
+### Conversation
+
+Prompt: audit v0.0.0.18 for the single highest-leverage startup reliability
+and developer-experience improvement at the boundary among `npm run talk`,
+bridge capability and authentication probes, child-process readiness, and
+shutdown or failure reporting. Agents were asked to inspect the current
+scripts, package metadata, README, latest changelog, and tests; consider hung
+CLI probes, partial startup, port conflicts, premature or signal exits, leaked
+descendants, and actionable diagnostics; use optional sandboxed checks when
+useful; and avoid the just-released EventSource recovery work or any change to
+permission, credential, sandbox, or authentication boundaries.
+
+Across two rounds and six complete contributions, Codex, Claude, and
+Antigravity converged on a transactional launcher invariant: Roundtable must
+not advertise or open the room until vinext is ready and the newly spawned
+bridge returns authenticated health, while every earlier failure must abort
+and clean up both process trees. Codex identified that the launcher opened on
+vinext's `Local:` output alone even though the bridge still had capability,
+authentication, containment, and history initialization to finish. Claude
+showed that authenticated `/health` already distinguishes the fresh bridge
+from an old listener and found that the launcher ignored premature exit code
+zero and signal exits. Claude and Antigravity also found that the launcher
+hardcoded port 4317 despite the bridge honoring `ROUNDTABLE_BRIDGE_PORT`, and
+that direct-child termination did not cover vinext descendants.
+
+No participant requested a brokered check or reported a sandbox check. The
+complete transcript and Completion Brief were read and audited only after all
+six turns and synthesis finished.
+
+### Independent audit
+
+- Accepted joint vinext and authenticated bridge readiness. `/health` is
+  authorized before it returns `{ "ok": true }`, and the launcher creates a
+  fresh 192-bit key, so that response is the existing authoritative proof that
+  this launch completed bridge initialization and successfully bound.
+- Accepted immediate failure for 401 or 403 responses with a port-conflict
+  diagnostic. Other HTTP responses, malformed JSON, and successful responses
+  without `{ "ok": true }` are also rejected as incompatible listeners rather
+  than being mistaken for this bridge.
+- Accepted deriving and validating the launcher port from
+  `ROUNDTABLE_BRIDGE_PORT`, then explicitly passing the normalized value to the
+  bridge child. This removes the real split-brain path where the bridge listened
+  on one port and the room advertised another.
+- Accepted treating child spawn errors, nonzero exits, premature clean exits,
+  and signal exits as failures both during and after startup. The prior
+  `if (code)` condition ignored the latter two cases and could retain a partial
+  stack.
+- Accepted POSIX process groups, Windows tree termination, a two-second
+  graceful window, and bounded forced cleanup. These targets are restricted to
+  the exact child PIDs started by the launcher and do not broaden agent or
+  bridge process permissions.
+- Narrowed the Completion Brief's proposed health-shape validation to
+  authenticated status plus `ok === true`. Binding the launcher to model,
+  history, or containment fields would add brittle coupling without additional
+  identity evidence.
+- Deferred per-command CLI probe deadlines and output caps. A separate timeout
+  per probe could improve diagnostics later, but the accepted 60-second
+  launcher transaction already bounds the whole startup and terminates the
+  bridge process group, including a stuck probe.
+- Rejected treating `EADDRINUSE` as a permanently hung stack. The bridge's
+  unhandled server error already exits nonzero; the actual product defect was
+  that the browser could open first and show an authentication symptom before
+  the launcher noticed the bridge exit.
+
+### Implementation
+
+- Added a zero-dependency launcher module with validated port resolution,
+  cancellable authenticated health polling, an overall joint-readiness barrier,
+  actionable listener classification, exact zero/signal exit descriptions,
+  process-tree signaling, graceful waiting, and SIGKILL escalation.
+- Changed `npm run talk` to launch the bridge and web app in their own POSIX
+  process groups, retain a failure race from the first spawn, recognize vinext
+  readiness across output chunks, and print or open the room URL only after
+  both readiness promises complete.
+- Kept the generated bridge key out of diagnostics. Startup cancellation aborts
+  health polling, while an unexpected child failure after readiness reports the
+  component and reuses the same bounded cleanup path as `Control-C`.
+- Added nine direct launcher regressions for default, custom, and invalid
+  ports; transient health retries; rejecting and unrelated listeners; joint
+  readiness ordering; premature zero and signal exits; startup deadline;
+  negative-PID process-group targeting; and graceful-to-forced cleanup.
+- Updated the README release and startup capability claims.
+
+### Verification
+
+- All 90 bridge tests pass with no skips on the unnested macOS host, including
+  launcher, Claude, Codex, Antigravity, broker-network, credential, symlink,
+  attachment, history, recovery, and containment regressions.
+- All 9 focused launcher tests pass. Lint is clean, the production build
+  succeeds, both rendered-page checks pass, and `git diff --check` is clean.
+- Live validation ran the real launcher without opening a browser and with
+  `ROUNDTABLE_BRIDGE_PORT=4417`. It withheld the final room URL until bridge
+  health and vinext readiness, advertised port 4417, returned authenticated
+  health with all three CLIs available, and served the rendered room.
+- A concurrent validation launch against occupied port 4417 exited 1 with the
+  intended conflict diagnostic, printed no room URL, created no extra listener,
+  and did not disturb the original app. `Control-C` then exited zero and removed
+  the bridge, vinext, and workerd descendants; ports 3000, 3001, 4317, and 4417
+  were all free.
+
+### Remaining limitations
+
+- The startup deadline is intentionally launcher-wide. The error can identify
+  a likely stuck capability or authentication probe, but it does not yet name
+  which individual CLI command consumed the deadline.
+- POSIX shutdown uses isolated process groups and Windows uses `taskkill /T`;
+  the current host directly exercises and unit-tests the POSIX path, while the
+  Windows branch is structurally covered but was not host-validated in this
+  release.
+- No visible room component changed, so this cycle used real launcher/HTTP
+  validation and the existing rendered-page suite rather than browser
+  interaction QA.
+
 ## [v0.0.0.18] — 2026-07-30
 
 ### Conversation
