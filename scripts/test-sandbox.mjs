@@ -70,6 +70,56 @@ function pathIsInside(root, candidate) {
   );
 }
 
+export async function resolveCredentialPathAliases(
+  paths,
+  resolvePath = realpath,
+) {
+  const aliases = [];
+  for (const path of paths.filter(Boolean)) {
+    aliases.push(path);
+    const canonicalPath = await resolvePath(path).catch(() => "");
+    if (canonicalPath) aliases.push(canonicalPath);
+  }
+  return [...new Set(aliases)];
+}
+
+export async function collectAncestorDirectoryEntries(
+  home,
+  target,
+  readDirectory = readdir,
+  resolvePath = realpath,
+) {
+  const ancestors = [];
+  let current = dirname(target);
+  while (current !== home && pathIsInside(home, current)) {
+    const entries = await readDirectory(current, { withFileTypes: true })
+      .then((values) => values.map((value) => value.name))
+      .catch(() => []);
+    const pathAliases = await resolveCredentialPathAliases(
+      [current],
+      resolvePath,
+    );
+    const siblingPaths = [];
+    for (const name of entries) {
+      const entryPath = join(current, name);
+      if (pathIsInside(entryPath, target)) continue;
+      siblingPaths.push(
+        ...(await resolveCredentialPathAliases([entryPath], resolvePath)),
+      );
+    }
+    ancestors.push({
+      path: current,
+      pathAliases,
+      entries,
+      siblingPaths: [...new Set(siblingPaths)],
+    });
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return ancestors;
+}
+
 function unsafeSymlinkError(relativePath) {
   const error = new Error(
     `Project contains a symlink that cannot stay inside its disposable copy: ${relativePath}`,
@@ -212,36 +262,95 @@ function sandboxLiteral(value) {
     .replaceAll('"', '\\"');
 }
 
+function sandboxRegexLiteral(value) {
+  return String(value || "")
+    .replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")
+    .replaceAll('"', '\\"');
+}
+
+function protectedPathSet(home, relativePaths, additionalPaths = []) {
+  return new Set([
+    ...relativePaths.map((name) => join(home, name)),
+    ...additionalPaths.filter(Boolean),
+  ]);
+}
+
 export function buildClaudeSandboxProfile({
   home,
   homeEntries = [],
   claudeHomeEntries = [],
+  claudeHomeAncestorEntries = [],
+  claudeHome = join(home, ".claude"),
+  claudeHomeAliases = [claudeHome],
+  additionalProtectedPaths = [],
   projectPath,
   siblingRoot = "",
   siblingRoots = [],
 }) {
-  const claudeHome = join(home, ".claude");
   const writableRuntimePaths = new Set(CLAUDE_WRITABLE_RUNTIME_PATHS);
+  const protectedPaths = protectedPathSet(
+    home,
+    CLAUDE_PROTECTED_PATHS,
+    additionalProtectedPaths,
+  );
   const lines = [
     "(version 1)",
     "(allow default)",
     `(deny file-write* (literal "${sandboxLiteral(home)}"))`,
-    `(deny file-write* (literal "${sandboxLiteral(claudeHome)}"))`,
-    ...CLAUDE_PROTECTED_PATHS.map(
-      (name) => `(deny file-read* (subpath "${sandboxLiteral(join(home, name))}"))`,
+    ...claudeHomeAliases.map(
+      (path) => `(deny file-write* (literal "${sandboxLiteral(path)}"))`,
+    ),
+    ...[...protectedPaths].map(
+      (path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`,
     ),
     ...homeEntries
-      .filter((name) => name && name !== ".claude")
+      .filter(
+        (name) =>
+          name && !pathIsInside(join(home, name), claudeHome),
+      )
       .map(
         (name) =>
           `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`,
       ),
+    ...claudeHomeAncestorEntries.flatMap(
+      ({ path, pathAliases = [path], entries = [], siblingPaths = [] }) => [
+        ...pathAliases.map(
+          (alias) =>
+            `(deny file-write* (literal "${sandboxLiteral(alias)}"))`,
+        ),
+        ...pathAliases.map(
+          (alias) =>
+            `(deny file-write* (regex #"^${sandboxRegexLiteral(alias)}($|/)"))`,
+        ),
+        ...(siblingPaths.length
+          ? siblingPaths
+          : entries
+              .filter(
+                (name) =>
+                  name && !pathIsInside(join(path, name), claudeHome),
+              )
+              .map((name) => join(path, name))
+        ).map(
+          (siblingPath) =>
+            `(deny file-write* (subpath "${sandboxLiteral(siblingPath)}"))`,
+        ),
+      ],
+    ),
     ...claudeHomeEntries
       .filter((name) => name && !writableRuntimePaths.has(name))
-      .map(
+      .flatMap(
         (name) =>
-          `(deny file-write* (subpath "${sandboxLiteral(join(claudeHome, name))}"))`,
+          claudeHomeAliases.map(
+            (path) =>
+              `(deny file-write* (subpath "${sandboxLiteral(join(path, name))}"))`,
+          ),
       ),
+    ...claudeHomeAliases.flatMap((path) =>
+      CLAUDE_WRITABLE_RUNTIME_PATHS.map(
+        (name) =>
+          `(allow file-write* (regex #"^${sandboxRegexLiteral(join(path, name))}($|/)"))`,
+      ),
+    ),
     `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
     `(deny file-write* (subpath "${sandboxLiteral(projectPath)}"))`,
   ];
@@ -257,19 +366,26 @@ export function buildClaudeSandboxProfile({
 export function buildAntigravitySandboxProfile({
   home,
   homeEntries = [],
+  writablePaths = [join(home, ".antigravity"), join(home, ".gemini")],
+  additionalProtectedPaths = [],
   projectPath,
   siblingRoots = [],
 }) {
-  const writableRoots = new Set([".antigravity", ".gemini"]);
+  const writableRoots = new Set(writablePaths);
+  const protectedPaths = protectedPathSet(
+    home,
+    ANTIGRAVITY_PROTECTED_PATHS,
+    additionalProtectedPaths,
+  );
   const lines = [
     "(version 1)",
     "(allow default)",
     `(deny file-write* (literal "${sandboxLiteral(home)}"))`,
-    ...ANTIGRAVITY_PROTECTED_PATHS.map(
-      (name) => `(deny file-read* (subpath "${sandboxLiteral(join(home, name))}"))`,
+    ...[...protectedPaths].map(
+      (path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`,
     ),
     ...homeEntries
-      .filter((name) => name && !writableRoots.has(name))
+      .filter((name) => name && !writableRoots.has(join(home, name)))
       .map(
         (name) =>
           `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`,
@@ -295,15 +411,18 @@ export function buildCodexPermissionArgs({
   siblingRoot = "",
   siblingRoots = [],
   projectPath = "",
+  additionalProtectedPaths = [],
+  home = "",
 } = {}) {
   const profileName = readOnly
     ? "roundtable_read_only"
     : "roundtable_workspace";
-  const deniedPaths = [
-    ...CODEX_PROTECTED_PATHS.map((name) => `~/${name}`),
-    ...new Set([siblingRoot, ...siblingRoots].filter(Boolean)),
+  const deniedPaths = [...new Set([
+    ...CODEX_PROTECTED_PATHS.map((name) => (home ? join(home, name) : `~/${name}`)),
+    ...additionalProtectedPaths.filter(Boolean),
+    ...[siblingRoot, ...siblingRoots].filter(Boolean),
     ...(projectPath ? [projectPath] : []),
-  ];
+  ])];
   const filesystemTable = deniedPaths
     .map((path) => `${codexConfigString(path)}="deny"`)
     .join(",");

@@ -48,7 +48,7 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /separate disposable project copies/i);
   assert.match(html, /Claude remains read-only/i);
   assert.match(html, /separate brokered runner/i);
-  assert.match(html, /Bridge credentials are never passed to any agent process/i);
+  assert.match(html, /Bridge and ambient API credentials are never passed to agent processes/i);
   assert.match(html, /id="outcome-title"/i);
   assert.match(html, /COMPLETION BRIEF/i);
   assert.match(html, /A completion brief will appear here after the agents finish/i);
@@ -83,8 +83,10 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /const roomMode:/);
   assert.match(page, /function resetToSetup\(\)/);
   assert.match(page, /shouldAutoScrollRef/);
+  assert.match(page, /role-specific runtime and configuration settings/i);
   assert.match(page, /scrollHeight - feed\.scrollTop - feed\.clientHeight <= 72/);
   assert.match(styles, /:focus-visible/);
+  assert.match(styles, /\.environment-policy/);
   assert.doesNotMatch(styles, /\.agent-stack\s*\{\s*display:\s*none/);
   assert.doesNotMatch(page, /Faithful agent summaries|completed with no concerns/i);
   await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));

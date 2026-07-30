@@ -22,8 +22,10 @@ import {
   buildAntigravitySandboxProfile,
   buildCodexPermissionArgs,
   buildClaudeSandboxProfile,
+  collectAncestorDirectoryEntries,
   cleanupTestSandboxes,
   ensureTestSandbox,
+  resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
 } from "../scripts/test-sandbox.mjs";
 
@@ -40,6 +42,192 @@ function credentialProbePath(home, name) {
     ? join(home, name)
     : join(home, name, "credential");
 }
+
+test("protects both lexical and canonical CLI credential-home paths", async () => {
+  const fixtureRoot = await realpath(
+    await mkdtemp(join(tmpdir(), "roundtable-credential-alias-fixture-")),
+  );
+  const home = join(fixtureRoot, "home");
+  const canonicalCodexHome = join(fixtureRoot, "vault", "codex");
+  const configuredCodexHome = join(home, "custom-codex");
+  try {
+    await Promise.all([
+      mkdir(home),
+      mkdir(canonicalCodexHome, { recursive: true }),
+    ]);
+    await symlink(canonicalCodexHome, configuredCodexHome);
+    const protectedAliases = await resolveCredentialPathAliases([
+      configuredCodexHome,
+    ]);
+    assert.deepEqual(protectedAliases, [
+      configuredCodexHome,
+      canonicalCodexHome,
+    ]);
+
+    const claudeProfile = buildClaudeSandboxProfile({
+      home,
+      homeEntries: ["custom-codex"],
+      claudeHomeEntries: [],
+      additionalProtectedPaths: protectedAliases,
+      projectPath: join(fixtureRoot, "project"),
+    });
+    const antigravityProfile = buildAntigravitySandboxProfile({
+      home,
+      homeEntries: ["custom-codex"],
+      additionalProtectedPaths: protectedAliases,
+      projectPath: join(fixtureRoot, "project"),
+    });
+    const codexArgs = buildCodexPermissionArgs({
+      additionalProtectedPaths: protectedAliases,
+    }).join("\n");
+    for (const path of protectedAliases) {
+      assert.ok(claudeProfile.includes(`(deny file-read* (subpath "${path}"))`));
+      assert.ok(antigravityProfile.includes(`(deny file-read* (subpath "${path}"))`));
+      assert.ok(codexArgs.includes(`${JSON.stringify(path)}="deny"`));
+    }
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("a nested Claude config home does not inherit a write denial from its ancestor", () => {
+  const home = "/Users/example";
+  const claudeHome = join(home, ".config", "claude");
+  const profile = buildClaudeSandboxProfile({
+    home,
+    homeEntries: [".config", "Documents"],
+    claudeHome,
+    claudeHomeEntries: ["cache", "settings.json"],
+    claudeHomeAncestorEntries: [
+      {
+        path: join(home, ".config"),
+        entries: ["claude", "gh", "gcloud", "unrelated-app"],
+      },
+    ],
+    projectPath: "/Users/example/project",
+  });
+
+  assert.doesNotMatch(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/\.config"\)/,
+  );
+  assert.match(
+    profile,
+    /deny file-write\* \(literal "\/Users\/example\/\.config"\)/,
+  );
+  assert.match(
+    profile,
+    /deny file-write\* \(regex #"\^\/Users\/example\/\\\.config\(\$\|\/\)"\)/,
+  );
+  assert.match(
+    profile,
+    /allow file-write\* \(regex #"\^\/Users\/example\/\\\.config\/claude\/cache\(\$\|\/\)"\)/,
+  );
+  assert.match(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/Documents"\)/,
+  );
+  assert.match(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/\.config\/gh"\)/,
+  );
+  assert.match(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/\.config\/unrelated-app"\)/,
+  );
+  assert.doesNotMatch(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/\.config\/claude"\)/,
+  );
+  assert.match(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/\.config\/claude\/settings\.json"\)/,
+  );
+  assert.doesNotMatch(
+    profile,
+    /deny file-write\* \(subpath "\/Users\/example\/\.config\/claude\/cache"\)/,
+  );
+});
+
+test("collects every nested config-home ancestor for sibling write isolation", async () => {
+  const home = "/Users/example";
+  const target = join(home, ".config", "vendor", "claude");
+  const seen = [];
+  const values = await collectAncestorDirectoryEntries(
+    home,
+    target,
+    async (path) => {
+      seen.push(path);
+      return [{ name: "sibling" }];
+    },
+  );
+  assert.deepEqual(seen, [
+    join(home, ".config", "vendor"),
+    join(home, ".config"),
+  ]);
+  assert.deepEqual(
+    values.map((value) => value.path),
+    seen,
+  );
+});
+
+test(
+  "the macOS Claude guard allows nested runtime writes but blocks existing and new siblings",
+  { skip: platform() !== "darwin" },
+  async (context) => {
+    const fixtureRoot = await realpath(
+      await mkdtemp(join(tmpdir(), "roundtable-nested-claude-guard-")),
+    );
+    const home = join(fixtureRoot, "home");
+    const configRoot = join(home, ".config");
+    const claudeHome = join(configRoot, "claude");
+    const existingSibling = join(configRoot, "gh");
+    const newSibling = join(configRoot, "new-app");
+    try {
+      await Promise.all([
+        mkdir(join(claudeHome, "cache"), { recursive: true }),
+        mkdir(existingSibling, { recursive: true }),
+      ]);
+      await Promise.all([
+        writeFile(join(claudeHome, "settings.json"), "{}\n"),
+        writeFile(join(existingSibling, "config"), "original\n"),
+      ]);
+      const ancestors = await collectAncestorDirectoryEntries(home, claudeHome);
+      const profile = buildClaudeSandboxProfile({
+        home,
+        homeEntries: [".config"],
+        claudeHome,
+        claudeHomeEntries: ["cache", "settings.json"],
+        claudeHomeAncestorEntries: ancestors,
+        projectPath: join(fixtureRoot, "project"),
+      });
+      try {
+        await execFileAsync("/usr/bin/sandbox-exec", [
+          "-p",
+          profile,
+          "/bin/sh",
+          "-c",
+          'printf runtime > "$1/cache/state"; if printf blocked > "$2/config" 2>/dev/null; then exit 42; fi; if mkdir "$3" 2>/dev/null; then exit 43; fi',
+          "roundtable-nested-claude-guard",
+          claudeHome,
+          existingSibling,
+          newSibling,
+        ]);
+      } catch (error) {
+        if (/sandbox_apply: Operation not permitted/i.test(error?.stderr || "")) {
+          context.skip("The current parent sandbox does not permit nested Seatbelt profiles.");
+          return;
+        }
+        throw error;
+      }
+      assert.equal(await readFile(join(claudeHome, "cache", "state"), "utf8"), "runtime");
+      assert.equal(await readFile(join(existingSibling, "config"), "utf8"), "original\n");
+      await assert.rejects(access(newSibling));
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  },
+);
 
 test("creates isolated per-agent project copies and removes them after the room ends", async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-sandbox-fixture-"));
@@ -236,6 +424,8 @@ test(
     const projectPath = join(home, "Documents", "project");
     const claudeWorkspace = join(fixtureRoot, "claude-workspace");
     const siblingRoot = join(fixtureRoot, "codex-workspace");
+    const relocatedCodexHome = join(home, "custom-codex-home");
+    const relocatedAntigravityHome = join(home, "custom-antigravity-home");
     try {
       await Promise.all([
         mkdir(join(home, ".claude", "session-env"), { recursive: true }),
@@ -245,6 +435,8 @@ test(
         mkdir(projectPath, { recursive: true }),
         mkdir(claudeWorkspace),
         mkdir(siblingRoot),
+        mkdir(relocatedCodexHome, { recursive: true }),
+        mkdir(relocatedAntigravityHome, { recursive: true }),
         ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) =>
           mkdir(dirname(credentialProbePath(home, name)), { recursive: true }),
         ),
@@ -255,6 +447,11 @@ test(
         writeFile(join(home, ".codex", "auth.json"), "codex\n"),
         writeFile(join(home, ".antigravity", "credentials.json"), "antigravity\n"),
         writeFile(join(home, ".gemini", "oauth.json"), "gemini\n"),
+        writeFile(join(relocatedCodexHome, "auth.json"), "relocated-codex\n"),
+        writeFile(
+          join(relocatedAntigravityHome, "credentials.json"),
+          "relocated-antigravity\n",
+        ),
         writeFile(join(projectPath, "original-source"), "project\n"),
         writeFile(join(siblingRoot, "visible"), "sibling\n"),
         ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) =>
@@ -273,6 +470,7 @@ test(
           ),
         ],
         claudeHomeEntries: ["session-env", "settings.json"],
+        additionalProtectedPaths: [relocatedCodexHome, relocatedAntigravityHome],
         projectPath,
         siblingRoot,
       });
@@ -289,6 +487,10 @@ test(
         profile.includes(`(deny file-read* (subpath "${join(home, ".antigravity")}"))`),
       );
       assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".gemini")}"))`));
+      assert.ok(profile.includes(`(deny file-read* (subpath "${relocatedCodexHome}"))`));
+      assert.ok(
+        profile.includes(`(deny file-read* (subpath "${relocatedAntigravityHome}"))`),
+      );
       assert.ok(profile.includes(`(deny file-read* (subpath "${projectPath}"))`));
       try {
         await execFileAsync("/usr/bin/sandbox-exec", [
@@ -308,6 +510,8 @@ test(
           join(home, ".codex", "auth.json"),
           join(home, ".antigravity", "credentials.json"),
           join(home, ".gemini", "oauth.json"),
+          join(relocatedCodexHome, "auth.json"),
+          join(relocatedAntigravityHome, "credentials.json"),
         ]);
       } catch (error) {
         if (/sandbox_apply: Operation not permitted/i.test(error?.stderr || "")) {
@@ -371,7 +575,16 @@ test(
 test("the Codex native permission profile preserves workspace semantics and denies host reads", () => {
   const siblingRoot = "/private/tmp/roundtable-agent-sandbox-claude-example";
   const projectPath = "/Users/example/project";
-  const workspaceArgs = buildCodexPermissionArgs({ siblingRoot, projectPath });
+  const relocatedClaudeHome = "/Users/example/custom-claude-home";
+  const workspaceArgs = buildCodexPermissionArgs({
+    siblingRoot,
+    projectPath,
+    additionalProtectedPaths: [
+      relocatedClaudeHome,
+      "/Users/example/.claude",
+    ],
+    home: "/Users/example",
+  });
   const readOnlyArgs = buildCodexPermissionArgs({ readOnly: true });
   const workspaceText = workspaceArgs.join("\n");
   const readOnlyText = readOnlyArgs.join("\n");
@@ -381,15 +594,20 @@ test("the Codex native permission profile preserves workspace semantics and deni
   assert.match(readOnlyText, /default_permissions="roundtable_read_only"/);
   assert.match(readOnlyText, /extends=":read-only"/);
   for (const name of HOST_PROTECTED_CREDENTIAL_PATHS) {
-    assert.ok(workspaceText.includes(`"~/${name}"="deny"`), `${name} should be denied`);
+    assert.ok(
+      workspaceText.includes(`${JSON.stringify(join("/Users/example", name))}="deny"`),
+      `${name} should be denied`,
+    );
   }
-  assert.ok(workspaceText.includes('"~/.claude"="deny"'));
-  assert.ok(workspaceText.includes('"~/.claude.json"="deny"'));
-  assert.ok(workspaceText.includes('"~/.antigravity"="deny"'));
-  assert.ok(workspaceText.includes('"~/.gemini"="deny"'));
+  assert.ok(workspaceText.includes('"/Users/example/.claude"="deny"'));
+  assert.equal(workspaceText.match(/"\/Users\/example\/\.claude"="deny"/g)?.length, 1);
+  assert.ok(workspaceText.includes('"/Users/example/.claude.json"="deny"'));
+  assert.ok(workspaceText.includes('"/Users/example/.antigravity"="deny"'));
+  assert.ok(workspaceText.includes('"/Users/example/.gemini"="deny"'));
   assert.ok(workspaceText.includes(`${JSON.stringify(siblingRoot)}="deny"`));
   assert.ok(workspaceText.includes(`${JSON.stringify(projectPath)}="deny"`));
-  assert.doesNotMatch(workspaceText, /~\/\.codex/);
+  assert.ok(workspaceText.includes(`${JSON.stringify(relocatedClaudeHome)}="deny"`));
+  assert.doesNotMatch(workspaceText, /\/Users\/example\/\.codex/);
 });
 
 test("the Antigravity guard preserves its runtime roots and isolates host and agent data", () => {
@@ -399,16 +617,21 @@ test("the Antigravity guard preserves its runtime roots and isolates host and ag
     "/private/tmp/roundtable-agent-sandbox-codex-example",
     "/private/tmp/roundtable-agent-sandbox-claude-example",
   ];
+  const relocatedCodexHome = "/Users/example/custom-codex-home";
+  const relocatedClaudeHome = "/Users/example/custom-claude-home";
   const profile = buildAntigravitySandboxProfile({
     home,
     homeEntries: [".antigravity", ".gemini", ".codex", ".claude", "Documents"],
     projectPath,
     siblingRoots,
+    additionalProtectedPaths: [relocatedCodexHome, relocatedClaudeHome],
   });
 
   assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".codex")}"))`));
   assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".claude")}"))`));
   assert.ok(profile.includes(`(deny file-read* (subpath "${projectPath}"))`));
+  assert.ok(profile.includes(`(deny file-read* (subpath "${relocatedCodexHome}"))`));
+  assert.ok(profile.includes(`(deny file-read* (subpath "${relocatedClaudeHome}"))`));
   assert.doesNotMatch(profile, /deny file-write\* \(subpath "\/Users\/example\/\.antigravity"\)/);
   assert.doesNotMatch(profile, /deny file-write\* \(subpath "\/Users\/example\/\.gemini"\)/);
   for (const root of siblingRoots) {

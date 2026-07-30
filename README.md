@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.11**
+Current release: **v0.0.0.12**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -20,6 +20,13 @@ npm run talk
 ```
 
 The command starts the local bridge and the web room, then opens the connected room in your browser. Press `Control-C` in the terminal to stop both.
+
+Roundtable uses each CLI's persisted interactive sign-in. Ambient API keys,
+access tokens, database URLs, registry credentials, and unrelated terminal
+settings are not passed to agent processes. At startup, the bridge checks the
+installed capabilities, persisted Codex and Claude login state, Antigravity
+model access, and the executable Codex permission profile before accepting a
+discussion.
 
 ## How a discussion works
 
@@ -136,7 +143,11 @@ writes only to a bounded set of runtime entries while settings and other
 existing `.claude` state remain write-denied. Antigravity retains only its
 `.antigravity` and `.gemini` runtime write roots, and each agent is denied the
 other CLIs' auth/config paths. Bridge credentials are removed from all agent
-environments before any CLI starts. Home entries are refreshed for every
+environments before any CLI starts. Agent environments are built from
+role-specific allowlists: common runtime necessities plus only the active
+CLI's explicit configuration-home override. Inherited and per-call values are
+filtered by the same policy, and bridge-controlled noninteractive settings are
+applied afterward. Home entries are refreshed for every
 guarded turn rather than being frozen at bridge startup. The copies omit
 repository metadata and generated build directories, reuse installed
 dependencies when present, preserve safe relative symlinks inside the copy, and
@@ -148,6 +159,15 @@ limit. Roots left by a crashed bridge use a dedicated prefix and are removed
 after they become stale without touching live or reply-output directories.
 Links into intentionally omitted generated trees also fail closed rather than
 silently changing meaning in the copy.
+
+Configured CLI homes are resolved once and protected from the other two agents
+through both their lexical paths and canonical symlink targets. A Claude config
+home nested beneath a shared ancestor such as `~/.config/claude` receives a
+bounded exception only for Claude's known runtime paths; existing siblings and
+paths that do not exist yet remain write-denied. The room shows the names—not
+the values—of recognized authentication variables withheld at the process
+boundary. If persisted sign-in is missing or a turn returns a recognizable
+authentication error, Roundtable gives the exact CLI login command to run.
 
 Testing remains optional. Codex and Antigravity are asked to run only focused,
 existing checks when evidence would improve a claim, report the exact command

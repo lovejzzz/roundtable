@@ -4,6 +4,84 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.12] — 2026-07-29
+
+### Conversation
+
+Prompt: let Codex, Claude, and Antigravity inspect v0.0.0.11 and decide the
+single highest-leverage next focus across usefulness, reliability, safety,
+accessibility, and maintainability.
+
+Across two open rounds, all three chose the agent environment-credential
+boundary over another feature or UI pass. The bridge cloned nearly all of its
+terminal environment into every repository-influenced agent child and deleted
+only its own bridge token. Filesystem guards could deny `~/.aws` while the same
+child still inherited `AWS_SECRET_ACCESS_KEY`, an API token, database URL, or
+package-registry credential. Claude then found that a shared minimal allowlist
+could break custom CLI homes and that startup probes used the unsanitized host
+environment, creating probe/turn drift. The room converged on role-scoped
+filtering, persisted-login readiness, one resolved config-home source, and
+actionable diagnostics without a larger health-state redesign.
+
+Two real three-agent release gates refined the boundary further. The first
+caught lexical-only protection for symlinked config homes, a nested
+`CLAUDE_CONFIG_DIR` ancestor write lock, and unverified tilde paths in the
+Codex permission table. The second showed that merely enumerating existing
+siblings under a nested `~/.config/claude` still allowed creation of a new
+sibling. Every blocker was accepted and repaired before release.
+
+### Role-scoped process environments
+
+- Agent children now receive an explicit common runtime baseline plus only the
+  active role's approved config-home variable. Codex never sees Claude's config
+  path, Claude never sees Codex's, and Antigravity receives neither.
+- Filtering applies after inherited values and future overrides are merged, so
+  an override cannot reintroduce a token or unrelated variable. `CI`,
+  `NO_COLOR`, and `TERM` are then fixed by the bridge.
+- API keys, OAuth/access tokens, cloud secrets, database URLs, registry
+  credentials, bridge credentials, `NODE_OPTIONS`, and all other non-allowlisted
+  values remain outside agent processes.
+- Capability, model, persisted-login, and Antigravity model-list probes run
+  under the exact same role-specific environment used for discussion turns.
+  Codex and Claude use their non-mutating login-status commands; Antigravity's
+  authenticated model listing remains its readiness check.
+
+### Credential-home and policy verification
+
+- Custom `CODEX_HOME` and `CLAUDE_CONFIG_DIR` values are normalized only when
+  explicitly set, preserving default Claude keychain behavior. Every Codex,
+  Claude, Antigravity, and Gemini credential root is protected from sibling
+  agents through both its lexical alias and canonical `realpath` target.
+- Codex filesystem denials now use absolute paths rather than unverified tilde
+  expansion. Startup executes the installed Codex permission profile against
+  the selected project boundary and fails closed if the denied read succeeds or
+  the profile cannot run.
+- A nested Claude home such as `~/.config/claude` denies writes across every
+  intermediate ancestor with canonical-aware pathname rules, then allows only
+  the bounded Claude runtime paths. Existing sibling applications and
+  not-yet-created siblings remain blocked.
+- Recognized withheld authentication variable names—not values—appear in the
+  terminal and room. Missing persisted sign-in prevents session creation with
+  the relevant login command, and recognized turn-time authentication failures
+  receive the same safe remediation.
+
+### Verification
+
+- Added role and override isolation, representative secret withholding,
+  probe/turn parity, persisted-login diagnostics, lexical/canonical alias,
+  nested-config ancestor, existing/new sibling, absolute Codex permission, and
+  rendered disclosure regressions.
+- Ran 47 bridge, archive, environment, invocation, history, copy, sandbox,
+  redaction, authentication, and policy tests successfully. The executable
+  macOS tests proved a nested Claude cache remains writable while an existing
+  `~/.config/gh` sibling and a nonexistent sibling are denied. Lint, a
+  production build, two rendered-page checks, and diff validation also passed.
+- Started the real bridge with fake API-key, database, registry, and injection
+  variables present. Health named only the recognized withheld authentication
+  variables, all three persisted-login checks passed, the installed Codex guard
+  probe passed, and six council turns plus two three-agent gates completed
+  without ambient credentials.
+
 ## [v0.0.0.11] — 2026-07-29
 
 ### Conversation

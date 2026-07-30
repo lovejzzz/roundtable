@@ -11,8 +11,12 @@ import {
 } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { delimiter, isAbsolute, join } from "node:path";
-import { buildAgentEnvironment } from "./agent-environment.mjs";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
+import {
+  buildAgentEnvironment,
+  classifyAgentAuthenticationFailure,
+  withheldAuthenticationVariables,
+} from "./agent-environment.mjs";
 import {
   ANTIGRAVITY_REQUIRED_FLAGS,
   antigravityModelEffort,
@@ -26,15 +30,49 @@ import {
   buildCodexPermissionArgs,
   buildAntigravitySandboxProfile,
   buildClaudeSandboxProfile,
+  collectAncestorDirectoryEntries,
   cleanupTestSandboxes,
   ensureTestSandbox,
   getTestSandboxInfo,
+  resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
 } from "./test-sandbox.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
 const token = process.env.ROUNDTABLE_BRIDGE_TOKEN || randomBytes(24).toString("base64url");
+const homeDirectory = homedir();
+const codexHome = process.env.CODEX_HOME
+  ? resolve(process.env.CODEX_HOME)
+  : join(homeDirectory, ".codex");
+const claudeHome = process.env.CLAUDE_CONFIG_DIR
+  ? resolve(process.env.CLAUDE_CONFIG_DIR)
+  : join(homeDirectory, ".claude");
+const antigravityHome = join(homeDirectory, ".antigravity");
+const geminiHome = join(homeDirectory, ".gemini");
+const [
+  codexProtectedPaths,
+  claudeProtectedPaths,
+  antigravityProtectedPaths,
+] = await Promise.all([
+  resolveCredentialPathAliases([codexHome]),
+  resolveCredentialPathAliases([claudeHome]),
+  resolveCredentialPathAliases([antigravityHome, geminiHome]),
+]);
+const agentEnvironmentOverrides = {
+  codex: process.env.CODEX_HOME ? { CODEX_HOME: codexHome } : {},
+  claude: process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: claudeHome } : {},
+  antigravity: {},
+};
+const withheldCredentialVariables = withheldAuthenticationVariables();
+const claudeHomeAncestorEntries = await collectAncestorDirectoryEntries(
+  homeDirectory,
+  claudeHome,
+);
+
+function agentEnvironment(role) {
+  return buildAgentEnvironment(role, agentEnvironmentOverrides[role]);
+}
 
 async function findExecutable(name) {
   for (const directory of (process.env.PATH || "").split(delimiter)) {
@@ -50,10 +88,13 @@ async function findExecutable(name) {
   return "";
 }
 
-function runSmallCommandResult(command, args) {
+function runSmallCommandResult(command, args, role) {
   return new Promise((resolve) => {
     if (!command) return resolve({ output: "", success: false });
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, {
+      env: agentEnvironment(role),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let output = "";
     child.stdout.on("data", (chunk) => {
       output += chunk;
@@ -66,8 +107,8 @@ function runSmallCommandResult(command, args) {
   });
 }
 
-async function runSmallCommand(command, args) {
-  return (await runSmallCommandResult(command, args)).output;
+async function runSmallCommand(command, args, role) {
+  return (await runSmallCommandResult(command, args, role)).output;
 }
 
 function commandSucceeds(command, args) {
@@ -94,14 +135,14 @@ const sandboxExecPath =
     ? sandboxExecCandidate
     : "";
 const codexConfigText = await readFile(
-  join(process.env.CODEX_HOME || join(homedir(), ".codex"), "config.toml"),
+  join(codexHome, "config.toml"),
   "utf8",
 ).catch(() => "");
 const codexConfiguredModel =
   codexConfigText.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1] || "";
 const codexConfiguredEffort =
   codexConfigText.match(/^\s*model_reasoning_effort\s*=\s*["']([^"']+)["']/m)?.[1] || "medium";
-const claudeSettingsText = await readFile(join(homedir(), ".claude", "settings.json"), "utf8").catch(
+const claudeSettingsText = await readFile(join(claudeHome, "settings.json"), "utf8").catch(
   () => "",
 );
 let claudeConfiguredModel = process.env.ANTHROPIC_MODEL || "";
@@ -119,15 +160,27 @@ if (claudeSettingsText) {
   }
 }
 
-const [codexVersion, claudeVersion, antigravityVersion, codexHelp, claudeHelp, antigravityHelp, antigravityModelsResult] =
+const [
+  codexVersion,
+  claudeVersion,
+  antigravityVersion,
+  codexHelp,
+  claudeHelp,
+  antigravityHelp,
+  antigravityModelsResult,
+  codexAuthResult,
+  claudeAuthResult,
+] =
   await Promise.all([
-  runSmallCommand(codexPath, ["--version"]),
-  runSmallCommand(claudePath, ["--version"]),
-  runSmallCommand(antigravityPath, ["--version"]),
-  runSmallCommand(codexPath, ["exec", "--help"]),
-  runSmallCommand(claudePath, ["--help"]),
-  runSmallCommand(antigravityPath, ["--help"]),
-  runSmallCommandResult(antigravityPath, ["models"]),
+  runSmallCommand(codexPath, ["--version"], "codex"),
+  runSmallCommand(claudePath, ["--version"], "claude"),
+  runSmallCommand(antigravityPath, ["--version"], "antigravity"),
+  runSmallCommand(codexPath, ["exec", "--help"], "codex"),
+  runSmallCommand(claudePath, ["--help"], "claude"),
+  runSmallCommand(antigravityPath, ["--help"], "antigravity"),
+  runSmallCommandResult(antigravityPath, ["models"], "antigravity"),
+  runSmallCommandResult(codexPath, ["login", "status"], "codex"),
+  runSmallCommandResult(claudePath, ["auth", "status"], "claude"),
 ]);
 const antigravityModels = (antigravityModelsResult.success ? antigravityModelsResult.output : "")
   .split(/\r?\n/)
@@ -139,8 +192,60 @@ const antigravityConfiguredEffort =
   process.env.ANTIGRAVITY_EFFORT ||
   antigravityModelEffort(antigravityConfiguredModel) ||
   "medium";
+const codexCompatible = Boolean(codexPath && codexHelp.includes("--output-last-message"));
+const claudeCompatible = Boolean(
+  claudePath &&
+    ["--safe-mode", "--strict-mcp-config", "--permission-mode", "--effort"].every((flag) =>
+      claudeHelp.includes(flag),
+    ),
+);
+const antigravityCompatible = Boolean(
+  antigravityPath &&
+    ANTIGRAVITY_REQUIRED_FLAGS.every((flag) =>
+      antigravityHelp.includes(flag),
+    ),
+);
+const codexGuardProbe =
+  process.platform !== "darwin" || !codexCompatible
+    ? { success: Boolean(codexCompatible) }
+    : await runSmallCommandResult(
+        codexPath,
+        [
+          "sandbox",
+          "-P",
+          "roundtable_workspace",
+          "-C",
+          tmpdir(),
+          ...buildCodexPermissionArgs({
+            home: homeDirectory,
+            projectPath: process.cwd(),
+            additionalProtectedPaths: [
+              ...claudeProtectedPaths,
+              ...antigravityProtectedPaths,
+            ],
+          }),
+          "/bin/sh",
+          "-c",
+          'if /bin/test -r "$1"; then exit 42; fi',
+          "roundtable-codex-guard",
+          process.cwd(),
+        ],
+        "codex",
+      );
+const codexSafeCompatible = Boolean(codexCompatible && codexGuardProbe.success);
+
+function availabilityDiagnostic({ label, path, compatible, authenticated, login }) {
+  if (!path) return `${label} is not installed or is not available on PATH.`;
+  if (!compatible) return `${label} does not expose the required safe CLI capabilities.`;
+  if (!authenticated) return `${label} is not signed in. Run \`${login}\`, then restart the bridge.`;
+  return "";
+}
 
 const health = {
+  environmentPolicy: {
+    mode: "role-scoped-allowlist",
+    withheldAuthenticationVariables: withheldCredentialVariables,
+  },
   projectWriteGuard: Boolean(sandboxExecPath),
   testSandbox: {
     codex: Boolean(codexPath),
@@ -168,26 +273,37 @@ const health = {
     },
   },
   codex: {
-    available: Boolean(codexPath && codexHelp.includes("--output-last-message")),
+    available: Boolean(codexSafeCompatible && codexAuthResult.success),
     version: codexVersion,
+    diagnostic: availabilityDiagnostic({
+      label: "Codex CLI",
+      path: codexPath,
+      compatible: codexSafeCompatible,
+      authenticated: codexAuthResult.success,
+      login: "codex login",
+    }),
   },
   claude: {
-    available: Boolean(
-      claudePath &&
-        ["--safe-mode", "--strict-mcp-config", "--permission-mode", "--effort"].every((flag) =>
-          claudeHelp.includes(flag),
-        ),
-    ),
+    available: Boolean(claudeCompatible && claudeAuthResult.success),
     version: claudeVersion,
+    diagnostic: availabilityDiagnostic({
+      label: "Claude CLI",
+      path: claudePath,
+      compatible: claudeCompatible,
+      authenticated: claudeAuthResult.success,
+      login: "claude auth login",
+    }),
   },
   antigravity: {
-    available: Boolean(
-      antigravityPath &&
-        ANTIGRAVITY_REQUIRED_FLAGS.every((flag) =>
-          antigravityHelp.includes(flag),
-        ),
-    ),
+    available: Boolean(antigravityCompatible && antigravityModelsResult.success),
     version: antigravityVersion,
+    diagnostic: availabilityDiagnostic({
+      label: "Antigravity CLI",
+      path: antigravityPath,
+      compatible: antigravityCompatible,
+      authenticated: antigravityModelsResult.success,
+      login: "agy",
+    }),
   },
 };
 
@@ -226,11 +342,11 @@ function terminateSessionProcess(session, reason) {
 
 function runManagedProcess(
   session,
+  role,
   command,
   args,
   input,
   workingDirectory = session.projectPath,
-  environment = {},
 ) {
   if (session.stopRequested) {
     const error = new Error("Discussion stopped.");
@@ -244,7 +360,7 @@ function runManagedProcess(
   const child = spawn(command, args, {
     cwd: workingDirectory,
     detached: process.platform !== "win32",
-    env: buildAgentEnvironment(environment),
+    env: agentEnvironment(role),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const handle = {
@@ -296,7 +412,13 @@ function runManagedProcess(
           return;
         }
         if (code !== 0) {
-          reject(new Error(stderr.trim() || stdout.trim() || `Agent process exited with code ${code}.`));
+          const rawError =
+            stderr.trim() || stdout.trim() || `Agent process exited with code ${code}.`;
+          reject(
+            new Error(
+              classifyAgentAuthenticationFailure(role, rawError) || rawError,
+            ),
+          );
           return;
         }
         resolve(stdout.trim());
@@ -330,6 +452,11 @@ async function runCodex(session, prompt, purpose) {
         readOnly: Boolean(purpose),
         siblingRoots,
         projectPath: session.projectPath,
+        home: homeDirectory,
+        additionalProtectedPaths: [
+          ...claudeProtectedPaths,
+          ...antigravityProtectedPaths,
+        ],
       }),
     );
     if (session.codexModel) args.push("--model", session.codexModel);
@@ -339,6 +466,7 @@ async function runCodex(session, prompt, purpose) {
     args.push("-");
     const stdout = await runManagedProcess(
       session,
+      "codex",
       codexPath,
       args,
       prompt,
@@ -362,29 +490,37 @@ async function runClaude(session, prompt) {
       .map((role) => getTestSandboxInfo(session, role)?.root || "")
       .filter(Boolean);
     const [homeEntries, claudeHomeEntries] = await Promise.all([
-      readdir(homedir(), { withFileTypes: true })
+      readdir(homeDirectory, { withFileTypes: true })
         .then((entries) => entries.map((entry) => entry.name))
         .catch(() => []),
-      readdir(join(homedir(), ".claude"), { withFileTypes: true })
+      readdir(claudeHome, { withFileTypes: true })
         .then((entries) => entries.map((entry) => entry.name))
         .catch(() => []),
     ]);
     const profile = buildClaudeSandboxProfile({
-      home: homedir(),
+      home: homeDirectory,
+      claudeHome,
+      claudeHomeAliases: claudeProtectedPaths,
       homeEntries,
       claudeHomeEntries,
+      claudeHomeAncestorEntries,
+      additionalProtectedPaths: [
+        ...codexProtectedPaths,
+        ...antigravityProtectedPaths,
+      ],
       projectPath: session.projectPath,
       siblingRoots,
     });
     return runManagedProcess(
       session,
+      "claude",
       sandboxExecPath,
       ["-p", profile, claudePath, ...args],
       prompt,
       workingDirectory,
     );
   }
-  return runManagedProcess(session, claudePath, args, prompt, workingDirectory);
+  return runManagedProcess(session, "claude", claudePath, args, prompt, workingDirectory);
 }
 
 async function runAntigravity(session, prompt) {
@@ -402,24 +538,37 @@ async function runAntigravity(session, prompt) {
         const siblingRoots = ["codex", "claude"]
           .map((role) => getTestSandboxInfo(session, role)?.root || "")
           .filter(Boolean);
-        const homeEntries = await readdir(homedir(), { withFileTypes: true })
+        const homeEntries = await readdir(homeDirectory, { withFileTypes: true })
           .then((entries) => entries.map((entry) => entry.name))
           .catch(() => []);
         const profile = buildAntigravitySandboxProfile({
-          home: homedir(),
+          home: homeDirectory,
           homeEntries,
+          writablePaths: antigravityProtectedPaths,
+          additionalProtectedPaths: [
+            ...codexProtectedPaths,
+            ...claudeProtectedPaths,
+          ],
           projectPath: session.projectPath,
           siblingRoots,
         });
         return runManagedProcess(
           session,
+          "antigravity",
           sandboxExecPath,
           ["-p", profile, antigravityPath, ...args],
           "",
           workingDirectory,
         );
       }
-      return runManagedProcess(session, antigravityPath, args, "", workingDirectory);
+      return runManagedProcess(
+        session,
+        "antigravity",
+        antigravityPath,
+        args,
+        "",
+        workingDirectory,
+      );
     },
   });
 }
@@ -461,6 +610,16 @@ server.listen(port, host, () => {
   console.log("  ROUNDTABLE BRIDGE");
   console.log(`  Listening: http://${host}:${port}`);
   console.log(`  Bridge key: ${token}`);
+  if (withheldCredentialVariables.length) {
+    console.log("");
+    console.log(
+      `  Withheld from agent processes: ${withheldCredentialVariables.join(", ")}`,
+    );
+    console.log("  Roundtable uses each CLI's persisted sign-in instead.");
+  }
+  for (const role of ["codex", "claude", "antigravity"]) {
+    if (health[role].diagnostic) console.log(`  ${health[role].diagnostic}`);
+  }
   console.log("");
   console.log("  Open the app with:");
   console.log(

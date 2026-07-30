@@ -1002,8 +1002,14 @@ export function createBridge({
       }
 
       if (request.method === "POST" && url.pathname === "/sessions") {
-        if (AGENT_ROLES.some((role) => !health[role].available)) {
-          sendJson(request, response, 400, { error: "All three CLIs must be available." });
+        const unavailableRoles = AGENT_ROLES.filter((role) => !health[role].available);
+        if (unavailableRoles.length) {
+          const diagnostic = unavailableRoles
+            .map((role) => health[role].diagnostic)
+            .find(Boolean);
+          sendJson(request, response, 400, {
+            error: diagnostic || "All three CLIs must be installed and signed in.",
+          });
           return;
         }
         const payload = await readJson(request);

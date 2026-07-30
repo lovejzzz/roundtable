@@ -106,9 +106,13 @@ type BridgeHealth = {
     claude: { configured: string; effort: string; efforts: string[]; available?: string[] };
     antigravity: { configured: string; effort: string; efforts: string[]; available?: string[] };
   };
-  codex: { available: boolean; version: string };
-  claude: { available: boolean; version: string };
-  antigravity: { available: boolean; version: string };
+  codex: { available: boolean; version: string; diagnostic?: string };
+  claude: { available: boolean; version: string; diagnostic?: string };
+  antigravity: { available: boolean; version: string; diagnostic?: string };
+  environmentPolicy?: {
+    mode: "role-scoped-allowlist";
+    withheldAuthenticationVariables: string[];
+  };
   history: {
     available: boolean;
     retention: { maxRecords: number; maxDays: number };
@@ -1574,7 +1578,13 @@ export default function Home() {
               <span className="agent-glyph codex-glyph">C</span>
               <div className="agent-copy">
                 <strong>Codex CLI</strong>
-                <small>{connected ? shortVersion(health?.codex.version) : "Waiting for bridge"}</small>
+                <small>
+                  {connected
+                    ? health?.codex.available
+                      ? shortVersion(health.codex.version)
+                      : health?.codex.diagnostic || "Unavailable"
+                    : "Waiting for bridge"}
+                </small>
                 <label className="model-picker">
                   <span>MODEL</span>
                   <div className="model-input-stack">
@@ -1613,7 +1623,13 @@ export default function Home() {
               <span className="agent-glyph claude-glyph">A</span>
               <div className="agent-copy">
                 <strong>Claude CLI</strong>
-                <small>{connected ? shortVersion(health?.claude.version) : "Waiting for bridge"}</small>
+                <small>
+                  {connected
+                    ? health?.claude.available
+                      ? shortVersion(health.claude.version)
+                      : health?.claude.diagnostic || "Unavailable"
+                    : "Waiting for bridge"}
+                </small>
                 <label className="model-picker">
                   <span>MODEL</span>
                   <div className="model-input-stack">
@@ -1653,7 +1669,11 @@ export default function Home() {
               <div className="agent-copy">
                 <strong>Antigravity CLI</strong>
                 <small>
-                  {connected ? shortVersion(health?.antigravity.version) : "Waiting for bridge"}
+                  {connected
+                    ? health?.antigravity.available
+                      ? shortVersion(health.antigravity.version)
+                      : health?.antigravity.diagnostic || "Unavailable"
+                    : "Waiting for bridge"}
                 </small>
                 <label className="model-picker">
                   <span>MODEL</span>
@@ -1724,6 +1744,17 @@ export default function Home() {
             <p className="model-hint">
               Model and reasoning choices lock when the room starts.
             </p>
+            {health?.environmentPolicy?.mode === "role-scoped-allowlist" && (
+              <p className="environment-policy">
+                Agent processes receive only role-specific runtime and configuration settings.
+                {health.environmentPolicy.withheldAuthenticationVariables.length > 0 && (
+                  <>
+                    {" "}Withheld ambient credentials:{" "}
+                    {health.environmentPolicy.withheldAuthenticationVariables.join(", ")}.
+                  </>
+                )}
+              </p>
+            )}
           </div>
             </>
           ) : (
@@ -2090,7 +2121,8 @@ export default function Home() {
                 {health?.projectWriteGuard
                   ? " Native permissions plus outer macOS guards read-deny common host credential paths and isolate every workspace. Claude has no shell access; it remains on Read, Glob, and Grep until checks can run beyond the model-client boundary."
                   : " Without a supported OS guard, Claude stays read-only."}
-                {" "}Bridge credentials are never passed to any agent process.
+                {" "}Bridge and ambient API credentials are never passed to agent processes;
+                each CLI uses its own persisted sign-in.
               </p>
             </div>
           </section>

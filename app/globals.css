@@ -847,6 +847,15 @@ button {
   line-height: 1.5;
 }
 
+.environment-policy {
+  margin: 10px 0 0;
+  border-left: 2px solid #4c716b;
+  padding: 2px 0 2px 9px;
+  color: #78958f;
+  font-size: 8px;
+  line-height: 1.5;
+}
+
 .routing-disclosure {
   margin: 9px 0 0;
   color: #7faaa2;

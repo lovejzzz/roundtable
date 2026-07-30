@@ -53,7 +53,7 @@ async function startTestBridge(agentRunner, options = {}) {
   const { server, sessions } = createBridge({
     token,
     defaultProject: "/test/project",
-    health,
+    health: options.health || health,
     agentRunner,
     resolveProject: async () => "/test/project",
     sessionTtlMs: 5_000,
@@ -94,6 +94,36 @@ test("rejects an Antigravity model and effort combination the CLI cannot run", a
       const payload = await response.json();
       assert.match(payload.error, /requires high reasoning effort/i);
     });
+    assert.equal(bridge.sessions.size, 0);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("returns the first actionable CLI readiness diagnostic", async () => {
+  const agentRunner = {
+    run: async () => "unused",
+    stop: async () => {},
+  };
+  const unavailableHealth = structuredClone(health);
+  unavailableHealth.claude.available = false;
+  unavailableHealth.claude.diagnostic =
+    "Claude CLI is not signed in. Run `claude auth login`, then restart the bridge.";
+  const bridge = await startTestBridge(agentRunner, { health: unavailableHealth });
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Validate readiness",
+        rounds: 1,
+      }),
+    });
+    assert.equal(response.status, 400);
+    const payload = await response.json();
+    assert.match(payload.error, /claude auth login/);
     assert.equal(bridge.sessions.size, 0);
   } finally {
     await bridge.close();
