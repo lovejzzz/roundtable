@@ -29,11 +29,12 @@ changes from pre-existing code.
   pre-existing observations.
 - Git context generation is best-effort: missing metadata, timeouts, or large
   repositories cannot prevent a discussion from starting.
-- The README now defines an evidence-based, four-arm protocol for comparing
-  Roundtable-assisted Codex and Claude workflows with their single-agent
-  baselines. It separates accepted product output from activity, specifies
-  time, quality, cost, and reliability metrics, and states explicitly that
-  v0.0.0.26 has not yet established a causal efficiency lift.
+- The README now defines an evidence-based comparison between a human working
+  with one coding model and a human delegating to Codex as a butler that
+  consolidates a multi-model Roundtable and manages delivery. It separates
+  accepted product output from activity, treats CLI subscriptions as fixed
+  recurring fees instead of inventing token-priced API costs, and states
+  explicitly that v0.0.0.26 has not yet established a causal efficiency lift.
 
 ### Verification
 

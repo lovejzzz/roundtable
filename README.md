@@ -178,30 +178,45 @@ Published results differ sharply by task and setting:
 | [Peng et al. (2023)](https://www.microsoft.com/en-us/research/publication/the-impact-of-ai-on-developer-productivity-evidence-from-github-copilot/) | In a controlled JavaScript HTTP-server task, developers with GitHub Copilot completed the task 55.8% faster. | Bounded implementation tasks can show large gains, but do not represent mature product work by themselves. |
 | [Cui et al. (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4945566) | Three randomized field experiments at Microsoft, Accenture, and a Fortune 100 company covered 4,867 developers. Pooled access to a coding assistant increased completed tasks by 26.08% (standard error 10.3%), with noisy and varying individual experiments. | Use real work and enough repeated tasks; report uncertainty and differences by task and developer experience. |
 | [Becker et al. (2025)](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) | Sixteen experienced developers completed 246 randomized issues in their own mature repositories. Allowing early-2025 AI tools increased completion time by 19%, even though participants believed the tools made them faster. | Do not use satisfaction or estimated time saved as the efficiency result. Measure actual time and accepted output. |
-| [METR design update (2026)](https://metr.org/blog/2026-02-24-uplift-update/) | A follow-up produced raw estimates consistent with roughly 4–18% speedup, but the authors judged the signal unreliable because participation selection changed and parallel-agent use made time tracking difficult. | Record concurrent runs and active human time explicitly; publish unusable or biased data as such. |
+| [METR design update (2026)](https://metr.org/blog/2026-02-24-uplift-update/) | A follow-up produced raw estimates consistent with roughly 4–18% speedup, but the authors judged the signal unreliable because participation selection changed and parallel-agent use made time tracking difficult. | Measure the complete orchestrated workflow and publish unusable or biased data as such. |
 | [Demirer, Musolff, and Yang (2026)](https://www.nber.org/papers/w35275) | A matched event study of more than 100,000 GitHub developers associated autonomous agents with 180% more commits, but only 30% more releases and no increase in app usage. | Count merge-ready, released, and used improvements. Activity is a diagnostic, not the product outcome. |
 
 [SWE-bench](https://arxiv.org/abs/2310.06770) demonstrates a useful task
 shape—2,294 issue-and-pull-request problems from 12 repositories with executable
-evaluation—but benchmark pass rate alone does not measure the human time,
-steering, review, cost, or downstream product value of a workflow.
+evaluation—but benchmark pass rate alone does not measure orchestration,
+consolidation, end-to-end delivery, or downstream product value.
 
 Together, these studies rule out a credible universal multiplier. Roundtable
-must be compared with the exact Codex-only and Claude-only workflows, on the
-same repository and task distribution, under the same acceptance and budget
-rules.
+must be tested as the system the user actually operates:
+
+```text
+single-model baseline: human ↔ one coding model
+Roundtable treatment:  human ↔ Codex butler ↔ multiple deliberating models
+                                              ↓
+                                  consolidated judgment
+                                              ↓
+                                  Codex-managed delivery
+```
+
+The question is whether Codex, acting as the user's butler and consolidator,
+can use the multi-model discussion to deliver better product changes than the
+same human working with one model. It is not a comparison of isolated model
+answers, and it is not primarily a measure of human active hours.
 
 ### Controlled comparison
 
-Use four arms so the implementing agent is not confused with the value of the
-Roundtable discussion:
+Use three primary arms:
 
 | Arm | Workflow |
 | --- | --- |
-| Codex only | Codex plans, implements, tests, and repairs from the original task. |
-| Roundtable → Codex | Roundtable produces a frozen Completion Brief; a fresh Codex run implements from the original task plus that brief. |
-| Claude only | Claude plans, implements, tests, and repairs from the original task. |
-| Roundtable → Claude | Roundtable produces the same kind of frozen brief; a fresh Claude run implements it. |
+| Human + Codex | The user works with Codex alone to decide, implement, test, repair, and prepare the change. |
+| Human + Claude | The user works with Claude Code alone through the same delivery boundary. |
+| Human + Codex butler + Roundtable | The user delegates to Codex; Codex launches and steers the multi-model room, consolidates its audited Completion Brief, then manages implementation, tests, repair, and delivery. |
+
+An optional fourth **parallel answers + Codex** ablation gives Codex the same
+models and approximate invocation allowance but removes sealed opening,
+cross-examination, and audited synthesis. It separates the value of Roundtable's
+deliberation design from the value of simply buying more model attempts.
 
 For each task:
 
@@ -209,26 +224,28 @@ For each task:
    acceptance rubric, and hidden test suite.
 2. Randomize arm order and use fresh worktrees or clones. Never let one arm see
    another arm's output.
-3. Match the implementing model, reasoning effort, context, and retry policy
-   within each pair. Roundtable's extra calls, time, and cost remain part of its
-   treatment.
+3. Keep the same human owner and delivery boundary. Match Codex model, effort,
+   permissions, and repair ceiling between the Codex baseline and Roundtable
+   arm. Roundtable's additional participants, deliberation, and consolidation
+   remain part of its treatment.
 4. Run two complementary protocols:
-   - **Fixed budget:** stop every arm at the same wall-clock and economic budget,
-     then compare accepted quality.
+   - **Fixed delivery window:** stop every arm at the same elapsed-time or
+     attempt ceiling, then compare accepted product quality.
    - **Fixed quality:** allow repair until the same acceptance gate is reached
-     or a ceiling is hit, then compare time and cost.
+     or a ceiling is hit, then compare end-to-end cycle time and rework.
 5. Have reviewers who do not know the arm judge requirement coverage,
    maintainability, and regression risk. Run hidden tests outside the agent
    workspace.
 6. Keep aborted, failed, and timed-out runs in the result set. Record
-   crossovers, manual rescue, and parallel agent use instead of silently
-   dropping them.
+   crossovers, manual rescue, quota exhaustion, and unavailable participants
+   instead of silently dropping them.
 
 A practical pilot is 12–20 real backlog tasks across four strata: localized
 bugs, cross-cutting changes, security or reliability work, and ambiguous
-product or UX decisions. Four arms with two runs per task produce 96–160 runs.
-That is enough to expose instrumentation problems and estimate variance, but it
-is a pilot—not a guaranteed statistically powered conclusion.
+product or UX decisions. Three primary arms with two runs per task produce
+72–120 runs; adding the ablation produces 96–160. That is enough to expose
+instrumentation problems and estimate variance, but it is a pilot—not a
+guaranteed statistically powered conclusion.
 
 ### Metrics and calculation
 
@@ -237,39 +254,67 @@ checks, satisfy the task rubric, clear a blinded review threshold, and require
 no undisclosed manual repair. Report post-merge rollback, escaped-defect, and
 usage or product-outcome data separately when it becomes available.
 
-The primary workflow metric is accepted output per human active hour:
+The primary comparison has three separately visible dimensions:
+
+- **delivery success:** first-pass and final acceptance rates;
+- **product quality:** blinded requirement, maintainability, and regression-risk
+  scores plus hidden tests;
+- **workflow speed:** end-to-end elapsed time from delegation to merge-ready
+  output, including Roundtable discussion and Codex consolidation.
+
+For one quantitative headline, normalize the predeclared blinded quality score
+to `0–1`; a failed acceptance gate receives zero:
 
 ```text
-throughput = accepted changes / human active hours
-lift (%) = 100 × (Roundtable throughput / single-agent throughput - 1)
+quality-adjusted completion = accepted × normalized quality score
+workflow throughput = Σ quality-adjusted completions / Σ end-to-end elapsed hours
+lift (%) = 100 × (Roundtable throughput / single-model throughput - 1)
 ```
 
-Human active time includes task setup, prompting, reading, steering, reviewing,
-repairing, and release preparation. Wall time is reported separately so
-parallel agents do not create imaginary human-time savings.
+Always publish the acceptance, quality, and elapsed-time components beside this
+composite so a high score cannot hide slow delivery or weak quality. The same
+human is part of both systems; human interventions and steering are useful
+autonomy diagnostics, not the primary denominator.
 
 Also report:
 
 - first-pass and final acceptance rate;
 - hidden-test pass rate and blinded review score;
 - time to first valid patch and time to merge-ready;
-- human active minutes, wall-clock minutes, steering actions, and repair loops;
-- model calls, failures, tokens, and estimated API cost;
+- total elapsed minutes, user interventions, steering actions, and repair loops;
+- participant calls, failures, fallbacks, and subscription quota exhaustion;
 - manual edits after the agent stops;
 - critical regressions, rollbacks, and escaped defects;
 - release and product-impact outcomes when observable.
 
-For an economic view, convert model spend to equivalent labor time at several
-declared loaded hourly rates instead of hiding a subjective rate inside one
-score:
+Roundtable uses signed-in CLI subscriptions, so its model cash cost is not
+reconstructed from tokens or API list prices. Within included usage, the
+marginal per-call fee is zero; the relevant cash inputs are the actual recurring
+subscription fees and any real overage or add-on charges. Compare both:
 
 ```text
-economic hours = human active hours + model cost / loaded hourly rate
-economic throughput = accepted changes / economic hours
+let C = actual Codex subscription fee allocated to the evaluation period
+let L = actual Claude subscription fee allocated to the evaluation period
+let A = actual Antigravity subscription fee allocated to the evaluation period
+
+Human + Codex fixed model fee       = C
+Human + Claude fixed model fee      = L
+Codex-butler + Roundtable fixed fee = C + L + A
+
+incremental Roundtable fee vs Codex  = L + A
+incremental Roundtable fee vs Claude = C + A
+
+subscription cost per accepted change =
+  applicable fixed model fee / accepted changes
 ```
 
-Report the Codex and Claude comparisons independently. For every metric, show
-the paired task delta, median, win/tie/loss count, and a task-clustered bootstrap
+Use the invoiced amount for each variable, including `0` for a free or bundled
+participant. If all subscriptions were already paid for independently, report
+both the full allocated stack and an incremental cash fee of zero rather than
+inventing a token cost. Still report the evaluation window, included quotas,
+throttling, and utilization so the result can be reproduced. Report the Codex
+and Claude single-model comparisons independently. For every metric, show the
+paired task delta, median, win/tie/loss count, and a task-clustered bootstrap
 95% confidence interval. Stratify by task type and complexity; do not average a
 small bug fix and an architectural decision into an unexplained headline.
 
@@ -294,10 +339,11 @@ sealed-opening input hashes, context coverage, synthesis attempts, audits,
 revision provenance, and sanitized Git-change evidence. Those fields support
 the diagnostics and an audit trail. A causal efficiency comparison still needs
 an experiment record linking the discussion to its implementation commit,
-arm and budget, human active-time capture, concurrent-run count, token and cost
-usage, hidden acceptance result, blinded score, and downstream release outcome.
-Until those records exist and the controlled runs are completed, the honest
-Roundtable efficiency result is **not yet measured**.
+arm and delivery ceiling, butler interventions, participant availability and
+quota failures, actual subscription allocation, hidden acceptance result,
+blinded score, and downstream release outcome. Until those records exist and
+the controlled runs are completed, the honest Roundtable efficiency result is
+**not yet measured**.
 
 ## Local discussion history
 
