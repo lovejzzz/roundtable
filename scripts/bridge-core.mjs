@@ -423,7 +423,7 @@ export function createBridge({
     return {
       ...(allowedOrigin ? { "Access-Control-Allow-Origin": allowedOrigin } : {}),
       "Access-Control-Allow-Headers": "Authorization, Content-Type",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
       "Access-Control-Allow-Private-Network": "true",
       "Cache-Control": "no-store",
       Vary: "Origin",
@@ -442,9 +442,19 @@ export function createBridge({
     let body = "";
     for await (const chunk of request) {
       body += chunk;
-      if (body.length > maxBodyLength) throw new Error("Request body is too large.");
+      if (body.length > maxBodyLength) {
+        const error = new Error("Request body is too large.");
+        error.statusCode = 400;
+        throw error;
+      }
     }
-    return body ? JSON.parse(body) : {};
+    try {
+      return body ? JSON.parse(body) : {};
+    } catch {
+      const error = new Error("Request body must be valid JSON.");
+      error.statusCode = 400;
+      throw error;
+    }
   }
 
   function authorized(request) {
@@ -837,6 +847,7 @@ export function createBridge({
       }
     } finally {
       await session.historyWriteChain;
+      session.historyClosed = true;
       await agentRunner.cleanup?.(session).catch(() => {});
       for (const client of session.clients) client.end();
       session.clients.clear();
@@ -1028,7 +1039,16 @@ export function createBridge({
       }
 
       if (request.method === "DELETE" && historyMatch) {
-        const deleted = await historyStore.delete(historyMatch[1]);
+        const id = historyMatch[1];
+        const liveSession = sessions.get(id);
+        if (liveSession?.keepHistory && !liveSession.historyClosed) {
+          sendJson(request, response, 409, {
+            error: "End this discussion before deleting its local history.",
+          });
+          return;
+        }
+        if (liveSession) await liveSession.historyWriteChain;
+        const deleted = await historyStore.delete(id);
         if (!deleted) {
           sendJson(request, response, 404, { error: "Archived discussion not found." });
           return;
@@ -1041,6 +1061,16 @@ export function createBridge({
         const payload = await readJson(request);
         if (payload.confirm !== "clear") {
           sendJson(request, response, 400, { error: "Clear history requires confirmation." });
+          return;
+        }
+        if (
+          [...sessions.values()].some(
+            (session) => session.keepHistory && !session.historyClosed,
+          )
+        ) {
+          sendJson(request, response, 409, {
+            error: "End active discussions before clearing local history.",
+          });
           return;
         }
         const deleted = await historyStore.clear();
@@ -1094,7 +1124,15 @@ export function createBridge({
           });
           return;
         }
-        const projectPath = await resolveProject(String(payload.projectPath || "").trim());
+        let projectPath;
+        try {
+          projectPath = await resolveProject(String(payload.projectPath || "").trim());
+        } catch (error) {
+          sendJson(request, response, 400, {
+            error: error instanceof Error ? error.message : "Project folder is invalid.",
+          });
+          return;
+        }
         const modelPattern = /^[A-Za-z0-9._:/[\]-]+$/;
         if (
           (codexModel && !modelPattern.test(codexModel)) ||
@@ -1162,6 +1200,7 @@ export function createBridge({
           historyWarning: "",
           pendingHistoryWarning: "",
           historyWriteChain: Promise.resolve(),
+          historyClosed: !keepHistory,
           createdAt: now().toISOString(),
           clients: new Set(),
           child: null,
@@ -1325,8 +1364,19 @@ export function createBridge({
 
       sendJson(request, response, 404, { error: "Not found." });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Bridge request failed.";
-      sendJson(request, response, 400, { error: message });
+      if (error?.code === "HISTORY_RECORD_MISSING") {
+        sendJson(request, response, 409, {
+          error: "The archived discussion was deleted before this update completed.",
+        });
+        return;
+      }
+      if (error?.statusCode === 400) {
+        sendJson(request, response, 400, { error: error.message });
+        return;
+      }
+      sendJson(request, response, 500, {
+        error: "Roundtable could not complete the local request.",
+      });
     }
   });
 

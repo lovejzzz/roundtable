@@ -130,6 +130,156 @@ test("returns the first actionable CLI readiness diagnostic", async () => {
   }
 });
 
+test("advertises authenticated DELETE requests in CORS preflight", async () => {
+  const bridge = await startTestBridge({
+    run: async () => "unused",
+    stop: async () => {},
+  });
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/history`, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "http://localhost:3000",
+        "Access-Control-Request-Method": "DELETE",
+        "Access-Control-Request-Headers": "authorization,content-type",
+      },
+    });
+    assert.equal(response.status, 204);
+    assert.match(response.headers.get("access-control-allow-methods") || "", /\bDELETE\b/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("blocks history deletion until a retained session drains its write chain", async () => {
+  let releaseFirstTurn;
+  const firstTurnGate = new Promise((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let ordinaryCalls = 0;
+  let deleteCalls = 0;
+  let clearCalls = 0;
+  const events = new Map();
+  const historyStore = {
+    enabled: true,
+    retention: { maxRecords: 50, maxDays: 30 },
+    async append(id, event) {
+      events.set(id, [...(events.get(id) || []), event]);
+    },
+    async list() {
+      return [];
+    },
+    async get() {
+      return null;
+    },
+    async delete() {
+      deleteCalls += 1;
+      return true;
+    },
+    async clear() {
+      clearCalls += 1;
+      return 1;
+    },
+  };
+  const agentRunner = {
+    async run({ purpose }) {
+      if (purpose === "synthesis") {
+        return '{"decision":"Finish","rationale":"History drained.","actions":[],"openQuestions":[],"consensus":true}';
+      }
+      ordinaryCalls += 1;
+      if (ordinaryCalls === 1) await firstTurnGate;
+      return "Verified contribution.";
+    },
+    async stop() {},
+  };
+  const bridge = await startTestBridge(agentRunner, { historyStore });
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Protect live history",
+        rounds: 1,
+        keepHistory: true,
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const { id } = await createResponse.json();
+
+    const recordDelete = await fetch(`${bridge.baseUrl}/history/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(recordDelete.status, 409);
+    assert.match((await recordDelete.json()).error, /end this discussion/i);
+
+    const clearDelete = await fetch(`${bridge.baseUrl}/history`, {
+      method: "DELETE",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ confirm: "clear" }),
+    });
+    assert.equal(clearDelete.status, 409);
+    assert.match((await clearDelete.json()).error, /end active discussions/i);
+    assert.equal(deleteCalls, 0);
+    assert.equal(clearCalls, 0);
+
+    releaseFirstTurn();
+    await waitFor(() => bridge.sessions.get(id)?.historyClosed);
+    assert.equal(bridge.sessions.get(id)?.phase, "complete");
+    assert.ok(events.get(id)?.some((event) => event.type === "session.status"));
+
+    const completedDelete = await fetch(`${bridge.baseUrl}/history/${id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(completedDelete.status, 200);
+    assert.equal(deleteCalls, 1);
+  } finally {
+    releaseFirstTurn();
+    await bridge.close();
+  }
+});
+
+test("returns a sanitized server error when history storage fails", async () => {
+  const historyStore = {
+    enabled: true,
+    retention: { maxRecords: 50, maxDays: 30 },
+    async append() {},
+    async list() {
+      return [];
+    },
+    async get() {
+      return null;
+    },
+    async delete() {
+      throw new Error("EACCES: /Users/private/Library/Application Support/Roundtable/history");
+    },
+    async clear() {
+      return 0;
+    },
+  };
+  const bridge = await startTestBridge(
+    { run: async () => "unused", stop: async () => {} },
+    { historyStore },
+  );
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/history/history-test-0001`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    assert.equal(response.status, 500);
+    const payload = await response.json();
+    assert.match(payload.error, /could not complete the local request/i);
+    assert.doesNotMatch(payload.error, /Users|Library|Roundtable\/history/i);
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("keeps attachment bytes private while listing disposable paths in every prompt", async () => {
   const prompts = [];
   let preparedPayload;

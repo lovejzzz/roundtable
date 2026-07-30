@@ -4,6 +4,127 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.20] — 2026-07-30
+
+### Conversation
+
+Prompt: audit v0.0.0.19 for the single highest-leverage privacy, recovery, and
+testing improvement at the boundary between an active `keepHistory` discussion
+and authenticated record deletion or clear. Agents were asked to inspect the
+bridge, history store, UI actions, latest changelog, README, and tests; determine
+what queued or future writes do after deletion; consider orphan NDJSON bytes,
+index consistency, restart behavior, UI semantics, status codes, and storage
+failures; use optional sandboxed checks when useful; and avoid the just-released
+launcher and stream-recovery work or any permission, credential, sandbox, or
+authentication change.
+
+Across two rounds and six complete contributions, Codex, Claude, and
+Antigravity agreed that deletion was not yet a truthful browser contract.
+Codex traced the event-file recreation path: the store appended a non-creation
+event before checking whether its ID was still indexed. Claude found that the
+browser path was currently blocked by CORS because DELETE was not advertised,
+and that terminal session phase was insufficient because the final status write
+could still be queued. Antigravity confirmed the store and route paths and ran
+the full bridge suite twice through the Roundtable broker; each nested run
+reported 87 passes and three environment-skipped host containment probes.
+
+The second round refined the failure model. Codex corrected the claim that an
+ordinary post-deletion judgment recreates data: the route first reads the
+archive, so only a concurrent get-delete-append interleaving reaches the store
+guard. Claude identified index/file divergence when deletion I/O fails and the
+startup path that could otherwise recreate an interruption-only file for a
+missing transcript. The complete transcript and coverage-preserving Completion
+Brief were read only after all six turns and synthesis finished.
+
+### Independent audit
+
+- Accepted an explicit `historyClosed` lifecycle barrier. A retained session
+  begins closed only when history is disabled; otherwise record deletion and
+  clear return 409 until the session's serialized write chain drains in
+  `finally`. Merely checking a terminal phase was rejected because the final
+  durable status can still be pending.
+- Accepted rejecting every non-`session.created` append for an unindexed ID
+  before `appendFile`. This closes both queued live-write and concurrent
+  judgment races without recreating invisible transcript bytes.
+- Accepted advertising DELETE in CORS and parsing the bridge's response in the
+  UI. The old interface issued an authenticated cross-origin DELETE that
+  browsers had to preflight, but the bridge advertised only GET, POST, and
+  OPTIONS; network rejection was also outside the UI's exception handling.
+- Accepted removing index entries whose exact NDJSON is already missing before
+  restart interruption recovery. This is loss-free because the referenced
+  transcript bytes are absent and prevents initialization from creating a new
+  status-only phantom file.
+- Narrowed the proposed “commit-last” deletion rule. Assigning the in-memory
+  index last does not repair a file removal followed by an index-write failure.
+  The store now commits the replacement index before removals, rolls the prior
+  durable index back if an exact removal fails, and, for a partially failed
+  clear, rebuilds the index from the transcript files that actually remain.
+- Accepted sanitized 500 responses for unexpected storage and request failures
+  while retaining specific 400 request validation, 404 absence, and 409
+  concurrency semantics. Absolute history paths no longer reach the browser
+  through a catch-all error.
+- Rejected unconditional startup deletion of unindexed NDJSON. Such a log can
+  be the recoverable result of an interrupted or failed index replacement;
+  deleting it would turn metadata loss into transcript loss. Recovery or
+  quarantine of legacy unmatched logs remains future work.
+- Rejected disabling deletion controls based only on visible status as an
+  incomplete substitute for the server barrier. Multiple tabs, direct API use,
+  and the terminal-but-draining window still require the bridge invariant.
+
+### Implementation
+
+- Added `historyClosed` to retained sessions, set it only after the history
+  chain settles, and made both authenticated deletion routes reject targeted
+  active or draining history with actionable 409 messages.
+- Added a pre-append indexed-record guard with a stable concurrency error,
+  staged replacement-index writes for delete and clear, rollback or surviving-
+  file reconciliation on removal failure, and missing-file reconciliation
+  before restart status writes.
+- Added DELETE to authenticated CORS preflight. History delete and clear now
+  catch network failures, parse server diagnostics, and display the specific
+  live-session conflict instead of a generic or unhandled failure.
+- Changed unexpected bridge request failures from raw 400 responses to a
+  sanitized 500, while malformed JSON, oversized bodies, and invalid project
+  selection retain client-error behavior.
+- Added direct regressions for CORS preflight, active record and clear barriers,
+  deletion after the write chain closes, sanitized storage failures,
+  append-after-delete, replacement-index failure, removal rollback,
+  missing-transcript startup repair, and UI response parsing.
+- Updated the README's version and local-history privacy and recovery claims.
+
+### Verification
+
+- All 97 bridge tests pass with no skips on the unnested macOS host, including
+  Claude, Codex, Antigravity, broker-network, credential, symlink, attachment,
+  history, recovery, launcher, and containment regressions.
+- All 32 focused bridge-core and history-store tests pass. Lint is clean, the
+  production build succeeds, both rendered-page checks pass, and
+  `git diff --check` is clean.
+- Live validation restarted the real supervised launcher on bridge port 4417
+  so the Node bridge—not only the hot-reloaded web app—contained this release.
+  Authenticated OPTIONS returned `GET, POST, DELETE, OPTIONS`; a fresh retained
+  session returned 409 for both record deletion and clear while running, stopped
+  cleanly, then deleted with 200 after its write chain closed. Its exact NDJSON
+  was absent and the archive returned to its original 28 records.
+- The in-app browser connected to all three available CLIs, opened the real
+  28-record History drawer, exposed all record controls, contained neither live
+  smoke artifact after cleanup, and logged no warnings or errors. An initial
+  pre-restart smoke deliberately reproduced the old bridge's orphan path; the
+  single 539-byte run-created orphan was removed before patched validation.
+
+### Remaining limitations
+
+- Delete and clear are serialized and roll back ordinary I/O failures, but the
+  filesystem and index are not one crash-atomic transaction. If the process
+  terminates between replacement-index persistence and byte removal, an
+  unindexed log is intentionally preserved rather than silently deleted.
+- Legacy unindexed logs are not listed, automatically reconstructed, or
+  automatically deleted. A future recovery tool should validate a leading
+  `session.created` event and offer explicit reconstruction or quarantine.
+- A clear that encounters an unusual partial removal failure returns 500 and
+  rebuilds its index from the files still present; records already removed
+  remain deleted rather than being recreated from stale metadata.
+
 ## [v0.0.0.19] — 2026-07-30
 
 ### Conversation

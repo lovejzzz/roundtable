@@ -1,4 +1,5 @@
 import {
+  access,
   appendFile,
   chmod,
   mkdir,
@@ -179,11 +180,21 @@ export function createHistoryStore({
     return join(directory, `${safeRecordId(id)}.ndjson`);
   }
 
-  async function writeIndex() {
+  async function writeIndex(nextIndex = index) {
     const temporary = `${indexPath}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
+    await writeFile(temporary, `${JSON.stringify(nextIndex, null, 2)}\n`, { mode: 0o600 });
     await chmod(temporary, 0o600);
     await rename(temporary, indexPath);
+  }
+
+  async function recordFileExists(id) {
+    try {
+      await access(eventPath(id));
+      return true;
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      throw error;
+    }
   }
 
   async function prune() {
@@ -219,6 +230,13 @@ export function createHistoryStore({
       index = baseIndex();
     }
 
+    const existingRecords = [];
+    for (const record of index.records) {
+      if (await recordFileExists(record.id)) existingRecords.push(record);
+    }
+    const missingRecords = existingRecords.length !== index.records.length;
+    index.records = existingRecords;
+
     const interruptedAt = now().toISOString();
     let changed = false;
     for (const record of index.records) {
@@ -239,7 +257,12 @@ export function createHistoryStore({
     }
     const beforePrune = index.records.length;
     await prune();
-    if (changed || beforePrune !== index.records.length || index.records.length) {
+    if (
+      changed ||
+      missingRecords ||
+      beforePrune !== index.records.length ||
+      index.records.length
+    ) {
       await writeIndex();
     }
     initialized = true;
@@ -268,11 +291,16 @@ export function createHistoryStore({
         const recordId = safeRecordId(id);
         const timestamp = event.at || now().toISOString();
         const persistedEvent = sanitizeEventValue({ ...event, at: timestamp });
+        const position = index.records.findIndex((record) => record.id === recordId);
+        if (position < 0 && persistedEvent.type !== "session.created") {
+          const error = new Error("The archived discussion no longer exists.");
+          error.code = "HISTORY_RECORD_MISSING";
+          throw error;
+        }
         await appendFile(eventPath(recordId), `${JSON.stringify(persistedEvent)}\n`, {
           mode: 0o600,
         });
         await chmod(eventPath(recordId), 0o600);
-        const position = index.records.findIndex((record) => record.id === recordId);
         const current = position >= 0 ? index.records[position] : null;
         const updated = applyMetadataEvent(current, persistedEvent, timestamp);
         if (updated && position >= 0) index.records[position] = updated;
@@ -325,11 +353,18 @@ export function createHistoryStore({
       return serialize(async () => {
         await initialize();
         const recordId = safeRecordId(id);
-        const before = index.records.length;
-        index.records = index.records.filter((record) => record.id !== recordId);
-        if (index.records.length === before) return false;
-        await rm(eventPath(recordId), { force: true });
-        await writeIndex();
+        const nextRecords = index.records.filter((record) => record.id !== recordId);
+        if (nextRecords.length === index.records.length) return false;
+        const previousIndex = index;
+        const nextIndex = { ...index, records: nextRecords };
+        await writeIndex(nextIndex);
+        try {
+          await rm(eventPath(recordId), { force: true });
+        } catch (error) {
+          await writeIndex(previousIndex);
+          throw error;
+        }
+        index = nextIndex;
         return true;
       });
     },
@@ -337,10 +372,23 @@ export function createHistoryStore({
       if (!enabled) return 0;
       return serialize(async () => {
         await initialize();
-        const records = [...index.records];
-        await Promise.all(records.map((record) => rm(eventPath(record.id), { force: true })));
-        index.records = [];
-        await writeIndex();
+        const previousIndex = index;
+        const records = [...previousIndex.records];
+        const nextIndex = { ...index, records: [] };
+        await writeIndex(nextIndex);
+        try {
+          await Promise.all(records.map((record) => rm(eventPath(record.id), { force: true })));
+        } catch (error) {
+          const retainedRecords = [];
+          for (const record of records) {
+            if (await recordFileExists(record.id)) retainedRecords.push(record);
+          }
+          const recoveredIndex = { ...previousIndex, records: retainedRecords };
+          await writeIndex(recoveredIndex);
+          index = recoveredIndex;
+          throw error;
+        }
+        index = nextIndex;
         return records.length;
       });
     },

@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { appendFile, mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  access,
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -292,6 +300,96 @@ test("applies count retention and supports exact deletion and clearing", async (
     assert.equal((await store.list()).length, 1);
     assert.equal(await store.clear(), 1);
     assert.equal((await store.list()).length, 0);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("rejects non-creation writes after deletion without recreating transcript bytes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "roundtable-history-"));
+  const id = "history-test-deleted-0001";
+  const store = createHistoryStore({ directory });
+  const eventFile = join(directory, `${id}.ndjson`);
+
+  try {
+    await store.append(id, creationEvent(id));
+    assert.equal(await store.delete(id), true);
+    await assert.rejects(
+      store.append(id, {
+        type: "dissent.judged",
+        dissentId: "D1",
+        verdict: "missed",
+      }),
+      (error) => error?.code === "HISTORY_RECORD_MISSING",
+    );
+    await assert.rejects(access(eventFile), (error) => error?.code === "ENOENT");
+
+    const restartedStore = createHistoryStore({ directory });
+    assert.deepEqual(await restartedStore.list(), []);
+    await assert.rejects(access(eventFile), (error) => error?.code === "ENOENT");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("does not remove transcript bytes when the replacement index cannot commit", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "roundtable-history-"));
+  const id = "history-test-index-failure-0001";
+  const store = createHistoryStore({ directory });
+  const eventFile = join(directory, `${id}.ndjson`);
+
+  try {
+    await store.append(id, creationEvent(id));
+    await mkdir(join(directory, "index.json.tmp"));
+    await assert.rejects(store.delete(id), (error) => /EISDIR/.test(error?.code || ""));
+    assert.equal((await store.list()).length, 1);
+    await access(eventFile);
+    await assert.rejects(store.clear(), (error) => error?.code === "EISDIR");
+    assert.equal((await store.list()).length, 1);
+    await access(eventFile);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("restores the durable index when transcript removal fails", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "roundtable-history-"));
+  const id = "history-test-remove-failure-0001";
+  const store = createHistoryStore({ directory });
+  const eventFile = join(directory, `${id}.ndjson`);
+
+  try {
+    await store.append(id, creationEvent(id));
+    await rm(eventFile);
+    await mkdir(eventFile);
+
+    await assert.rejects(store.delete(id), (error) => /EISDIR/.test(error?.code || ""));
+    assert.equal((await store.list())[0].id, id);
+    const persistedIndex = JSON.parse(await readFile(join(directory, "index.json"), "utf8"));
+    assert.equal(persistedIndex.records[0].id, id);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("drops indexed metadata for missing transcripts without recreating history bytes", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "roundtable-history-"));
+  const id = "history-test-missing-file-0001";
+  const store = createHistoryStore({ directory });
+  const eventFile = join(directory, `${id}.ndjson`);
+
+  try {
+    await store.append(id, creationEvent(id));
+    await rm(eventFile);
+
+    const restartedStore = createHistoryStore({
+      directory,
+      now: () => new Date("2026-07-29T12:10:00.000Z"),
+    });
+    await restartedStore.initialize();
+    assert.deepEqual(await restartedStore.list(), []);
+    assert.equal(await restartedStore.get(id), null);
+    await assert.rejects(access(eventFile), (error) => error?.code === "ENOENT");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.19**
+Current release: **v0.0.0.20**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -111,8 +111,16 @@ data folder, outside the discussed project. The archive:
 - retains at most 50 discussions for 30 days;
 - recovers the valid prefix of a log if its final write was interrupted;
 - marks nonterminal discussions as interrupted after a bridge restart;
+- refuses record deletion or clearing while a targeted saved discussion is
+  active or still draining its final history writes, then permits deletion
+  after that write chain closes;
+- prevents later writes from recreating an unindexed transcript after deletion
+  and drops stale index rows whose transcript bytes are already missing without
+  deleting potentially recoverable unindexed logs;
 - can be turned off for future discussions, deleted record by record, or cleared
-  from the History drawer.
+  from the History drawer. Browser deletion uses authenticated DELETE preflight
+  and reports the bridge's specific conflict message when a live discussion
+  must end first.
 
 Set `ROUNDTABLE_HISTORY=off` before `npm run talk` to disable archive storage and
 its API entirely. `ROUNDTABLE_HISTORY_DIR` can override the user-data location.

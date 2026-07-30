@@ -120,6 +120,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /streamRef\.current = null/);
   assert.match(page, /scheduleRecovery\(id, streamToken, streamBridge, generation, 0\)/);
   assert.doesNotMatch(page, /sessionStorage\.removeItem\("roundtable\.sessionId"\);\s*setStatus\("error"\)/);
+  assert.match(page, /async function responseError\(response: Response, fallback: string\)/);
+  assert.match(page, /await responseError\(response, "The archived discussion could not be deleted\."/);
+  assert.match(page, /await responseError\(response, "Local history could not be cleared\."/);
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /\.message-feed:focus-visible/);
   assert.match(styles, /\.visually-hidden/);

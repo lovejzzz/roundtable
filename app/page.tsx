@@ -245,6 +245,15 @@ type HistoryRecord = {
   historyWarning?: string;
 };
 
+async function responseError(response: Response, fallback: string) {
+  try {
+    const payload = (await response.json()) as { error?: string };
+    return payload.error || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const TERMINAL_STATUSES = new Set<SessionStatus>([
   "complete",
   "stopped",
@@ -1401,37 +1410,47 @@ export default function Home() {
 
   async function deleteHistoryRecord(record: HistoryRecord) {
     if (!window.confirm(`Delete “${record.topic}” from local history?`)) return;
-    const response = await fetch(`${bridgeUrl}/history/${record.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) {
+    try {
+      const response = await fetch(`${bridgeUrl}/history/${record.id}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!response.ok) {
+        setConnectionError(
+          await responseError(response, "The archived discussion could not be deleted."),
+        );
+        return;
+      }
+      if (viewingHistory && sessionId === record.id) {
+        resetToSetup();
+      }
+      await loadHistory();
+    } catch {
       setConnectionError("The archived discussion could not be deleted.");
-      return;
     }
-    if (viewingHistory && sessionId === record.id) {
-      resetToSetup();
-    }
-    await loadHistory();
   }
 
   async function clearHistory() {
     if (!window.confirm("Clear every locally archived Roundtable discussion?")) return;
-    const response = await fetch(`${bridgeUrl}/history`, {
-      method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ confirm: "clear" }),
-    });
-    if (!response.ok) {
+    try {
+      const response = await fetch(`${bridgeUrl}/history`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ confirm: "clear" }),
+      });
+      if (!response.ok) {
+        setConnectionError(await responseError(response, "Local history could not be cleared."));
+        return;
+      }
+      setHistoryRecords([]);
+      if (viewingHistory) {
+        resetToSetup();
+      }
+    } catch {
       setConnectionError("Local history could not be cleared.");
-      return;
-    }
-    setHistoryRecords([]);
-    if (viewingHistory) {
-      resetToSetup();
     }
   }
 
