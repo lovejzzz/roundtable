@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.25**
+Current release: **v0.0.0.26**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -24,9 +24,10 @@ prints and opens the connected room only after the web server is ready and the
 new bridge answers an authenticated health check. A port conflict, startup
 timeout, spawn failure, or unexpected child exit stops both process trees and
 reports the failing stage instead of leaving a partial room running. Press
-`Control-C` in the terminal to stop both. Set `ROUNDTABLE_BRIDGE_PORT` when the
-default bridge port 4317 is unavailable; the advertised room uses the same
-configured port.
+`Control-C` in the terminal to stop both. The personal plugin selects available
+local bridge and web ports for every launch, so a completed room that is still
+open cannot block a new meeting. Direct launcher users may set
+`ROUNDTABLE_BRIDGE_PORT` and `ROUNDTABLE_WEB_PORT` explicitly.
 
 ## Use it from another Codex project
 
@@ -110,12 +111,12 @@ whole-process-tree cleanup.
    concerns permit exactly one fallback-capable revision; the room preserves
    the original draft, audits, attempts, and final brief.
 10. Optionally enable **Dissent check**. After the audited brief is frozen,
-   each agent gets one separate review pass and can identify labeled positions
-   the brief missed or flattened. Mark each item **Represented** or **Missed**;
-   those judgments are saved locally.
+    each agent gets one separate review pass and can identify labeled positions
+    the brief missed or flattened. Mark each item **Represented** or **Missed**;
+    those judgments are saved locally.
 11. If you opt in, open **History** to revisit recent discussions after a bridge
-   restart. Archived discussions are read-only and keep undelivered steering
-   notes visibly separate from the transcript.
+    restart. Archived discussions are read-only and keep undelivered steering
+    notes visibly separate from the transcript.
 12. Stop the discussion whenever you want.
 
 Ordinary turn context has a strict 48,000-character ceiling. Roundtable keeps
@@ -263,6 +264,14 @@ limit. Roots left by a crashed bridge use a dedicated prefix and are removed
 after they become stale without touching live or reply-output directories.
 Links into intentionally omitted generated trees also fail closed rather than
 silently changing meaning in the copy.
+
+For Git projects, each disposable copy also receives a generated
+`.roundtable-context` directory. It contains the detected branch/base metadata,
+recent log and status text, and a patch combining committed branch changes with
+tracked working-tree changes. Agents are told to inspect this evidence before
+reviewing a PR or release. The snapshot never contains `.git`, Git configuration,
+or untracked file contents; if Git context cannot be produced, sandbox creation
+continues with the copied source.
 
 When a discussion has prompt files, Roundtable restores the entire private
 attachment namespace from immutable in-memory payloads before every participant

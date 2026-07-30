@@ -7,6 +7,7 @@ import {
   createDeferred,
   parseTalkArguments,
   resolveBridgePort,
+  resolveWebPort,
   signalStartedProcessTree,
   startRoundtableSession,
   stopStartedProcesses,
@@ -126,10 +127,14 @@ test("launcher bridge port follows the configured environment", () => {
     () => resolveBridgePort({ ROUNDTABLE_BRIDGE_PORT: "not-a-port" }),
     /must be an integer/,
   );
-  assert.throws(
-    () => resolveBridgePort({ ROUNDTABLE_BRIDGE_PORT: "65536" }),
-    /must be an integer/,
-  );
+  assert.throws(() => resolveBridgePort({ ROUNDTABLE_BRIDGE_PORT: "65536" }), /must be an integer/);
+});
+
+test("launcher web port follows the configured environment", () => {
+  assert.equal(resolveWebPort({}), 3000);
+  assert.equal(resolveWebPort({ ROUNDTABLE_WEB_PORT: "3100" }), 3100);
+  assert.throws(() => resolveWebPort({ ROUNDTABLE_WEB_PORT: "not-a-port" }), /must be an integer/);
+  assert.throws(() => resolveWebPort({ ROUNDTABLE_WEB_PORT: "65536" }), /must be an integer/);
 });
 
 test("authenticated bridge health retries transient connection failures", async () => {

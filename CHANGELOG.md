@@ -4,6 +4,40 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.26] — 2026-07-30
+
+### Discussion
+
+A five-round EDUTOOL release audit showed two Roundtable product gaps in real
+use. A completed room still holding the default ports could block the next
+explicit launch, and disposable workspaces intentionally omitted `.git` but
+gave reviewers no equivalent evidence for distinguishing a pull request's
+changes from pre-existing code.
+
+### Implementation
+
+- The personal plugin launcher now selects separate available bridge and web
+  ports for each invocation while preserving explicit environment overrides.
+- The app launcher accepts and validates a configured web port and opens the
+  matching room URL.
+- Git projects now materialize a sanitized `.roundtable-context` directory in
+  every disposable workspace. It records branch/base metadata, recent log and
+  status, plus committed branch and tracked working-tree patches without
+  copying `.git`, Git configuration, or untracked file contents.
+- Agent prompts explicitly route PR and release reviews through that code
+  evidence and require reviewers to separate changed-code findings from
+  pre-existing observations.
+- Git context generation is best-effort: missing metadata, timeouts, or large
+  repositories cannot prevent a discussion from starting.
+
+### Verification
+
+- Added launcher coverage for default, configured, and invalid web ports.
+- Added a real Git fixture proving branch and working-tree patches are visible
+  in the sandbox while `.git` remains absent.
+- All 117 bridge/runtime tests, lint, the production build, both rendered-page
+  checks, and whitespace validation pass with no skips.
+
 ## [v0.0.0.25] — 2026-07-30
 
 ### Discussion

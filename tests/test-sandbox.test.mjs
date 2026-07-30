@@ -33,17 +33,10 @@ import {
 import { buildBrokerNetworkArgs } from "../scripts/test-broker.mjs";
 
 const execFileAsync = promisify(execFile);
-const CREDENTIAL_FILE_PATHS = new Set([
-  ".npmrc",
-  ".netrc",
-  ".git-credentials",
-  ".pypirc",
-]);
+const CREDENTIAL_FILE_PATHS = new Set([".npmrc", ".netrc", ".git-credentials", ".pypirc"]);
 
 function credentialProbePath(home, name) {
-  return CREDENTIAL_FILE_PATHS.has(name)
-    ? join(home, name)
-    : join(home, name, "credential");
+  return CREDENTIAL_FILE_PATHS.has(name) ? join(home, name) : join(home, name, "credential");
 }
 
 test("protects both lexical and canonical CLI credential-home paths", async () => {
@@ -54,18 +47,10 @@ test("protects both lexical and canonical CLI credential-home paths", async () =
   const canonicalCodexHome = join(fixtureRoot, "vault", "codex");
   const configuredCodexHome = join(home, "custom-codex");
   try {
-    await Promise.all([
-      mkdir(home),
-      mkdir(canonicalCodexHome, { recursive: true }),
-    ]);
+    await Promise.all([mkdir(home), mkdir(canonicalCodexHome, { recursive: true })]);
     await symlink(canonicalCodexHome, configuredCodexHome);
-    const protectedAliases = await resolveCredentialPathAliases([
-      configuredCodexHome,
-    ]);
-    assert.deepEqual(protectedAliases, [
-      configuredCodexHome,
-      canonicalCodexHome,
-    ]);
+    const protectedAliases = await resolveCredentialPathAliases([configuredCodexHome]);
+    assert.deepEqual(protectedAliases, [configuredCodexHome, canonicalCodexHome]);
 
     const claudeProfile = buildClaudeSandboxProfile({
       home,
@@ -110,30 +95,15 @@ test("a nested Claude config home does not inherit a write denial from its ances
     projectPath: "/Users/example/project",
   });
 
-  assert.doesNotMatch(
-    profile,
-    /deny file-write\* \(subpath "\/Users\/example\/\.config"\)/,
-  );
-  assert.match(
-    profile,
-    /deny file-write\* \(literal "\/Users\/example\/\.config"\)/,
-  );
-  assert.match(
-    profile,
-    /deny file-write\* \(regex #"\^\/Users\/example\/\\\.config\(\$\|\/\)"\)/,
-  );
+  assert.doesNotMatch(profile, /deny file-write\* \(subpath "\/Users\/example\/\.config"\)/);
+  assert.match(profile, /deny file-write\* \(literal "\/Users\/example\/\.config"\)/);
+  assert.match(profile, /deny file-write\* \(regex #"\^\/Users\/example\/\\\.config\(\$\|\/\)"\)/);
   assert.match(
     profile,
     /allow file-write\* \(regex #"\^\/Users\/example\/\\\.config\/claude\/cache\(\$\|\/\)"\)/,
   );
-  assert.match(
-    profile,
-    /deny file-write\* \(subpath "\/Users\/example\/Documents"\)/,
-  );
-  assert.match(
-    profile,
-    /deny file-write\* \(subpath "\/Users\/example\/\.config\/gh"\)/,
-  );
+  assert.match(profile, /deny file-write\* \(subpath "\/Users\/example\/Documents"\)/);
+  assert.match(profile, /deny file-write\* \(subpath "\/Users\/example\/\.config\/gh"\)/);
   assert.match(
     profile,
     /deny file-write\* \(subpath "\/Users\/example\/\.config\/unrelated-app"\)/,
@@ -156,18 +126,11 @@ test("collects every nested config-home ancestor for sibling write isolation", a
   const home = "/Users/example";
   const target = join(home, ".config", "vendor", "claude");
   const seen = [];
-  const values = await collectAncestorDirectoryEntries(
-    home,
-    target,
-    async (path) => {
-      seen.push(path);
-      return [{ name: "sibling" }];
-    },
-  );
-  assert.deepEqual(seen, [
-    join(home, ".config", "vendor"),
-    join(home, ".config"),
-  ]);
+  const values = await collectAncestorDirectoryEntries(home, target, async (path) => {
+    seen.push(path);
+    return [{ name: "sibling" }];
+  });
+  assert.deepEqual(seen, [join(home, ".config", "vendor"), join(home, ".config")]);
   assert.deepEqual(
     values.map((value) => value.path),
     seen,
@@ -292,6 +255,54 @@ test("creates isolated per-agent project copies and removes them after the room 
   }
 });
 
+test("materializes sanitized Git branch and working-tree evidence without copying .git", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-git-context-fixture-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath };
+  try {
+    await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+    await execFileAsync("git", ["init", "-b", "main"], { cwd: projectPath });
+    await execFileAsync("git", ["config", "user.name", "Roundtable Test"], {
+      cwd: projectPath,
+    });
+    await execFileAsync("git", ["config", "user.email", "roundtable@example.test"], {
+      cwd: projectPath,
+    });
+    await writeFile(join(projectPath, "source.txt"), "base\n");
+    await execFileAsync("git", ["add", "source.txt"], { cwd: projectPath });
+    await execFileAsync("git", ["commit", "-m", "base"], { cwd: projectPath });
+    await execFileAsync("git", ["checkout", "-b", "feature/trust-audit"], {
+      cwd: projectPath,
+    });
+    await writeFile(join(projectPath, "source.txt"), "branch change\n");
+    await execFileAsync("git", ["add", "source.txt"], { cwd: projectPath });
+    await execFileAsync("git", ["commit", "-m", "branch change"], {
+      cwd: projectPath,
+    });
+    await writeFile(join(projectPath, "source.txt"), "working change\n");
+
+    const workspace = await ensureTestSandbox(session, "codex", {
+      temporaryDirectory,
+    });
+    const metadata = JSON.parse(
+      await readFile(join(workspace, ".roundtable-context", "metadata.json"), "utf8"),
+    );
+    const patch = await readFile(join(workspace, ".roundtable-context", "changes.patch"), "utf8");
+
+    assert.equal(metadata.branch, "feature/trust-audit");
+    assert.equal(metadata.baseRef, "main");
+    assert.equal(metadata.committedChangesIncluded, true);
+    assert.equal(metadata.workingTreeChangesIncluded, true);
+    assert.match(patch, /branch change/);
+    assert.match(patch, /working change/);
+    await assert.rejects(access(join(workspace, ".git")));
+  } finally {
+    await cleanupTestSandboxes(session);
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test("creates fresh request-scoped broker copies and removes each immediately", async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-request-sandbox-"));
   const projectPath = join(fixtureRoot, "project");
@@ -342,10 +353,7 @@ test("preserves safe internal symlinks and rejects links whose copied meaning es
       temporaryDirectory,
     });
     assert.equal(await readlink(join(workspace, "a", "inside")), "../b/value.txt");
-    assert.equal(
-      await realpath(join(workspace, "a", "inside")),
-      join(workspace, "b", "value.txt"),
-    );
+    assert.equal(await realpath(join(workspace, "a", "inside")), join(workspace, "b", "value.txt"));
     await cleanupTestSandboxes(safeSession);
 
     const unsafeLinks = [
@@ -359,9 +367,7 @@ test("preserves safe internal symlinks and rejects links whose copied meaning es
       const unsafeSession = { projectPath: await realpath(actualProjectPath) };
       await assert.rejects(
         ensureTestSandbox(unsafeSession, "claude", { temporaryDirectory }),
-        (error) =>
-          error?.code === "UNSAFE_SYMLINK" &&
-          error.message.includes(name),
+        (error) => error?.code === "UNSAFE_SYMLINK" && error.message.includes(name),
       );
       await rm(linkPath);
       assert.deepEqual(await readdir(temporaryDirectory), []);
@@ -392,9 +398,7 @@ test("post-copy verification removes a root if a copied symlink escapes", async 
           await symlink(externalPath, join(destination, "late-escape"));
         },
       }),
-      (error) =>
-        error?.code === "UNSAFE_SYMLINK" &&
-        error.message.includes("late-escape"),
+      (error) => error?.code === "UNSAFE_SYMLINK" && error.message.includes("late-escape"),
     );
     assert.deepEqual(await readdir(temporaryDirectory), []);
   } finally {
@@ -448,9 +452,7 @@ test(
   "the macOS Claude guard permits runtime state but blocks credentials, the project, and sibling sandbox",
   { skip: platform() !== "darwin" },
   async (context) => {
-    const fixtureRoot = await realpath(
-      await mkdtemp(join(tmpdir(), "roundtable-guard-fixture-")),
-    );
+    const fixtureRoot = await realpath(await mkdtemp(join(tmpdir(), "roundtable-guard-fixture-")));
     const home = join(fixtureRoot, "home");
     const projectPath = join(home, "Documents", "project");
     const claudeWorkspace = join(fixtureRoot, "claude-workspace");
@@ -479,10 +481,7 @@ test(
         writeFile(join(home, ".antigravity", "credentials.json"), "antigravity\n"),
         writeFile(join(home, ".gemini", "oauth.json"), "gemini\n"),
         writeFile(join(relocatedCodexHome, "auth.json"), "relocated-codex\n"),
-        writeFile(
-          join(relocatedAntigravityHome, "credentials.json"),
-          "relocated-antigravity\n",
-        ),
+        writeFile(join(relocatedAntigravityHome, "credentials.json"), "relocated-antigravity\n"),
         writeFile(join(projectPath, "original-source"), "project\n"),
         writeFile(join(siblingRoot, "visible"), "sibling\n"),
         ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) =>
@@ -496,9 +495,7 @@ test(
           ".antigravity",
           ".gemini",
           "Documents",
-          ...new Set(
-            HOST_PROTECTED_CREDENTIAL_PATHS.map((name) => name.split("/")[0]),
-          ),
+          ...new Set(HOST_PROTECTED_CREDENTIAL_PATHS.map((name) => name.split("/")[0])),
         ],
         claudeHomeEntries: ["session-env", "settings.json"],
         additionalProtectedPaths: [relocatedCodexHome, relocatedAntigravityHome],
@@ -507,21 +504,15 @@ test(
       });
       for (const name of HOST_PROTECTED_CREDENTIAL_PATHS) {
         assert.ok(
-          profile.includes(
-            `(deny file-read* (subpath "${join(home, name)}"))`,
-          ),
+          profile.includes(`(deny file-read* (subpath "${join(home, name)}"))`),
           `${name} should be protected`,
         );
       }
       assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".codex")}"))`));
-      assert.ok(
-        profile.includes(`(deny file-read* (subpath "${join(home, ".antigravity")}"))`),
-      );
+      assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".antigravity")}"))`));
       assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".gemini")}"))`));
       assert.ok(profile.includes(`(deny file-read* (subpath "${relocatedCodexHome}"))`));
-      assert.ok(
-        profile.includes(`(deny file-read* (subpath "${relocatedAntigravityHome}"))`),
-      );
+      assert.ok(profile.includes(`(deny file-read* (subpath "${relocatedAntigravityHome}"))`));
       assert.ok(profile.includes(`(deny file-read* (subpath "${projectPath}"))`));
       try {
         await execFileAsync("/usr/bin/sandbox-exec", [
@@ -535,9 +526,7 @@ test(
           home,
           projectPath,
           siblingRoot,
-          ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) =>
-            credentialProbePath(home, name),
-          ),
+          ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) => credentialProbePath(home, name)),
           join(home, ".codex", "auth.json"),
           join(home, ".antigravity", "credentials.json"),
           join(home, ".gemini", "oauth.json"),
@@ -610,10 +599,7 @@ test("the Codex native permission profile preserves workspace semantics and deni
   const workspaceArgs = buildCodexPermissionArgs({
     siblingRoot,
     projectPath,
-    additionalProtectedPaths: [
-      relocatedClaudeHome,
-      "/Users/example/.claude",
-    ],
+    additionalProtectedPaths: [relocatedClaudeHome, "/Users/example/.claude"],
     home: "/Users/example",
   });
   const readOnlyArgs = buildCodexPermissionArgs({ readOnly: true });
@@ -649,10 +635,7 @@ test(
     const workspace = join(fixtureRoot, "workspace");
     const protectedProject = join(fixtureRoot, "original-project");
     try {
-      await Promise.all([
-        mkdir(workspace),
-        mkdir(protectedProject),
-      ]);
+      await Promise.all([mkdir(workspace), mkdir(protectedProject)]);
       const marker = join(protectedProject, "marker");
       await writeFile(marker, "protected\n");
       const args = [

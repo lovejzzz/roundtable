@@ -1,16 +1,8 @@
 import { constants } from "node:fs";
-import {
-  cp,
-  lstat,
-  mkdtemp,
-  readdir,
-  readlink,
-  realpath,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { cp, lstat, mkdtemp, readdir, readlink, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { materializeGitContext } from "./git-context.mjs";
 
 const GENERATED_DIRECTORIES = new Set([".git", ".next", ".wrangler", "dist"]);
 export const TEST_SANDBOX_PREFIX = "roundtable-agent-sandbox-";
@@ -64,16 +56,11 @@ function pathIsInside(root, candidate) {
   const relativePath = relative(root, candidate);
   return (
     !relativePath ||
-    (relativePath !== ".." &&
-      !relativePath.startsWith(`..${sep}`) &&
-      !relativePath.startsWith(sep))
+    (relativePath !== ".." && !relativePath.startsWith(`..${sep}`) && !relativePath.startsWith(sep))
   );
 }
 
-export async function resolveCredentialPathAliases(
-  paths,
-  resolvePath = realpath,
-) {
+export async function resolveCredentialPathAliases(paths, resolvePath = realpath) {
   const aliases = [];
   for (const path of paths.filter(Boolean)) {
     aliases.push(path);
@@ -95,17 +82,12 @@ export async function collectAncestorDirectoryEntries(
     const entries = await readDirectory(current, { withFileTypes: true })
       .then((values) => values.map((value) => value.name))
       .catch(() => []);
-    const pathAliases = await resolveCredentialPathAliases(
-      [current],
-      resolvePath,
-    );
+    const pathAliases = await resolveCredentialPathAliases([current], resolvePath);
     const siblingPaths = [];
     for (const name of entries) {
       const entryPath = join(current, name);
       if (pathIsInside(entryPath, target)) continue;
-      siblingPaths.push(
-        ...(await resolveCredentialPathAliases([entryPath], resolvePath)),
-      );
+      siblingPaths.push(...(await resolveCredentialPathAliases([entryPath], resolvePath)));
     }
     ancestors.push({
       path: current,
@@ -139,9 +121,7 @@ async function shouldCopy(projectPath, workspace, sourcePath, destinationPath) {
     readlink(sourcePath).catch(() => ""),
     realpath(sourcePath).catch(() => ""),
   ]);
-  const copiedTarget = linkTarget
-    ? resolve(dirname(destinationPath), linkTarget)
-    : "";
+  const copiedTarget = linkTarget ? resolve(dirname(destinationPath), linkTarget) : "";
   if (
     !linkTarget ||
     isAbsolute(linkTarget) ||
@@ -206,9 +186,7 @@ export async function createDisposableTestSandbox(
   if (!/^[a-z0-9-]+$/i.test(role)) {
     throw new Error("The sandbox role contains unsupported characters.");
   }
-  const createdRoot = await mkdtemp(
-    join(temporaryDirectory, `${TEST_SANDBOX_PREFIX}${role}-`),
-  );
+  const createdRoot = await mkdtemp(join(temporaryDirectory, `${TEST_SANDBOX_PREFIX}${role}-`));
   const root = await realpath(createdRoot);
   const workspace = join(root, "workspace");
   const startedAt = clock();
@@ -226,19 +204,19 @@ export async function createDisposableTestSandbox(
           throw error;
         }
         if (clock() - startedAt > copyTimeoutMs) {
-          const error = new Error("Preparing the disposable test sandbox exceeded the 2-minute limit.");
+          const error = new Error(
+            "Preparing the disposable test sandbox exceeded the 2-minute limit.",
+          );
           error.code = "TIMEOUT";
           throw error;
         }
-        return shouldCopy(
-          session.projectPath,
-          workspace,
-          sourcePath,
-          destinationPath,
-        );
+        return shouldCopy(session.projectPath, workspace, sourcePath, destinationPath);
       },
     });
     await validateCopiedSymlinks(workspace);
+    // Git context improves review precision but must never make the sandbox
+    // unavailable when Git metadata is incomplete or a probe times out.
+    await materializeGitContext(session.projectPath, workspace).catch(() => null);
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
@@ -259,9 +237,7 @@ export function getTestSandboxInfo(session, role) {
 export async function cleanupTestSandboxes(session) {
   const sandboxes = [...(session.testSandboxes?.values() || [])];
   session.testSandboxes?.clear();
-  await Promise.all(
-    sandboxes.map(({ root }) => rm(root, { recursive: true, force: true })),
-  );
+  await Promise.all(sandboxes.map(({ root }) => rm(root, { recursive: true, force: true })));
 }
 
 export async function sweepStaleTestSandboxes({
@@ -269,7 +245,9 @@ export async function sweepStaleTestSandboxes({
   maxAgeMs = 24 * 60 * 60 * 1000,
   clock = Date.now,
 } = {}) {
-  const entries = await readdir(temporaryDirectory, { withFileTypes: true }).catch(() => []);
+  const entries = await readdir(temporaryDirectory, {
+    withFileTypes: true,
+  }).catch(() => []);
   const cutoff = clock() - maxAgeMs;
   await Promise.all(
     entries
@@ -316,67 +294,40 @@ export function buildClaudeSandboxProfile({
   siblingRoots = [],
 }) {
   const writableRuntimePaths = new Set(CLAUDE_WRITABLE_RUNTIME_PATHS);
-  const protectedPaths = protectedPathSet(
-    home,
-    CLAUDE_PROTECTED_PATHS,
-    additionalProtectedPaths,
-  );
+  const protectedPaths = protectedPathSet(home, CLAUDE_PROTECTED_PATHS, additionalProtectedPaths);
   const lines = [
     "(version 1)",
     "(allow default)",
     `(deny file-write* (literal "${sandboxLiteral(home)}"))`,
-    ...claudeHomeAliases.map(
-      (path) => `(deny file-write* (literal "${sandboxLiteral(path)}"))`,
-    ),
-    ...[...protectedPaths].map(
-      (path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`,
-    ),
+    ...claudeHomeAliases.map((path) => `(deny file-write* (literal "${sandboxLiteral(path)}"))`),
+    ...[...protectedPaths].map((path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`),
     ...homeEntries
-      .filter(
-        (name) =>
-          name && !pathIsInside(join(home, name), claudeHome),
-      )
-      .map(
-        (name) =>
-          `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`,
-      ),
+      .filter((name) => name && !pathIsInside(join(home, name), claudeHome))
+      .map((name) => `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`),
     ...claudeHomeAncestorEntries.flatMap(
       ({ path, pathAliases = [path], entries = [], siblingPaths = [] }) => [
+        ...pathAliases.map((alias) => `(deny file-write* (literal "${sandboxLiteral(alias)}"))`),
         ...pathAliases.map(
-          (alias) =>
-            `(deny file-write* (literal "${sandboxLiteral(alias)}"))`,
-        ),
-        ...pathAliases.map(
-          (alias) =>
-            `(deny file-write* (regex #"^${sandboxRegexLiteral(alias)}($|/)"))`,
+          (alias) => `(deny file-write* (regex #"^${sandboxRegexLiteral(alias)}($|/)"))`,
         ),
         ...(siblingPaths.length
           ? siblingPaths
           : entries
-              .filter(
-                (name) =>
-                  name && !pathIsInside(join(path, name), claudeHome),
-              )
+              .filter((name) => name && !pathIsInside(join(path, name), claudeHome))
               .map((name) => join(path, name))
-        ).map(
-          (siblingPath) =>
-            `(deny file-write* (subpath "${sandboxLiteral(siblingPath)}"))`,
-        ),
+        ).map((siblingPath) => `(deny file-write* (subpath "${sandboxLiteral(siblingPath)}"))`),
       ],
     ),
     ...claudeHomeEntries
       .filter((name) => name && !writableRuntimePaths.has(name))
-      .flatMap(
-        (name) =>
-          claudeHomeAliases.map(
-            (path) =>
-              `(deny file-write* (subpath "${sandboxLiteral(join(path, name))}"))`,
-          ),
+      .flatMap((name) =>
+        claudeHomeAliases.map(
+          (path) => `(deny file-write* (subpath "${sandboxLiteral(join(path, name))}"))`,
+        ),
       ),
     ...claudeHomeAliases.flatMap((path) =>
       CLAUDE_WRITABLE_RUNTIME_PATHS.map(
-        (name) =>
-          `(allow file-write* (regex #"^${sandboxRegexLiteral(join(path, name))}($|/)"))`,
+        (name) => `(allow file-write* (regex #"^${sandboxRegexLiteral(join(path, name))}($|/)"))`,
       ),
     ),
     `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
@@ -409,15 +360,10 @@ export function buildAntigravitySandboxProfile({
     "(version 1)",
     "(allow default)",
     `(deny file-write* (literal "${sandboxLiteral(home)}"))`,
-    ...[...protectedPaths].map(
-      (path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`,
-    ),
+    ...[...protectedPaths].map((path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`),
     ...homeEntries
       .filter((name) => name && !writableRoots.has(join(home, name)))
-      .map(
-        (name) =>
-          `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`,
-      ),
+      .map((name) => `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`),
     `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
     `(deny file-write* (subpath "${sandboxLiteral(projectPath)}"))`,
   ];
@@ -442,18 +388,16 @@ export function buildCodexPermissionArgs({
   additionalProtectedPaths = [],
   home = "",
 } = {}) {
-  const profileName = readOnly
-    ? "roundtable_read_only"
-    : "roundtable_workspace";
-  const deniedPaths = [...new Set([
-    ...CODEX_PROTECTED_PATHS.map((name) => (home ? join(home, name) : `~/${name}`)),
-    ...additionalProtectedPaths.filter(Boolean),
-    ...[siblingRoot, ...siblingRoots].filter(Boolean),
-    ...(projectPath ? [projectPath] : []),
-  ])];
-  const filesystemTable = deniedPaths
-    .map((path) => `${codexConfigString(path)}="deny"`)
-    .join(",");
+  const profileName = readOnly ? "roundtable_read_only" : "roundtable_workspace";
+  const deniedPaths = [
+    ...new Set([
+      ...CODEX_PROTECTED_PATHS.map((name) => (home ? join(home, name) : `~/${name}`)),
+      ...additionalProtectedPaths.filter(Boolean),
+      ...[siblingRoot, ...siblingRoots].filter(Boolean),
+      ...(projectPath ? [projectPath] : []),
+    ]),
+  ];
+  const filesystemTable = deniedPaths.map((path) => `${codexConfigString(path)}="deny"`).join(",");
   return [
     "--config",
     `default_permissions=${codexConfigString(profileName)}`,

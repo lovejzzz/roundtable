@@ -46,9 +46,7 @@ export function parseTalkArguments(argv = [], cwd = process.cwd()) {
       const value = requiredArgumentValue(argv, index, option).trim();
       if (!value) throw new Error("--topic requires non-empty text.");
       if (value.length > LAUNCHER_TOPIC_MAX_CHARACTERS) {
-        throw new Error(
-          `--topic must be at most ${LAUNCHER_TOPIC_MAX_CHARACTERS} characters.`,
-        );
+        throw new Error(`--topic must be at most ${LAUNCHER_TOPIC_MAX_CHARACTERS} characters.`);
       }
       options.topic = value;
       index += 1;
@@ -139,6 +137,17 @@ export function resolveBridgePort(environment = process.env) {
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
     throw new Error(
       `ROUNDTABLE_BRIDGE_PORT must be an integer from 1 through 65535; received “${rawPort}”.`,
+    );
+  }
+  return port;
+}
+
+export function resolveWebPort(environment = process.env) {
+  const rawPort = environment.ROUNDTABLE_WEB_PORT || "3000";
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(
+      `ROUNDTABLE_WEB_PORT must be an integer from 1 through 65535; received “${rawPort}”.`,
     );
   }
   return port;
@@ -298,9 +307,7 @@ export async function waitForLauncherReadiness({
 export function unexpectedChildExitError(label, code, signal, ready) {
   const stage = ready ? "after startup" : "during startup";
   const result =
-    signal != null
-      ? `from signal ${signal}`
-      : `with exit code ${code == null ? "unknown" : code}`;
+    signal != null ? `from signal ${signal}` : `with exit code ${code == null ? "unknown" : code}`;
   return new Error(`${label} exited unexpectedly ${stage} ${result}.`);
 }
 
@@ -320,12 +327,7 @@ export function signalStartedProcessTree(
   if (!child?.pid || processHasExited(child)) return false;
   try {
     if (platform === "win32") {
-      runTaskkill([
-        "/PID",
-        String(child.pid),
-        "/T",
-        ...(signal === "SIGKILL" ? ["/F"] : []),
-      ]);
+      runTaskkill(["/PID", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
     } else {
       killGroup(-child.pid, signal);
     }

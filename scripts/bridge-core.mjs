@@ -1,10 +1,7 @@
 import { createServer } from "node:http";
 import { createHash, randomUUID } from "node:crypto";
 import { antigravityModelEffort } from "./antigravity-invocation.mjs";
-import {
-  normalizePromptAttachments,
-  promptAttachmentsSection,
-} from "./prompt-attachments.mjs";
+import { normalizePromptAttachments, promptAttachmentsSection } from "./prompt-attachments.mjs";
 import { redactVisibleString } from "./redaction.mjs";
 
 export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interrupted"]);
@@ -26,9 +23,7 @@ const TRANSCRIPT_MAX_CHARACTERS = 48_000;
 
 function reportedChecksText(message) {
   if (!message.checks?.length) return "";
-  const brokered = message.checks.some(
-    (check) => check.provenance === "bridge-broker",
-  );
+  const brokered = message.checks.some((check) => check.provenance === "bridge-broker");
   return [
     brokered
       ? `CHECK EVIDENCE FOR ${message.author.toUpperCase()} (brokered checks were executed by Roundtable):`
@@ -39,9 +34,7 @@ function reportedChecksText(message) {
           check.provenance === "bridge-broker" ? "BRIDGE-BROKERED" : "AGENT-REPORTED"
         }] ${check.command} — ${check.summary}` +
         (Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : "") +
-        (check.attachmentManifestId
-          ? ` (attachment manifest ${check.attachmentManifestId})`
-          : ""),
+        (check.attachmentManifestId ? ` (attachment manifest ${check.attachmentManifestId})` : ""),
     ),
   ].join("\n");
 }
@@ -115,7 +108,10 @@ export function buildTranscript(
   for (const item of selected) {
     if (!ordered.includes(item)) ordered.push(item);
   }
-  const text = ordered.map((item) => item.block).join("\n\n").slice(0, limit);
+  const text = ordered
+    .map((item) => item.block)
+    .join("\n\n")
+    .slice(0, limit);
   const includedLabels = new Set(selected.map((item) => item.label));
   const shortenedLabels = selected.filter((item) => item.shortened).map((item) => item.label);
   return {
@@ -145,7 +141,10 @@ export function buildOutcomeInput(topic, messages, maxCharacters = 96_000) {
   }));
   const totalCharacters = normalized.reduce((sum, message) => sum + message.body.length, 0);
   const metadataLength = normalized.reduce(
-    (sum, message) => sum + `[M${message.index + 1}] · ${message.author} · ROUND ${message.round ?? "—"}\n`.length + 2,
+    (sum, message) =>
+      sum +
+      `[M${message.index + 1}] · ${message.author} · ROUND ${message.round ?? "—"}\n`.length +
+      2,
     0,
   );
   const fixedLength = `DISCUSSION GOAL\n${topic}\n\nTRANSCRIPT\n`.length + metadataLength;
@@ -187,8 +186,12 @@ export function extractDissentJson(raw, { validLabels = [] } = {}) {
   }
   const allowedLabels = new Set(validLabels);
   return payload.items.map((item) => {
-    const messageLabel = String(item?.messageLabel || "").trim().toUpperCase();
-    const position = String(item?.position || "").trim().toLowerCase();
+    const messageLabel = String(item?.messageLabel || "")
+      .trim()
+      .toUpperCase();
+    const position = String(item?.position || "")
+      .trim()
+      .toLowerCase();
     const summary = redactVisibleString(item?.summary, 2_400).trim();
     const reason = String(item?.reason || "").trim();
     if (
@@ -339,7 +342,9 @@ export function extractReportedChecks(raw, { sandboxPaths = [], round } = {}) {
       return { body: source, checks: [] };
     }
     const command = sanitizeVisibleValue(candidate.command, 320, sandboxPaths);
-    const status = String(candidate.status || "").trim().toLowerCase();
+    const status = String(candidate.status || "")
+      .trim()
+      .toLowerCase();
     const summary = sanitizeVisibleValue(candidate.summary, 600, sandboxPaths);
     if (!command || !summary || !CHECK_STATUSES.has(status)) {
       return { body: source, checks: [] };
@@ -352,7 +357,11 @@ export function extractReportedChecks(raw, { sandboxPaths = [], round } = {}) {
       provenance: "agent-reported",
     };
     if (candidate.exitCode !== undefined) {
-      if (!Number.isInteger(candidate.exitCode) || candidate.exitCode < 0 || candidate.exitCode > 255) {
+      if (
+        !Number.isInteger(candidate.exitCode) ||
+        candidate.exitCode < 0 ||
+        candidate.exitCode > 255
+      ) {
         return { body: source, checks: [] };
       }
       check.exitCode = candidate.exitCode;
@@ -481,6 +490,12 @@ your final answer. Loopback is available for local test servers; external and pr
 destinations are blocked. Changes made by that command cannot affect your own workspace. This is
 optional. Never claim the request ran until the bridge returns its result. Do not emit a
 roundtable-checks block.`;
+  const repositoryContextPrompt = `REPOSITORY CHANGE CONTEXT
+When .roundtable-context/metadata.json exists, inspect it and
+.roundtable-context/changes.patch before making claims about the current branch or pull-request
+diff. These files are generated directly from the selected repository's Git state; the private
+.git directory and Git configuration remain excluded from your disposable workspace. Cite the
+actual changed code, and distinguish branch-diff findings from pre-existing tree findings.`;
 
   const stagePrompt =
     stage === "sealed"
@@ -497,6 +512,8 @@ test the strongest uncertainty when useful, and say what should survive into the
 
 PROJECT FOLDER
 ${session.projectPath}
+
+${repositoryContextPrompt}
 
 ${capabilityPrompt}
 
@@ -519,9 +536,11 @@ ${promptData(transcript.text || "(No prior turns.)")}
 </roundtable-transcript>
 
 CONTEXT COVERAGE
-${transcript.coverage.truncated
+${
+  transcript.coverage.truncated
     ? `Partial: omitted ${transcript.coverage.omittedLabels.join(", ") || "none"}; shortened ${transcript.coverage.shortenedLabels.join(", ") || "none"}.`
-    : "Complete: no prior transcript content was omitted."}
+    : "Complete: no prior transcript content was omitted."
+}
 
 YOUR TURN
 Inspect the project as needed, then advance the discussion. Respond directly to the strongest point in the transcript, identify concrete evidence from the repository, and make a useful recommendation or challenge. Keep this to roughly 250–500 words. Do not intentionally edit, create, delete, or rename source files. Do not run destructive commands. This is discussion-only mode. Write only your contribution to the roundtable—no preamble about being an AI and no hidden reasoning.
@@ -795,8 +814,7 @@ export function createBridge({
       status: phase === "stopping" ? "running" : phase,
       turn: session.completedTurns,
       totalTurns: session.totalTurns,
-      failedTurn:
-        phase === "failed" || phase === "retrying" ? session.failedTurn : null,
+      failedTurn: phase === "failed" || phase === "retrying" ? session.failedTurn : null,
       ...extra,
     });
   }
@@ -831,8 +849,7 @@ export function createBridge({
           messageId: queued.message.id,
         });
         emit(session, { type: "message", message: queued.message });
-      }
-      else retained.push(queued);
+      } else retained.push(queued);
     }
     session.pendingSteering = retained;
   }
@@ -874,10 +891,7 @@ export function createBridge({
     emit(session, { type: "session.batch", batch });
   }
 
-  async function runContribution(
-    session,
-    { turn, role, round, stage, frozenMessages },
-  ) {
+  async function runContribution(session, { turn, role, round, stage, frozenMessages }) {
     session.currentTurn = turn;
     const promptPackage = buildPromptPackage(session, role, turn, {
       messages: frozenMessages,
@@ -924,11 +938,7 @@ export function createBridge({
           throw new Error(`${AGENT_NAMES[role]} returned an invalid reply.`);
         }
       } catch (error) {
-        if (
-          session.phase === "stopping" ||
-          session.stopRequested ||
-          error?.code === "USER_STOP"
-        ) {
+        if (session.phase === "stopping" || session.stopRequested || error?.code === "USER_STOP") {
           session.stopRequested = true;
           return false;
         }
@@ -1025,12 +1035,7 @@ export function createBridge({
 
   async function synthesizeWithFallback(
     session,
-    {
-      purpose,
-      promptForRole,
-      preferredRoles = AGENT_ROLES,
-      statusNote,
-    },
+    { purpose, promptForRole, preferredRoles = AGENT_ROLES, statusNote },
   ) {
     const attempts = [];
     for (const role of preferredRoles) {
@@ -1056,11 +1061,7 @@ export function createBridge({
         });
         return { status: "available", parsed, role, attempts };
       } catch (error) {
-        if (
-          session.skipOutcomeRequested ||
-          session.stopRequested ||
-          error?.code === "USER_STOP"
-        ) {
+        if (session.skipOutcomeRequested || session.stopRequested || error?.code === "USER_STOP") {
           return { status: "skipped", attempts };
         }
         attempts.push({
@@ -1087,8 +1088,7 @@ export function createBridge({
         ),
       };
       emit(session, { type: "session.batch", batch: session.sealedBatch });
-      turnLoop:
-      for (let turn = 0; turn < session.totalTurns; turn += 1) {
+      turnLoop: for (let turn = 0; turn < session.totalTurns; turn += 1) {
         if (session.phase === "stopping" || session.stopRequested) break;
         const role = AGENT_ROLES[turn % AGENT_ROLES.length];
         const round = Math.floor(turn / AGENT_ROLES.length) + 1;
@@ -1200,7 +1200,10 @@ export function createBridge({
               message: safeVisibleError(error),
             };
           }
-          emit(session, { type: "session.audit", audit: structuredClone(audit) });
+          emit(session, {
+            type: "session.audit",
+            audit: structuredClone(audit),
+          });
         }
 
         const concerns = Object.values(audit.reviews).flatMap((review) =>
@@ -1267,7 +1270,10 @@ export function createBridge({
               attempts: revision.attempts,
             };
           }
-          emit(session, { type: "session.audit", audit: structuredClone(audit) });
+          emit(session, {
+            type: "session.audit",
+            audit: structuredClone(audit),
+          });
         }
         emit(session, { type: "session.outcome", outcome: finalOutcome });
       }
@@ -1428,7 +1434,9 @@ export function createBridge({
           return;
         }
         if (!consumeTicket(session.id, url.searchParams.get("ticket") || "")) {
-          sendJson(request, response, 401, { error: "Invalid or expired stream ticket." });
+          sendJson(request, response, 401, {
+            error: "Invalid or expired stream ticket.",
+          });
           return;
         }
         response.writeHead(200, {
@@ -1501,7 +1509,10 @@ export function createBridge({
           defaultProject,
           history: {
             available: Boolean(historyStore.enabled),
-            retention: historyStore.retention || { maxRecords: 50, maxDays: 30 },
+            retention: historyStore.retention || {
+              maxRecords: 50,
+              maxDays: 30,
+            },
           },
           ...health,
         });
@@ -1521,7 +1532,9 @@ export function createBridge({
       const historyJudgmentMatch = url.pathname.match(/^\/history\/([^/]+)\/judgment$/);
       if (request.method === "POST" && historyJudgmentMatch) {
         if (!historyStore.enabled) {
-          sendJson(request, response, 409, { error: "Local history is required for judgments." });
+          sendJson(request, response, 409, {
+            error: "Local history is required for judgments.",
+          });
           return;
         }
         const id = historyJudgmentMatch[1];
@@ -1530,19 +1543,24 @@ export function createBridge({
           await liveSession.historyWriteChain;
           if (liveSession.historyWarning) {
             sendJson(request, response, 409, {
-              error: "The dissent review is not durably stored because local history is incomplete.",
+              error:
+                "The dissent review is not durably stored because local history is incomplete.",
             });
             return;
           }
         }
         const snapshot = await historyStore.get(id);
         if (!snapshot) {
-          sendJson(request, response, 404, { error: "Archived discussion not found." });
+          sendJson(request, response, 404, {
+            error: "Archived discussion not found.",
+          });
           return;
         }
         const payload = await readJson(request);
         const dissentId = String(payload.dissentId || "").trim();
-        const verdict = String(payload.verdict || "").trim().toLowerCase();
+        const verdict = String(payload.verdict || "")
+          .trim()
+          .toLowerCase();
         if (
           !snapshot.dissent?.some((item) => item.id === dissentId) ||
           !["represented", "missed"].includes(verdict)
@@ -1573,7 +1591,9 @@ export function createBridge({
       if (request.method === "GET" && historyMatch) {
         const snapshot = await historyStore.get(historyMatch[1]);
         if (!snapshot) {
-          sendJson(request, response, 404, { error: "Archived discussion not found." });
+          sendJson(request, response, 404, {
+            error: "Archived discussion not found.",
+          });
           return;
         }
         sendJson(request, response, 200, snapshot);
@@ -1592,7 +1612,9 @@ export function createBridge({
         if (liveSession) await liveSession.historyWriteChain;
         const deleted = await historyStore.delete(id);
         if (!deleted) {
-          sendJson(request, response, 404, { error: "Archived discussion not found." });
+          sendJson(request, response, 404, {
+            error: "Archived discussion not found.",
+          });
           return;
         }
         sendJson(request, response, 200, { ok: true });
@@ -1602,13 +1624,13 @@ export function createBridge({
       if (request.method === "DELETE" && url.pathname === "/history") {
         const payload = await readJson(request);
         if (payload.confirm !== "clear") {
-          sendJson(request, response, 400, { error: "Clear history requires confirmation." });
+          sendJson(request, response, 400, {
+            error: "Clear history requires confirmation.",
+          });
           return;
         }
         if (
-          [...sessions.values()].some(
-            (session) => session.keepHistory && !session.historyClosed,
-          )
+          [...sessions.values()].some((session) => session.keepHistory && !session.historyClosed)
         ) {
           sendJson(request, response, 409, {
             error: "End active discussions before clearing local history.",
@@ -1623,9 +1645,7 @@ export function createBridge({
       if (request.method === "POST" && url.pathname === "/sessions") {
         const unavailableRoles = AGENT_ROLES.filter((role) => !health[role].available);
         if (unavailableRoles.length) {
-          const diagnostic = unavailableRoles
-            .map((role) => health[role].diagnostic)
-            .find(Boolean);
+          const diagnostic = unavailableRoles.map((role) => health[role].diagnostic).find(Boolean);
           sendJson(request, response, 400, {
             error: diagnostic || "All three CLIs must be installed and signed in.",
           });
@@ -1657,7 +1677,9 @@ export function createBridge({
         }
 
         if (!topic) {
-          sendJson(request, response, 400, { error: "Add a discussion goal first." });
+          sendJson(request, response, 400, {
+            error: "Add a discussion goal first.",
+          });
           return;
         }
         if (reviewDissent && !keepHistory) {
@@ -1681,7 +1703,9 @@ export function createBridge({
           (claudeModel && !modelPattern.test(claudeModel)) ||
           (antigravityModel && !modelPattern.test(antigravityModel))
         ) {
-          sendJson(request, response, 400, { error: "Model names contain unsupported characters." });
+          sendJson(request, response, 400, {
+            error: "Model names contain unsupported characters.",
+          });
           return;
         }
         if (
@@ -1689,14 +1713,13 @@ export function createBridge({
           !health.models.claude.efforts.includes(claudeEffort) ||
           !health.models.antigravity.efforts.includes(antigravityEffort)
         ) {
-          sendJson(request, response, 400, { error: "Reasoning effort is not supported." });
+          sendJson(request, response, 400, {
+            error: "Reasoning effort is not supported.",
+          });
           return;
         }
         const requiredAntigravityEffort = antigravityModelEffort(antigravityModel);
-        if (
-          requiredAntigravityEffort &&
-          requiredAntigravityEffort !== antigravityEffort
-        ) {
+        if (requiredAntigravityEffort && requiredAntigravityEffort !== antigravityEffort) {
           sendJson(request, response, 400, {
             error: `That Antigravity model requires ${requiredAntigravityEffort} reasoning effort.`,
           });
@@ -1705,7 +1728,9 @@ export function createBridge({
 
         evictOverflow();
         if (sessions.size >= maxSessions) {
-          sendJson(request, response, 429, { error: "Too many retained discussions." });
+          sendJson(request, response, 429, {
+            error: "Too many retained discussions.",
+          });
           return;
         }
 
@@ -1795,7 +1820,10 @@ export function createBridge({
         if (request.method === "POST" && action === "ticket") {
           sweepTickets();
           const ticket = randomUUID();
-          tickets.set(ticket, { sessionId: id, expiresAt: Date.now() + 30_000 });
+          tickets.set(ticket, {
+            sessionId: id,
+            expiresAt: Date.now() + 30_000,
+          });
           sendJson(request, response, 201, { ticket });
           return;
         }
@@ -1811,13 +1839,19 @@ export function createBridge({
             return;
           }
           if (session.currentTurn >= session.totalTurns - 1) {
-            sendJson(request, response, 409, { error: "There is no remaining agent turn to steer." });
+            sendJson(request, response, 409, {
+              error: "There is no remaining agent turn to steer.",
+            });
             return;
           }
           const payload = await readJson(request);
-          const text = String(payload.text || "").trim().slice(0, 8_000);
+          const text = String(payload.text || "")
+            .trim()
+            .slice(0, 8_000);
           if (!text) {
-            sendJson(request, response, 400, { error: "Steering note cannot be empty." });
+            sendJson(request, response, 400, {
+              error: "Steering note cannot be empty.",
+            });
             return;
           }
           const message = makeMessage(now, "human", text);
@@ -1867,10 +1901,7 @@ export function createBridge({
           session.totalTurns += additionalRounds * AGENT_ROLES.length;
           emit(session, {
             type: "session.status",
-            status:
-              session.phase === "starting"
-                ? "running"
-                : session.phase,
+            status: session.phase === "starting" ? "running" : session.phase,
             speaker: session.lastStatus?.speaker,
             turn: session.completedTurns,
             totalTurns: session.totalTurns,
@@ -1907,13 +1938,18 @@ export function createBridge({
 
         if (request.method === "POST" && action === "stop") {
           if (TERMINAL_PHASES.has(session.phase)) {
-            sendJson(request, response, 409, { error: "This discussion has already ended." });
+            sendJson(request, response, 409, {
+              error: "This discussion has already ended.",
+            });
             return;
           }
           if (session.phase === "synthesizing") {
             session.skipOutcomeRequested = true;
             void agentRunner.stop(session, "user_stop");
-            sendJson(request, response, 202, { ok: true, skippingOutcome: true });
+            sendJson(request, response, 202, {
+              ok: true,
+              skippingOutcome: true,
+            });
             return;
           }
           if (session.phase === "failed") {

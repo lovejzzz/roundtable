@@ -8,6 +8,7 @@ import {
   LAUNCHER_SHUTDOWN_GRACE_MS,
   parseTalkArguments,
   resolveBridgePort,
+  resolveWebPort,
   startRoundtableSession,
   stopStartedProcesses,
   unexpectedChildExitError,
@@ -40,6 +41,7 @@ Options:
 
 const token = randomBytes(24).toString("base64url");
 const bridgePort = resolveBridgePort();
+const webPort = resolveWebPort();
 const bridgeUrl = `http://127.0.0.1:${bridgePort}`;
 const children = new Set();
 const startupFailure = createDeferred();
@@ -99,7 +101,7 @@ start("Bridge", process.execPath, ["scripts/bridge.mjs"], {
   ROUNDTABLE_BRIDGE_PORT: String(bridgePort),
 });
 
-const web = start("Web app", "npm", ["run", "dev"]);
+const web = start("Web app", "npm", ["run", "dev", "--", "--port", String(webPort)]);
 let webOutput = "";
 web.stdout.on("data", (chunk) => {
   webOutput = `${webOutput}${chunk.toString()}`.slice(-2_000);
@@ -131,6 +133,7 @@ try {
       })
     : "";
   const appUrl = buildRoundtableUrl({
+    appOrigin: `http://localhost:${webPort}/`,
     bridgeUrl,
     token,
     projectPath: launchOptions.projectPath,
@@ -150,12 +153,12 @@ try {
         : process.platform === "win32"
           ? ["cmd", ["/c", "start", "", appUrl]]
           : ["xdg-open", [appUrl]];
-    const openChild = spawn(opener[0], opener[1], { stdio: "ignore", detached: true });
+    const openChild = spawn(opener[0], opener[1], {
+      stdio: "ignore",
+      detached: true,
+    });
     openChild.unref();
   }
 } catch (error) {
-  await shutdown(
-    1,
-    error instanceof Error ? error.message : "Roundtable startup failed.",
-  );
+  await shutdown(1, error instanceof Error ? error.message : "Roundtable startup failed.");
 }
