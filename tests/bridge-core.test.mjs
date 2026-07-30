@@ -130,6 +130,76 @@ test("returns the first actionable CLI readiness diagnostic", async () => {
   }
 });
 
+test("keeps attachment bytes private while listing disposable paths in every prompt", async () => {
+  const prompts = [];
+  let preparedPayload;
+  const agentRunner = {
+    prepare: async (session) => {
+      preparedPayload = session.attachmentPayloads[0];
+    },
+    run: async ({ prompt, purpose }) => {
+      prompts.push(prompt);
+      if (purpose === "synthesis") {
+        return JSON.stringify({
+          decision: "Use the attached evidence.",
+          rationale: "Every participant received the same file.",
+          actions: [],
+          openQuestions: [],
+          consensus: true,
+        });
+      }
+      return "I inspected the attached brief.";
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Review the prompt file",
+        rounds: 1,
+        attachments: [
+          {
+            name: "brief.md",
+            mediaType: "text/markdown",
+            contentBase64: Buffer.from("# Private prompt file\n").toString("base64"),
+          },
+        ],
+      }),
+    });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    const completed = await waitFor(async () => {
+      const snapshot = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      }).then((result) => result.json());
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+
+    assert.equal(preparedPayload.bytes.toString("utf8"), "# Private prompt file\n");
+    assert.deepEqual(completed.attachments, [
+      {
+        name: "brief.md",
+        mediaType: "text/markdown",
+        size: 22,
+        path: ".roundtable-attachments/1-brief.md",
+      },
+    ]);
+    assert.equal("attachmentPayloads" in completed, false);
+    for (const prompt of prompts.slice(0, 3)) {
+      assert.match(prompt, /PROMPT ATTACHMENTS/);
+      assert.match(prompt, /\.roundtable-attachments\/1-brief\.md/);
+      assert.doesNotMatch(prompt, /# Private prompt file/);
+    }
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("queues steering after the active reply and includes it once in the next prompt", async () => {
   let releaseFirstTurn;
   const prompts = [];

@@ -28,6 +28,7 @@ import { runBrokerCapableParticipant } from "./broker-controller.mjs";
 import { createBridge } from "./bridge-core.mjs";
 import { buildClaudeInvocationArgs } from "./claude-invocation.mjs";
 import { createHistoryStore } from "./history-store.mjs";
+import { materializePromptAttachments } from "./prompt-attachments.mjs";
 import {
   buildCodexPermissionArgs,
   buildAntigravitySandboxProfile,
@@ -560,6 +561,10 @@ async function runBrokeredCheck(session, requesterRole, argv) {
       session,
       `${requesterRole}-broker`,
     );
+    await materializePromptAttachments(
+      brokerSandbox.workspace,
+      session.attachmentPayloads,
+    );
     const scratchHome = join(brokerSandbox.root, "home");
     await mkdir(scratchHome, { recursive: true });
     const siblingRoots = ["codex", "claude", "antigravity"]
@@ -671,7 +676,11 @@ async function runAntigravityModel(session, prompt) {
 const agentRunner = {
   prepare(session) {
     return Promise.all(
-      ["codex", "claude", "antigravity"].map((role) => ensureTestSandbox(session, role)),
+      ["codex", "claude", "antigravity"].map(async (role) => {
+        const workspace = await ensureTestSandbox(session, role);
+        await materializePromptAttachments(workspace, session.attachmentPayloads);
+        return workspace;
+      }),
     );
   },
   run({ session, role, prompt, purpose }) {
@@ -702,6 +711,7 @@ const agentRunner = {
   },
   cleanup(session) {
     session.brokerTransactions?.clear();
+    session.attachmentPayloads = [];
     return cleanupTestSandboxes(session);
   },
 };

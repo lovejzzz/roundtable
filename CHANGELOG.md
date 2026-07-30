@@ -4,6 +4,53 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.15] — 2026-07-30
+
+### Request and audit
+
+Request: let the discussion prompt upload files.
+
+The implementation was scoped as a real agent input channel rather than a
+decorative picker or an unsafe append-to-topic shortcut. Uploaded bytes must be
+available to all three participants and optional brokered checks, while the
+selected project, visible transcript, history records, and Completion Brief
+remain free of opaque base64 payloads.
+
+### Prompt attachments
+
+- The discussion textarea now includes an accessible **Add files** control,
+  attachment chips with names and sizes, individual remove actions, and a
+  visible capacity counter.
+- A prompt accepts up to five files, 1 MB per file and 3 MB combined. Duplicate
+  names, oversized input, malformed base64, invalid media types, control
+  characters, and excessive request bodies are rejected at both browser and
+  bridge boundaries.
+- The bridge replaces untrusted filenames with generated safe relative paths
+  under `.roundtable-attachments/`.
+- Attachment bytes are copied with private permissions into each participant's
+  disposable workspace and into fresh broker workspaces when a participant
+  requests a check. The original project is never modified.
+- Every agent prompt lists the same attachment paths, names, media types, and
+  sizes. It explicitly treats file contents as evidence rather than control
+  instructions.
+- Session snapshots, SSE events, local history, exports, and archived rooms
+  retain attachment metadata only. Raw bytes stay in private in-memory payloads
+  until cleanup and are then released.
+- Locked and archived session summaries show the prompt files that informed the
+  discussion, and Markdown export records their names and sizes.
+
+### Verification
+
+- Added normalization, traversal-resistant filename, media-type injection,
+  duplicate, malformed input, size/count, materialization, prompt disclosure,
+  snapshot privacy, and all-participant prompt regressions.
+- All 64 bridge tests pass with no skips, including host sandbox-containment
+  probes.
+- Lint, the production build, and both rendered-page checks pass.
+- Browser QA confirmed the upload control, limits, prompt hierarchy, keyboard
+  labels, and desktop layout render correctly without displacing the primary
+  discussion controls.
+
 ## [v0.0.0.14] — 2026-07-30
 
 ### Conversation and audit

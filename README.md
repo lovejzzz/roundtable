@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.14**
+Current release: **v0.0.0.15**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -31,34 +31,38 @@ discussion.
 ## How a discussion works
 
 1. Choose an absolute project folder and a discussion goal.
-2. Review or change the model shown under each CLI participant. Friendly names such as Claude Opus 5 appear above the exact CLI identifier.
-3. Set each agent's reasoning effort with the slider, from low through extra high to max. The bridge starts from each CLI's configured effort.
+2. Optionally attach up to five prompt files (1 MB each, 3 MB combined).
+   Roundtable copies them into every disposable agent workspace and lists their
+   generated relative paths in the control prompt. File bytes never enter the
+   visible transcript or local history.
+3. Review or change the model shown under each CLI participant. Friendly names such as Claude Opus 5 appear above the exact CLI identifier.
+4. Set each agent's reasoning effort with the slider, from low through extra high to max. The bridge starts from each CLI's configured effort.
    Antigravity models whose exact identifier ends in `-low`, `-medium`, or
    `-high` lock the slider to that required level so the room cannot start an
    invalid CLI route.
-4. Codex, Claude, and Antigravity take turns in that order from separate
+5. Codex, Claude, and Antigravity take turns in that order from separate
    disposable copies of the same project and read the same shared transcript.
    Every message records its model and reasoning effort.
-5. Codex may optionally run focused existing checks in its native sandbox.
+6. Codex may optionally run focused existing checks in its native sandbox.
    Claude and Antigravity may each request one approved argv command;
    Roundtable executes it without a shell in a fresh request-scoped project
    copy, then returns the real result for that participant's final contribution.
-6. Add a steering note at any time. It is added to the transcript before the next agent turn.
-7. If an agent call fails, Roundtable pauses that exact turn without changing the
+7. Add a steering note at any time. It is added to the transcript before the next agent turn.
+8. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
-8. Only after the final agent turn, Codex produces a structured Completion
+9. Only after the final agent turn, Codex produces a structured Completion
    Brief with the decision, rationale, owned next actions, and open questions.
    It follows the transcript in the conversation scroll and replaces the
    now-inapplicable steering composer. You can skip it without losing the
    transcript.
-9. Optionally enable **Dissent check**. After Codex freezes the ordinary brief,
+10. Optionally enable **Dissent check**. After Codex freezes the ordinary brief,
    each agent gets one separate review pass and can identify labeled positions
    the brief missed or flattened. Mark each item **Represented** or **Missed**;
    those judgments are saved locally.
-10. If you opt in, open **History** to revisit recent discussions after a bridge
+11. If you opt in, open **History** to revisit recent discussions after a bridge
    restart. Archived discussions are read-only and keep undelivered steering
    notes visibly separate from the transcript.
-11. Stop the discussion whenever you want.
+12. Stop the discussion whenever you want.
 
 The workspace changes with the room lifecycle. Setup keeps the goal,
 connection, and participant controls beside a conversation preview. Once a

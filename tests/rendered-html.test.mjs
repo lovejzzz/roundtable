@@ -44,6 +44,9 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /aria-label="Antigravity reasoning effort"/i);
   assert.match(html, /Model and effort are sent as separate CLI settings/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
+  assert.match(html, /Add files/i);
+  assert.match(html, /aria-label="Add files to the discussion prompt"/i);
+  assert.match(html, /1 MB each · 3 MB total/i);
   assert.match(html, /TEST CAPABILITY/i);
   assert.match(html, /separate disposable project copies/i);
   assert.match(html, /Claude and Antigravity can each request one approved argv command/i);
@@ -76,6 +79,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /Claude(?:&apos;|')s model process remains read-only/i);
   assert.match(page, /Claude and Antigravity can each request one approved argv command/i);
   assert.match(page, /showCompletionBrief/);
+  assert.match(page, /promptAttachments/);
+  assert.match(page, /contentBase64/);
+  assert.match(page, /Remove .*attachment\.name/);
   assert.match(page, /feed-outcome/);
   assert.match(page, /roomMode !== "archive" && !showCompletionBrief/);
   assert.doesNotMatch(page, /className="mobile-outcome"/);

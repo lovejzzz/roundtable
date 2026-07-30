@@ -6,9 +6,11 @@ import {
   CircleStop,
   Copy,
   Download,
+  FileText,
   FolderOpen,
   History,
   KeyRound,
+  Paperclip,
   Radio,
   RefreshCw,
   Send,
@@ -19,10 +21,27 @@ import {
   WifiOff,
   X,
 } from "lucide-react";
-import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  CSSProperties,
+  FormEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type AgentRole = "codex" | "claude" | "antigravity";
 type Speaker = AgentRole | "human";
+
+type PromptAttachment = {
+  id: string;
+  name: string;
+  mediaType: string;
+  size: number;
+  path?: string;
+  contentBase64?: string;
+};
 
 type ReportedCheck = {
   command: string;
@@ -179,6 +198,7 @@ type SessionSnapshot = {
   phase: SessionStatus | "starting" | "stopping";
   projectPath: string;
   topic: string;
+  attachments?: Omit<PromptAttachment, "id" | "contentBase64">[];
   codexModel: string;
   claudeModel: string;
   antigravityModel: string;
@@ -266,6 +286,9 @@ const DEFAULT_BRIDGE = "http://127.0.0.1:4317";
 const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULT_TOPIC =
   "Review this project’s architecture and agree on the highest-leverage next steps.";
+const MAX_PROMPT_ATTACHMENTS = 5;
+const MAX_PROMPT_ATTACHMENT_BYTES = 1024 * 1024;
+const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
 
 function encodedModelEffort(model: string) {
   return model.toLowerCase().match(/-(low|medium|high)$/)?.[1] || "";
@@ -319,6 +342,29 @@ function friendlyEffort(effort: string) {
   if (effort === "xhigh") return "Extra high";
   if (effort === "ultra") return "Ultra";
   return effort ? effort[0].toUpperCase() + effort.slice(1) : "CLI default";
+}
+
+function attachmentSize(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function fileContentBase64(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read “${file.name}”.`));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const separator = result.indexOf(",");
+      if (separator < 0) {
+        reject(new Error(`Could not encode “${file.name}”.`));
+        return;
+      }
+      resolve(result.slice(separator + 1));
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function ModelRoute({
@@ -648,6 +694,8 @@ export default function Home() {
   const [totalTurns, setTotalTurns] = useState(9);
   const [projectPath, setProjectPath] = useState("");
   const [topic, setTopic] = useState(DEFAULT_TOPIC);
+  const [promptAttachments, setPromptAttachments] = useState<PromptAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState("");
   const [rounds, setRounds] = useState("3");
   const [codexModel, setCodexModel] = useState("");
   const [claudeModel, setClaudeModel] = useState("");
@@ -787,6 +835,13 @@ export default function Home() {
     setSessionId(snapshot.id);
     setProjectPath(snapshot.projectPath);
     setTopic(snapshot.topic);
+    setPromptAttachments(
+      (snapshot.attachments || []).map((attachment, index) => ({
+        ...attachment,
+        id: `${snapshot.id}-${index}`,
+      })),
+    );
+    setAttachmentError("");
     setCodexModel(snapshot.codexModel);
     setClaudeModel(snapshot.claudeModel);
     const restoredAntigravityModel =
@@ -928,6 +983,61 @@ export default function Home() {
     };
   }
 
+  async function addPromptAttachments(event: ChangeEvent<HTMLInputElement>) {
+    const files = [...(event.target.files || [])];
+    event.target.value = "";
+    if (!files.length) return;
+    setAttachmentError("");
+
+    const nextCount = promptAttachments.length + files.length;
+    if (nextCount > MAX_PROMPT_ATTACHMENTS) {
+      setAttachmentError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files.`);
+      return;
+    }
+    const existingNames = new Set(promptAttachments.map((item) => item.name.toLowerCase()));
+    const newNames = new Set<string>();
+    for (const file of files) {
+      const key = file.name.toLowerCase();
+      if (existingNames.has(key) || newNames.has(key)) {
+        setAttachmentError(`Remove the duplicate attachment “${file.name}”.`);
+        return;
+      }
+      if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
+        setAttachmentError(`“${file.name}” is larger than the 1 MB attachment limit.`);
+        return;
+      }
+      newNames.add(key);
+    }
+    const nextTotal = [...promptAttachments, ...files].reduce(
+      (sum, item) => sum + item.size,
+      0,
+    );
+    if (nextTotal > MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES) {
+      setAttachmentError("Prompt attachments exceed the 3 MB combined limit.");
+      return;
+    }
+
+    try {
+      const encoded = await Promise.all(
+        files.map(async (file, index) => ({
+          id: `${Date.now()}-${index}-${file.name}`,
+          name: file.name,
+          mediaType: file.type || "application/octet-stream",
+          size: file.size,
+          contentBase64: await fileContentBase64(file),
+        })),
+      );
+      setPromptAttachments((current) => [...current, ...encoded]);
+    } catch (error) {
+      setAttachmentError(error instanceof Error ? error.message : "The files could not be read.");
+    }
+  }
+
+  function removePromptAttachment(id: string) {
+    setPromptAttachments((current) => current.filter((attachment) => attachment.id !== id));
+    setAttachmentError("");
+  }
+
   async function startDiscussion(event: FormEvent) {
     event.preventDefault();
     if (!connected) {
@@ -944,6 +1054,11 @@ export default function Home() {
       body: JSON.stringify({
         projectPath: projectPath.trim(),
         topic: topic.trim(),
+        attachments: promptAttachments.map((attachment) => ({
+          name: attachment.name,
+          mediaType: attachment.mediaType,
+          contentBase64: attachment.contentBase64,
+        })),
         rounds: Number(rounds),
         codexModel: codexModel.trim(),
         claudeModel: claudeModel.trim(),
@@ -965,6 +1080,16 @@ export default function Home() {
       return;
     }
     setMessages([]);
+    setPromptAttachments((current) =>
+      current.map((attachment) => ({
+        id: attachment.id,
+        name: attachment.name,
+        mediaType: attachment.mediaType,
+        size: attachment.size,
+        path: attachment.path,
+      })),
+    );
+    setAttachmentError("");
     setOutcome(null);
     setPendingSteering([]);
     setDissent([]);
@@ -1031,6 +1156,8 @@ export default function Home() {
     setStatus("idle");
     setProjectPath(health?.defaultProject || "");
     setTopic(DEFAULT_TOPIC);
+    setPromptAttachments([]);
+    setAttachmentError("");
     setRounds("3");
     setCodexModel(health?.models.codex.configured || "");
     setClaudeModel(health?.models.claude.configured || "");
@@ -1173,6 +1300,13 @@ export default function Home() {
       "",
       `**Project:** ${projectPath}`,
       `**Goal:** ${topic}`,
+      ...(promptAttachments.length
+        ? [
+            `**Attachments:** ${promptAttachments
+              .map((attachment) => `${attachment.name} (${attachmentSize(attachment.size)})`)
+              .join(", ")}`,
+          ]
+        : []),
       `**Codex:** ${friendlyModelName("codex", codexModel)} · ${friendlyEffort(codexEffort)}`,
       `**Claude:** ${friendlyModelName("claude", claudeModel)} · ${friendlyEffort(claudeEffort)}`,
       `**Antigravity:** ${friendlyModelName("antigravity", antigravityModel)} · ${friendlyEffort(antigravityEffort)}`,
@@ -1553,15 +1687,59 @@ export default function Home() {
               </div>
             </label>
 
-            <label className="field">
-              <span>What should they discuss?</span>
-              <textarea
-                value={topic}
-                onChange={(event) => setTopic(event.target.value)}
-                rows={6}
-                required
-              />
-            </label>
+            <div className="field">
+              <label htmlFor="discussion-topic">What should they discuss?</label>
+              <div className="prompt-window">
+                <textarea
+                  id="discussion-topic"
+                  value={topic}
+                  onChange={(event) => setTopic(event.target.value)}
+                  rows={6}
+                  required
+                />
+                {promptAttachments.length > 0 && (
+                  <ul className="prompt-attachment-list" aria-label="Prompt attachments">
+                    {promptAttachments.map((attachment) => (
+                      <li key={attachment.id}>
+                        <FileText size={13} />
+                        <span>
+                          <strong>{attachment.name}</strong>
+                          <small>{attachmentSize(attachment.size)}</small>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removePromptAttachment(attachment.id)}
+                          aria-label={`Remove ${attachment.name}`}
+                        >
+                          <X size={13} />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="prompt-toolbar">
+                  <label className="attachment-button">
+                    <Paperclip size={14} />
+                    Add files
+                    <input
+                      type="file"
+                      multiple
+                      disabled={busy || promptAttachments.length >= MAX_PROMPT_ATTACHMENTS}
+                      onChange={(event) => void addPromptAttachments(event)}
+                      aria-label="Add files to the discussion prompt"
+                    />
+                  </label>
+                  <small>
+                    {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 1 MB each · 3 MB total
+                  </small>
+                </div>
+              </div>
+              {attachmentError && (
+                <p className="attachment-error" role="alert">
+                  {attachmentError}
+                </p>
+              )}
+            </div>
 
             <div className="field-row">
               <label className="field">
@@ -1819,6 +1997,20 @@ export default function Home() {
                 <span className="step-count">{roomMode === "archive" ? "READ ONLY" : "LOCKED"}</span>
               </div>
               <p className="session-summary-topic">{topic}</p>
+              {promptAttachments.length > 0 && (
+                <div className="session-attachments">
+                  <span className="context-label">PROMPT FILES</span>
+                  <ul>
+                    {promptAttachments.map((attachment) => (
+                      <li key={attachment.id}>
+                        <FileText size={11} />
+                        <span>{attachment.name}</span>
+                        <small>{attachmentSize(attachment.size)}</small>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               <dl>
                 <div>
                   <dt>Project</dt>

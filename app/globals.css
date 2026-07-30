@@ -538,7 +538,8 @@ button {
   gap: 9px;
 }
 
-.field > span {
+.field > span,
+.field > label {
   font-size: 11px;
   font-weight: 650;
   color: #c8c6bf;
@@ -561,6 +562,141 @@ button {
 
 .field textarea {
   min-height: 126px;
+}
+
+.prompt-window {
+  border: 1px solid var(--line);
+  background: #0d0e12;
+}
+
+.prompt-window:focus-within {
+  border-color: #70727b;
+}
+
+.prompt-window textarea {
+  display: block;
+  border: 0;
+  min-height: 126px;
+}
+
+.prompt-window textarea:focus {
+  border-color: transparent;
+}
+
+.prompt-toolbar {
+  min-height: 40px;
+  border-top: 1px solid #292a30;
+  padding: 7px 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.prompt-toolbar > small {
+  color: #62646d;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.attachment-button {
+  width: fit-content;
+  border: 1px solid #363840;
+  background: #15161b;
+  color: #b8bac1;
+  padding: 6px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 8px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.attachment-button:hover {
+  border-color: #70727b;
+  color: var(--paper);
+}
+
+.attachment-button:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.attachment-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.prompt-attachment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 9px 9px;
+  display: grid;
+  gap: 6px;
+}
+
+.prompt-attachment-list li {
+  min-width: 0;
+  border: 1px solid #30323a;
+  background: #131419;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.prompt-attachment-list li > svg {
+  color: var(--human);
+}
+
+.prompt-attachment-list strong,
+.prompt-attachment-list small {
+  display: block;
+}
+
+.prompt-attachment-list strong {
+  color: #d8d5cc;
+  font-size: 9px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.prompt-attachment-list small {
+  margin-top: 2px;
+  color: #666872;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
+}
+
+.prompt-attachment-list button {
+  border: 0;
+  background: transparent;
+  color: #747681;
+  padding: 4px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.prompt-attachment-list button:hover {
+  color: #e39a83;
+}
+
+.attachment-error {
+  margin: -2px 0 0;
+  color: #e39a83;
+  font-size: 9px;
+  line-height: 1.45;
 }
 
 .field input:focus,
@@ -872,6 +1008,45 @@ button {
   color: #d5d2ca;
   font-size: 13px;
   line-height: 1.55;
+}
+
+.session-attachments {
+  margin-top: 18px;
+}
+
+.session-attachments ul {
+  list-style: none;
+  margin: 9px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.session-attachments li {
+  min-width: 0;
+  border: 1px solid #292b31;
+  background: #121318;
+  padding: 7px 8px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  color: #bfc0c4;
+  font-size: 8px;
+}
+
+.session-attachments li svg {
+  color: var(--human);
+}
+
+.session-attachments li span {
+  overflow-wrap: anywhere;
+}
+
+.session-attachments li small {
+  color: #656771;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 7px;
 }
 
 .session-summary dl {

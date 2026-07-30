@@ -1,6 +1,10 @@
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 import { antigravityModelEffort } from "./antigravity-invocation.mjs";
+import {
+  normalizePromptAttachments,
+  promptAttachmentsSection,
+} from "./prompt-attachments.mjs";
 import { redactVisibleString } from "./redaction.mjs";
 
 export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interrupted"]);
@@ -328,6 +332,8 @@ ${session.projectPath}
 
 ${capabilityPrompt}
 
+${promptAttachmentsSection(session.attachments)}
+
 DISCUSSION GOAL
 ${session.topic}
 
@@ -429,11 +435,11 @@ export function createBridge({
     response.end(JSON.stringify(payload));
   }
 
-  async function readJson(request) {
+  async function readJson(request, maxBodyLength = 128_000) {
     let body = "";
     for await (const chunk of request) {
       body += chunk;
-      if (body.length > 128_000) throw new Error("Request body is too large.");
+      if (body.length > maxBodyLength) throw new Error("Request body is too large.");
     }
     return body ? JSON.parse(body) : {};
   }
@@ -841,6 +847,7 @@ export function createBridge({
       phase: session.phase,
       projectPath: session.projectPath,
       topic: session.topic,
+      attachments: session.attachments,
       createdAt: session.createdAt,
       codexModel: session.codexModel,
       claudeModel: session.claudeModel,
@@ -1048,7 +1055,7 @@ export function createBridge({
           });
           return;
         }
-        const payload = await readJson(request);
+        const payload = await readJson(request, 4_500_000);
         const topic = String(payload.topic || "").trim();
         const rounds = Math.max(1, Math.min(5, Number(payload.rounds) || 3));
         const codexModel = String(payload.codexModel || health.models.codex.configured).trim();
@@ -1063,6 +1070,15 @@ export function createBridge({
         ).trim();
         const keepHistory = Boolean(payload.keepHistory && historyStore.enabled);
         const reviewDissent = Boolean(payload.reviewDissent);
+        let normalizedAttachments;
+        try {
+          normalizedAttachments = normalizePromptAttachments(payload.attachments);
+        } catch (error) {
+          sendJson(request, response, 400, {
+            error: error instanceof Error ? error.message : "Prompt attachments are invalid.",
+          });
+          return;
+        }
 
         if (!topic) {
           sendJson(request, response, 400, { error: "Add a discussion goal first." });
@@ -1115,6 +1131,8 @@ export function createBridge({
           phase: "starting",
           projectPath,
           topic,
+          attachments: normalizedAttachments.attachments,
+          attachmentPayloads: normalizedAttachments.payloads,
           codexModel,
           claudeModel,
           antigravityModel,
