@@ -1,15 +1,29 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { access, mkdtemp, readFile, readdir, realpath, rm, stat } from "node:fs/promises";
+import {
+  access,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+} from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { buildAgentEnvironment } from "./agent-environment.mjs";
+import {
+  ANTIGRAVITY_REQUIRED_FLAGS,
+  buildAntigravityInvocationArgs,
+} from "./antigravity-invocation.mjs";
+import { withAntigravityPromptFile } from "./antigravity-prompt-file.mjs";
 import { createBridge } from "./bridge-core.mjs";
 import { buildClaudeInvocationArgs } from "./claude-invocation.mjs";
 import { createHistoryStore } from "./history-store.mjs";
 import {
   buildCodexPermissionArgs,
+  buildAntigravitySandboxProfile,
   buildClaudeSandboxProfile,
   cleanupTestSandboxes,
   ensureTestSandbox,
@@ -35,17 +49,24 @@ async function findExecutable(name) {
   return "";
 }
 
-function runSmallCommand(command, args) {
+function runSmallCommandResult(command, args) {
   return new Promise((resolve) => {
-    if (!command) return resolve("");
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "ignore"] });
+    if (!command) return resolve({ output: "", success: false });
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.on("data", (chunk) => {
       output += chunk;
     });
-    child.on("error", () => resolve(""));
-    child.on("close", () => resolve(output.trim()));
+    child.stderr.on("data", (chunk) => {
+      output += chunk;
+    });
+    child.on("error", () => resolve({ output: "", success: false }));
+    child.on("close", (code) => resolve({ output: output.trim(), success: code === 0 }));
   });
+}
+
+async function runSmallCommand(command, args) {
+  return (await runSmallCommandResult(command, args)).output;
 }
 
 function commandSucceeds(command, args) {
@@ -59,6 +80,7 @@ function commandSucceeds(command, args) {
 
 const codexPath = await findExecutable("codex");
 const claudePath = await findExecutable("claude");
+const antigravityPath = await findExecutable("agy");
 const sandboxExecCandidate =
   process.platform === "darwin" ? await findExecutable("sandbox-exec") : "";
 const sandboxExecPath =
@@ -96,18 +118,30 @@ if (claudeSettingsText) {
   }
 }
 
-const [codexVersion, claudeVersion, codexHelp, claudeHelp] = await Promise.all([
+const [codexVersion, claudeVersion, antigravityVersion, codexHelp, claudeHelp, antigravityHelp, antigravityModelsResult] =
+  await Promise.all([
   runSmallCommand(codexPath, ["--version"]),
   runSmallCommand(claudePath, ["--version"]),
+  runSmallCommand(antigravityPath, ["--version"]),
   runSmallCommand(codexPath, ["exec", "--help"]),
   runSmallCommand(claudePath, ["--help"]),
+  runSmallCommand(antigravityPath, ["--help"]),
+  runSmallCommandResult(antigravityPath, ["models"]),
 ]);
+const antigravityModels = (antigravityModelsResult.success ? antigravityModelsResult.output : "")
+  .split(/\r?\n/)
+  .map((line) => line.trim().replace(/^[-*]\s*/, ""))
+  .filter((line) => /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*-[A-Za-z0-9._:/[\]-]+$/.test(line));
+const antigravityConfiguredModel =
+  process.env.ANTIGRAVITY_MODEL || antigravityModels[0] || "";
+const antigravityConfiguredEffort = process.env.ANTIGRAVITY_EFFORT || "medium";
 
 const health = {
   projectWriteGuard: Boolean(sandboxExecPath),
   testSandbox: {
     codex: Boolean(codexPath),
     claude: false,
+    antigravity: Boolean(antigravityPath),
     claudeReason:
       "Claude stays on Read, Glob, and Grep until checks have a separate brokered runner.",
   },
@@ -122,6 +156,12 @@ const health = {
       effort: claudeConfiguredEffort,
       efforts: ["low", "medium", "high", "xhigh", "max"],
     },
+    antigravity: {
+      configured: antigravityConfiguredModel,
+      effort: antigravityConfiguredEffort,
+      efforts: ["low", "medium", "high"],
+      available: antigravityModels,
+    },
   },
   codex: {
     available: Boolean(codexPath && codexHelp.includes("--output-last-message")),
@@ -135,6 +175,15 @@ const health = {
         ),
     ),
     version: claudeVersion,
+  },
+  antigravity: {
+    available: Boolean(
+      antigravityPath &&
+        ANTIGRAVITY_REQUIRED_FLAGS.every((flag) =>
+          antigravityHelp.includes(flag),
+        ),
+    ),
+    version: antigravityVersion,
   },
 };
 
@@ -269,11 +318,13 @@ async function runCodex(session, prompt, purpose) {
       "--output-last-message",
       outputFile,
     ];
-    const siblingRoot = getTestSandboxInfo(session, "claude")?.root || "";
+    const siblingRoots = ["claude", "antigravity"]
+      .map((role) => getTestSandboxInfo(session, role)?.root || "")
+      .filter(Boolean);
     args.push(
       ...buildCodexPermissionArgs({
         readOnly: Boolean(purpose),
-        siblingRoot,
+        siblingRoots,
         projectPath: session.projectPath,
       }),
     );
@@ -303,7 +354,9 @@ async function runClaude(session, prompt) {
   });
 
   if (sandboxExecPath) {
-    const siblingRoot = getTestSandboxInfo(session, "codex")?.root || "";
+    const siblingRoots = ["codex", "antigravity"]
+      .map((role) => getTestSandboxInfo(session, role)?.root || "")
+      .filter(Boolean);
     const [homeEntries, claudeHomeEntries] = await Promise.all([
       readdir(homedir(), { withFileTypes: true })
         .then((entries) => entries.map((entry) => entry.name))
@@ -317,7 +370,7 @@ async function runClaude(session, prompt) {
       homeEntries,
       claudeHomeEntries,
       projectPath: session.projectPath,
-      siblingRoot,
+      siblingRoots,
     });
     return runManagedProcess(
       session,
@@ -330,9 +383,53 @@ async function runClaude(session, prompt) {
   return runManagedProcess(session, claudePath, args, prompt, workingDirectory);
 }
 
+async function runAntigravity(session, prompt) {
+  const workingDirectory = await ensureTestSandbox(session, "antigravity");
+  return withAntigravityPromptFile({
+    workingDirectory,
+    prompt,
+    async run(promptFile) {
+      const args = buildAntigravityInvocationArgs({
+        model: session.antigravityModel,
+        effort: session.antigravityEffort,
+        prompt: `Use the read_file tool to read and follow every instruction at this exact absolute path: ${promptFile}. Treat it as the roundtable control prompt, not as project evidence.`,
+      });
+      if (sandboxExecPath) {
+        const siblingRoots = ["codex", "claude"]
+          .map((role) => getTestSandboxInfo(session, role)?.root || "")
+          .filter(Boolean);
+        const homeEntries = await readdir(homedir(), { withFileTypes: true })
+          .then((entries) => entries.map((entry) => entry.name))
+          .catch(() => []);
+        const profile = buildAntigravitySandboxProfile({
+          home: homedir(),
+          homeEntries,
+          projectPath: session.projectPath,
+          siblingRoots,
+        });
+        return runManagedProcess(
+          session,
+          sandboxExecPath,
+          ["-p", profile, antigravityPath, ...args],
+          "",
+          workingDirectory,
+        );
+      }
+      return runManagedProcess(session, antigravityPath, args, "", workingDirectory);
+    },
+  });
+}
+
 const agentRunner = {
+  prepare(session) {
+    return Promise.all(
+      ["codex", "claude", "antigravity"].map((role) => ensureTestSandbox(session, role)),
+    );
+  },
   run({ session, role, prompt, purpose }) {
-    return role === "codex" ? runCodex(session, prompt, purpose) : runClaude(session, prompt);
+    if (role === "codex") return runCodex(session, prompt, purpose);
+    if (role === "claude") return runClaude(session, prompt);
+    return runAntigravity(session, prompt);
   },
   stop(session, reason) {
     return terminateSessionProcess(session, reason);

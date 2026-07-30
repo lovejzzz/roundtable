@@ -21,7 +21,8 @@ import {
 } from "lucide-react";
 import { CSSProperties, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type Speaker = "codex" | "claude" | "human";
+type AgentRole = "codex" | "claude" | "antigravity";
+type Speaker = AgentRole | "human";
 
 type ReportedCheck = {
   command: string;
@@ -53,8 +54,8 @@ type OutcomeCoverage = {
 
 type DissentItem = {
   id: string;
-  author: "Codex" | "Claude";
-  role: Exclude<Speaker, "human">;
+  author: "Codex" | "Claude" | "Antigravity";
+  role: AgentRole;
   at: string;
   messageLabel: string;
   position: "accept" | "reject" | "uncertain";
@@ -63,8 +64,8 @@ type DissentItem = {
 };
 
 type DissentReview = {
-  role: Exclude<Speaker, "human">;
-  author: "Codex" | "Claude";
+  role: AgentRole;
+  author: "Codex" | "Claude" | "Antigravity";
   status: "completed" | "unavailable";
   at: string;
   coverage: OutcomeCoverage;
@@ -82,7 +83,7 @@ type Outcome =
       status: "available";
       decision: string;
       rationale: string;
-      actions: { owner: "You" | "Codex" | "Claude" | "Unassigned"; text: string }[];
+      actions: { owner: "You" | "Codex" | "Claude" | "Antigravity" | "Unassigned"; text: string }[];
       openQuestions: string[];
       consensus: boolean;
       coverage: OutcomeCoverage;
@@ -101,11 +102,13 @@ type BridgeHealth = {
   defaultProject: string;
   projectWriteGuard: boolean;
   models: {
-    codex: { configured: string; effort: string; efforts: string[] };
-    claude: { configured: string; effort: string; efforts: string[] };
+    codex: { configured: string; effort: string; efforts: string[]; available?: string[] };
+    claude: { configured: string; effort: string; efforts: string[]; available?: string[] };
+    antigravity: { configured: string; effort: string; efforts: string[]; available?: string[] };
   };
   codex: { available: boolean; version: string };
   claude: { available: boolean; version: string };
+  antigravity: { available: boolean; version: string };
   history: {
     available: boolean;
     retention: { maxRecords: number; maxDays: number };
@@ -113,13 +116,14 @@ type BridgeHealth = {
   testSandbox?: {
     codex: boolean;
     claude: boolean;
+    antigravity: boolean;
     claudeReason?: string;
   };
 };
 
 type FailedTurn = {
   turn: number;
-  role: Exclude<Speaker, "human">;
+  role: AgentRole;
   safeError: string;
   attempts: number;
   failedAt: string;
@@ -145,7 +149,7 @@ type SessionEvent =
   | {
       type: "session.status";
       status: SessionStatus;
-      speaker?: Exclude<Speaker, "human">;
+      speaker?: AgentRole;
       turn?: number;
       totalTurns?: number;
       note?: string;
@@ -172,8 +176,10 @@ type SessionSnapshot = {
   topic: string;
   codexModel: string;
   claudeModel: string;
+  antigravityModel: string;
   codexEffort: string;
   claudeEffort: string;
+  antigravityEffort: string;
   totalTurns: number;
   completedTurns: number;
   messages: Message[];
@@ -236,17 +242,37 @@ const SAMPLE_MESSAGES: Message[] = [
   },
   {
     id: "sample-3",
+    author: "Antigravity",
+    role: "antigravity",
+    at: "10:44",
+    round: 1,
+    body: "I checked the interface contract against the bridge shape. The next useful move is to expose each CLI’s actual model and effort alongside its messages, then keep those settings locked for the full session so recovered transcripts remain reproducible.",
+  },
+  {
+    id: "sample-4",
     author: "You",
     role: "human",
-    at: "10:44",
-    body: "Prioritize a usable first version. Keep both agents in discussion-only mode for now.",
+    at: "10:45",
+    body: "Prioritize a usable first version. Keep all three agents in discussion-only mode for now.",
   },
 ];
 
 const DEFAULT_BRIDGE = "http://127.0.0.1:4317";
 const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 
-function friendlyModelName(role: Exclude<Speaker, "human">, model: string) {
+const AGENT_ROLES = ["codex", "claude", "antigravity"] as const;
+const AGENT_LABELS: Record<AgentRole, string> = {
+  codex: "Codex",
+  claude: "Claude",
+  antigravity: "Antigravity",
+};
+const AGENT_GLYPHS: Record<AgentRole, string> = {
+  codex: "C",
+  claude: "A",
+  antigravity: "G",
+};
+
+function friendlyModelName(role: AgentRole, model: string) {
   if (!model) return "CLI default";
   const normalized = model.toLowerCase();
   if (role === "claude") {
@@ -265,6 +291,15 @@ function friendlyModelName(role: Exclude<Speaker, "human">, model: string) {
       .split("-")
       .map((part, index) => (index === 0 ? part.toUpperCase() : part[0]?.toUpperCase() + part.slice(1)))
       .join(" ");
+  }
+  if (role === "antigravity" && normalized.startsWith("gemini-")) {
+    return normalized
+      .split("-")
+      .map((part, index) =>
+        index === 0 ? "Gemini" : part === "pro" ? "Pro" : part === "flash" ? "Flash" : part[0]?.toUpperCase() + part.slice(1),
+      )
+      .join(" ")
+      .replace(/ (Low|Medium|High)$/, " · $1");
   }
   return model;
 }
@@ -472,7 +507,7 @@ function OutcomeCard({
           <p className="dissent-intro">
             Mark whether each concern is represented in the completion brief above.
           </p>
-          {(["codex", "claude"] as const).map((role) => {
+          {AGENT_ROLES.map((role) => {
             const review = dissentReviews[role];
             if (!review) return null;
             const agentItems = dissent.filter((item) => item.role === role);
@@ -563,9 +598,9 @@ export default function Home() {
     return saved === "on" || saved === "off" ? saved : "unset";
   });
   const [isPreview, setIsPreview] = useState(true);
-  const [speaker, setSpeaker] = useState<"codex" | "claude" | null>(null);
+  const [speaker, setSpeaker] = useState<AgentRole | null>(null);
   const [turn, setTurn] = useState(0);
-  const [totalTurns, setTotalTurns] = useState(6);
+  const [totalTurns, setTotalTurns] = useState(9);
   const [projectPath, setProjectPath] = useState("");
   const [topic, setTopic] = useState(
     "Review this project’s architecture and agree on the highest-leverage next steps.",
@@ -573,8 +608,10 @@ export default function Home() {
   const [rounds, setRounds] = useState("3");
   const [codexModel, setCodexModel] = useState("");
   const [claudeModel, setClaudeModel] = useState("");
+  const [antigravityModel, setAntigravityModel] = useState("");
   const [codexEffort, setCodexEffort] = useState("");
   const [claudeEffort, setClaudeEffort] = useState("");
+  const [antigravityEffort, setAntigravityEffort] = useState("");
   const [steering, setSteering] = useState("");
   const [connectOpen, setConnectOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -596,6 +633,9 @@ export default function Home() {
   const claudeEfforts = health?.models.claude.efforts?.length
     ? health.models.claude.efforts
     : DEFAULT_EFFORT_LEVELS;
+  const antigravityEfforts = health?.models.antigravity.efforts?.length
+    ? health.models.antigravity.efforts
+    : ["low", "medium", "high"];
 
   const progress = useMemo(() => {
     if (!totalTurns) return 0;
@@ -626,8 +666,14 @@ export default function Home() {
       if (!projectPath) setProjectPath(data.defaultProject);
       setCodexModel((current) => current || data.models?.codex.configured || "");
       setClaudeModel((current) => current || data.models?.claude.configured || "");
+      setAntigravityModel(
+        (current) => current || data.models?.antigravity.configured || "",
+      );
       setCodexEffort((current) => current || data.models?.codex.effort || "medium");
       setClaudeEffort((current) => current || data.models?.claude.effort || "medium");
+      setAntigravityEffort(
+        (current) => current || data.models?.antigravity.effort || "medium",
+      );
       setStatus((current) => (current === "connecting" ? "idle" : current));
       setConnectOpen(false);
       if (data.history?.available) {
@@ -682,8 +728,14 @@ export default function Home() {
     setTopic(snapshot.topic);
     setCodexModel(snapshot.codexModel);
     setClaudeModel(snapshot.claudeModel);
+    setAntigravityModel(
+      snapshot.antigravityModel || health?.models.antigravity.configured || "",
+    );
     setCodexEffort(snapshot.codexEffort);
     setClaudeEffort(snapshot.claudeEffort);
+    setAntigravityEffort(
+      snapshot.antigravityEffort || health?.models.antigravity.effort || "medium",
+    );
     setMessages(snapshot.messages);
     setOutcome(snapshot.outcome);
     setPendingSteering(snapshot.pendingSteering || []);
@@ -696,7 +748,7 @@ export default function Home() {
     setViewingHistory(archived);
     setIsPreview(false);
     setTotalTurns(snapshot.totalTurns);
-    setRounds(String(snapshot.totalTurns / 2));
+    setRounds(String(Math.max(1, Math.ceil(snapshot.totalTurns / 3))));
     setTurn(snapshot.lastStatus.turn ?? snapshot.completedTurns);
     setSpeaker(snapshot.lastStatus.speaker || null);
     setStatus(snapshot.lastStatus.status);
@@ -831,8 +883,10 @@ export default function Home() {
         rounds: Number(rounds),
         codexModel: codexModel.trim(),
         claudeModel: claudeModel.trim(),
+        antigravityModel: antigravityModel.trim(),
         codexEffort,
         claudeEffort,
+        antigravityEffort,
         keepHistory: historyPreference === "on",
         reviewDissent,
       }),
@@ -860,7 +914,7 @@ export default function Home() {
     sessionStorage.setItem("roundtable.sessionId", data.id);
     setStatus("running");
     setTurn(0);
-    setTotalTurns(Number(rounds) * 2);
+    setTotalTurns(Number(rounds) * 3);
     await openStream(data.id);
   }
 
@@ -1025,6 +1079,7 @@ export default function Home() {
       `**Goal:** ${topic}`,
       `**Codex:** ${friendlyModelName("codex", codexModel)} · ${friendlyEffort(codexEffort)}`,
       `**Claude:** ${friendlyModelName("claude", claudeModel)} · ${friendlyEffort(claudeEffort)}`,
+      `**Antigravity:** ${friendlyModelName("antigravity", antigravityModel)} · ${friendlyEffort(antigravityEffort)}`,
       `**Dissent check:** ${reviewDissent ? "On" : "Off"}`,
       "",
     ];
@@ -1075,7 +1130,7 @@ export default function Home() {
         "Agent-stated summaries; not independently verified.",
         "",
       );
-      (["codex", "claude"] as const).forEach((role) => {
+      AGENT_ROLES.forEach((role) => {
         const review = dissentReviews[role];
         if (!review) return;
         lines.push(
@@ -1114,7 +1169,7 @@ export default function Home() {
         [
           displayTime(message.at),
           message.model
-            ? friendlyModelName(message.role === "claude" ? "claude" : "codex", message.model)
+            ? friendlyModelName(message.role === "human" ? "codex" : message.role, message.model)
             : "",
           message.effort ? friendlyEffort(message.effort) : "",
         ]
@@ -1185,11 +1240,11 @@ export default function Home() {
           {status === "synthesizing"
             ? "SYNTHESIZING OUTCOME"
             : status === "reviewing"
-              ? `${speaker === "claude" ? "CLAUDE" : "CODEX"} REVIEWING DISSENT`
+              ? `${speaker ? AGENT_LABELS[speaker].toUpperCase() : "AGENT"} REVIEWING DISSENT`
             : status === "failed"
               ? `TURN ${(failedTurn?.turn ?? turn) + 1} PAUSED`
               : status === "retrying"
-                ? `RETRYING ${failedTurn?.role === "claude" ? "CLAUDE" : "CODEX"}`
+                ? `RETRYING ${failedTurn ? AGENT_LABELS[failedTurn.role].toUpperCase() : "AGENT"}`
             : active
               ? `LIVE · TURN ${turn + 1}`
               : isPreview
@@ -1527,6 +1582,49 @@ export default function Home() {
               </div>
               <span className={`presence ${health?.claude.available ? "online" : ""}`} />
             </div>
+            <div className="agent-row antigravity-agent">
+              <span className="agent-glyph antigravity-glyph">G</span>
+              <div className="agent-copy">
+                <strong>Antigravity CLI</strong>
+                <small>
+                  {connected ? shortVersion(health?.antigravity.version) : "Waiting for bridge"}
+                </small>
+                <label className="model-picker">
+                  <span>MODEL</span>
+                  <div className="model-input-stack">
+                    <output>{friendlyModelName("antigravity", antigravityModel)}</output>
+                    <input
+                      list="antigravity-model-options"
+                      value={antigravityModel}
+                      onChange={(event) => setAntigravityModel(event.target.value)}
+                      placeholder="CLI default"
+                      disabled={busy}
+                      aria-label="Antigravity model"
+                    />
+                  </div>
+                </label>
+                <label className="effort-picker">
+                  <span className="effort-heading">
+                    <span>REASONING</span>
+                    <output>{friendlyEffort(antigravityEffort || "medium")}</output>
+                  </span>
+                  <input
+                    type="range"
+                    min="0"
+                    max={antigravityEfforts.length - 1}
+                    step="1"
+                    value={effortIndex(antigravityEffort, antigravityEfforts)}
+                    onChange={(event) =>
+                      setAntigravityEffort(antigravityEfforts[Number(event.target.value)])
+                    }
+                    disabled={busy}
+                    aria-label="Antigravity reasoning effort"
+                    style={effortStyle(antigravityEffort, antigravityEfforts)}
+                  />
+                </label>
+              </div>
+              <span className={`presence ${health?.antigravity.available ? "online" : ""}`} />
+            </div>
             <datalist id="codex-model-options">
               {health?.models.codex.configured && (
                 <option value={health.models.codex.configured}>Configured default</option>
@@ -1539,6 +1637,13 @@ export default function Home() {
               <option value="claude-opus-5">Claude Opus 5</option>
               <option value="claude-sonnet-5">Claude Sonnet 5</option>
               <option value="claude-fable-5">Claude Fable 5</option>
+            </datalist>
+            <datalist id="antigravity-model-options">
+              {health?.models.antigravity.available?.map((model) => (
+                <option value={model} key={model}>
+                  {friendlyModelName("antigravity", model)}
+                </option>
+              ))}
             </datalist>
             <p className="model-hint">
               Model and reasoning choices lock when the room starts.
@@ -1556,7 +1661,7 @@ export default function Home() {
                     ? "ARCHIVED DISCUSSION"
                     : "PROJECT ROOM"}
               </p>
-              <h1>Two agents. One project.<br />You set the direction.</h1>
+              <h1>Three agents. One project.<br />You set the direction.</h1>
             </div>
             <div className="conversation-actions">
               {!isPreview && messages.length > 0 && (
@@ -1612,7 +1717,7 @@ export default function Home() {
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">
                   <span className={`agent-glyph ${message.role}-glyph`}>
-                    {message.role === "codex" ? "C" : message.role === "claude" ? "A" : "Y"}
+                    {message.role === "human" ? "Y" : AGENT_GLYPHS[message.role]}
                   </span>
                   <div>
                     <strong>[M{index + 1}] {message.author}</strong>
@@ -1620,7 +1725,7 @@ export default function Home() {
                       {message.round ? `ROUND ${message.round} · ` : ""}
                       {displayTime(message.at)}
                       {message.model
-                        ? ` · ${friendlyModelName(message.role === "claude" ? "claude" : "codex", message.model)}`
+                        ? ` · ${friendlyModelName(message.role === "human" ? "codex" : message.role, message.model)}`
                         : ""}
                       {message.effort ? ` · ${friendlyEffort(message.effort)}` : ""}
                     </small>
@@ -1652,12 +1757,12 @@ export default function Home() {
             {failedTurn && (status === "failed" || status === "retrying") && (
               <section className="failed-turn-card" role="alert" aria-labelledby="failed-turn-title">
                 <div className="failed-turn-icon">
-                  {failedTurn.role === "codex" ? "C" : "A"}
+                  {AGENT_GLYPHS[failedTurn.role]}
                 </div>
                 <div>
                   <span className="context-label">TURN {failedTurn.turn + 1} PAUSED</span>
                   <h2 id="failed-turn-title">
-                    {failedTurn.role === "codex" ? "Codex" : "Claude"} failed before replying
+                    {AGENT_LABELS[failedTurn.role]} failed before replying
                   </h2>
                   <p>{failedTurn.safeError}</p>
                   <small>
@@ -1680,7 +1785,7 @@ export default function Home() {
                         <RefreshCw size={14} />
                         {status === "retrying"
                           ? "Retrying…"
-                          : `Retry ${failedTurn.role === "codex" ? "Codex" : "Claude"} turn`}
+                          : `Retry ${AGENT_LABELS[failedTurn.role]} turn`}
                       </button>
                       <button type="button" onClick={() => void stopDiscussion()}>
                         <CircleStop size={14} />
@@ -1695,10 +1800,10 @@ export default function Home() {
               <article className={`message thinking ${speaker}`}>
                 <div className="message-meta">
                   <span className={`agent-glyph ${speaker}-glyph`}>
-                    {speaker === "codex" ? "C" : "A"}
+                    {AGENT_GLYPHS[speaker]}
                   </span>
                   <div>
-                    <strong>{speaker === "codex" ? "Codex" : "Claude"}</strong>
+                    <strong>{AGENT_LABELS[speaker]}</strong>
                     <small>READING THE ROOM</small>
                   </div>
                 </div>
@@ -1786,6 +1891,10 @@ export default function Home() {
                 <span className="claude-number">02</span>
                 Claude
               </li>
+              <li className={speaker === "antigravity" ? "current" : ""}>
+                <span className="antigravity-number">03</span>
+                Antigravity
+              </li>
               <li>
                 <span className="human-number">↳</span>
                 Your steering
@@ -1808,6 +1917,13 @@ export default function Home() {
                   {friendlyModelName("claude", claudeModel)} · {friendlyEffort(claudeEffort || "medium")}
                 </dd>
               </div>
+              <div>
+                <dt>Antigravity</dt>
+                <dd>
+                  {friendlyModelName("antigravity", antigravityModel)} ·{" "}
+                  {friendlyEffort(antigravityEffort || "medium")}
+                </dd>
+              </div>
             </dl>
           </section>
 
@@ -1816,12 +1932,12 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Agents work from separate disposable copies, never the selected project. Codex
-                writes only inside its native sandbox.
+                Agents work from separate disposable copies, never the selected project. Codex and
+                Antigravity can write generated artifacts only inside their native sandboxes.
                 {health?.projectWriteGuard
-                  ? " Codex’s native permissions and Claude’s outer macOS guard also read-deny common host credential paths and isolate their workspaces. Claude has no shell access; it remains on Read, Glob, and Grep until checks can run beyond the model-client boundary."
+                  ? " Native permissions plus outer macOS guards read-deny common host credential paths and isolate every workspace. Claude has no shell access; it remains on Read, Glob, and Grep until checks can run beyond the model-client boundary."
                   : " Without a supported OS guard, Claude stays read-only."}
-                {" "}Bridge credentials are never passed to either agent process.
+                {" "}Bridge credentials are never passed to any agent process.
               </p>
             </div>
           </section>
@@ -1831,8 +1947,8 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Focused checks in a separate disposable project copy are optional. Codex can use
-                them; Claude remains read-only.{" "}
+                Focused checks in separate disposable project copies are optional. Codex and
+                Antigravity can use them; Claude remains read-only.{" "}
                 {health?.testSandbox?.claudeReason ||
                   "Claude checks require a separate brokered runner."}
               </p>

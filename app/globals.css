@@ -10,6 +10,7 @@
   --muted: #92949d;
   --codex: #ff7354;
   --claude: #ad92ff;
+  --antigravity: #52d7c5;
   --human: #c7ef57;
 }
 
@@ -108,7 +109,7 @@ button {
 
 .brand-mark span:nth-child(3) {
   width: 9px;
-  background: var(--human);
+  background: var(--antigravity);
 }
 
 .topbar-center,
@@ -673,6 +674,10 @@ button {
   color: var(--claude);
 }
 
+.antigravity-glyph {
+  color: var(--antigravity);
+}
+
 .human-glyph {
   color: var(--human);
 }
@@ -929,6 +934,10 @@ button {
 
 .message.claude {
   color: var(--claude);
+}
+
+.message.antigravity {
+  color: var(--antigravity);
 }
 
 .message.human {
@@ -1659,6 +1668,10 @@ button {
 
 .claude-number {
   color: var(--claude);
+}
+
+.antigravity-number {
+  color: var(--antigravity);
 }
 
 .human-number {

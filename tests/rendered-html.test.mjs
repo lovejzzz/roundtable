@@ -29,22 +29,24 @@ test("server-renders the Roundtable room", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Roundtable — Codex and Claude, in one room<\/title>/i);
+  assert.match(html, /<title>Roundtable — Codex, Claude, and Antigravity<\/title>/i);
   assert.match(html, /ROUNDTABLE/);
-  assert.match(html, /Two agents\. One project\./);
+  assert.match(html, /Three agents\. One project\./);
   assert.match(html, /Start the roundtable/);
   assert.match(html, />History</i);
   assert.match(html, /Steer the next turn/i);
   assert.match(html, /aria-label="Codex model"/i);
   assert.match(html, /aria-label="Claude model"/i);
+  assert.match(html, /aria-label="Antigravity model"/i);
   assert.match(html, /aria-label="Codex reasoning effort"/i);
   assert.match(html, /aria-label="Claude reasoning effort"/i);
+  assert.match(html, /aria-label="Antigravity reasoning effort"/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
   assert.match(html, /TEST CAPABILITY/i);
-  assert.match(html, /separate disposable project copy/i);
+  assert.match(html, /separate disposable project copies/i);
   assert.match(html, /Claude remains read-only/i);
   assert.match(html, /separate brokered runner/i);
-  assert.match(html, /Bridge credentials are never passed to either agent process/i);
+  assert.match(html, /Bridge credentials are never passed to any agent process/i);
   assert.match(html, /id="outcome-title"/i);
   assert.match(html, /COMPLETION BRIEF/i);
   assert.match(html, /A completion brief will appear here after the agents finish/i);
@@ -68,6 +70,7 @@ test("removes every starter-preview marker", async () => {
   assert.match(page, /Agent-reported, not independently verified/i);
   assert.match(page, /Claude has no shell access/i);
   assert.match(page, /Claude remains read-only/i);
+  assert.match(page, /Codex and\s+Antigravity can use them/i);
   assert.match(page, /Agent-reported checks — \$\{message\.author\}/i);
   assert.match(page, /Summaries · not independently verified/i);
   assert.match(page, /Agent-stated summaries; not independently verified/i);

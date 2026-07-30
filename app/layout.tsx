@@ -23,19 +23,19 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     metadataBase: baseUrl,
-    title: "Roundtable — Codex and Claude, in one room",
+    title: "Roundtable — Codex, Claude, and Antigravity",
     description:
-      "A live project discussion between Codex CLI and Claude CLI, with you setting the direction.",
+      "A live project discussion between Codex CLI, Claude CLI, and Antigravity CLI, with you setting the direction.",
     openGraph: {
       title: "Roundtable",
-      description: "Two agents. One project. You set the direction.",
+      description: "Three agents. One project. You set the direction.",
       type: "website",
       images: [{ url: previewUrl, width: 1200, height: 630, alt: "Roundtable" }],
     },
     twitter: {
       card: "summary_large_image",
       title: "Roundtable",
-      description: "Two agents. One project. You set the direction.",
+      description: "Three agents. One project. You set the direction.",
       images: [previewUrl],
     },
   };

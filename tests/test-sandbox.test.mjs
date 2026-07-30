@@ -19,6 +19,7 @@ import { promisify } from "node:util";
 import test from "node:test";
 import {
   HOST_PROTECTED_CREDENTIAL_PATHS,
+  buildAntigravitySandboxProfile,
   buildCodexPermissionArgs,
   buildClaudeSandboxProfile,
   cleanupTestSandboxes,
@@ -239,6 +240,8 @@ test(
       await Promise.all([
         mkdir(join(home, ".claude", "session-env"), { recursive: true }),
         mkdir(join(home, ".codex"), { recursive: true }),
+        mkdir(join(home, ".antigravity"), { recursive: true }),
+        mkdir(join(home, ".gemini"), { recursive: true }),
         mkdir(projectPath, { recursive: true }),
         mkdir(claudeWorkspace),
         mkdir(siblingRoot),
@@ -250,6 +253,8 @@ test(
         writeFile(join(home, ".claude", "session-env", "readable"), "runtime\n"),
         writeFile(join(home, ".claude", "settings.json"), "{}\n"),
         writeFile(join(home, ".codex", "auth.json"), "codex\n"),
+        writeFile(join(home, ".antigravity", "credentials.json"), "antigravity\n"),
+        writeFile(join(home, ".gemini", "oauth.json"), "gemini\n"),
         writeFile(join(projectPath, "original-source"), "project\n"),
         writeFile(join(siblingRoot, "visible"), "sibling\n"),
         ...HOST_PROTECTED_CREDENTIAL_PATHS.map((name) =>
@@ -260,6 +265,8 @@ test(
         home,
         homeEntries: [
           ".claude",
+          ".antigravity",
+          ".gemini",
           "Documents",
           ...new Set(
             HOST_PROTECTED_CREDENTIAL_PATHS.map((name) => name.split("/")[0]),
@@ -278,6 +285,10 @@ test(
         );
       }
       assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".codex")}"))`));
+      assert.ok(
+        profile.includes(`(deny file-read* (subpath "${join(home, ".antigravity")}"))`),
+      );
+      assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".gemini")}"))`));
       assert.ok(profile.includes(`(deny file-read* (subpath "${projectPath}"))`));
       try {
         await execFileAsync("/usr/bin/sandbox-exec", [
@@ -295,6 +306,8 @@ test(
             credentialProbePath(home, name),
           ),
           join(home, ".codex", "auth.json"),
+          join(home, ".antigravity", "credentials.json"),
+          join(home, ".gemini", "oauth.json"),
         ]);
       } catch (error) {
         if (/sandbox_apply: Operation not permitted/i.test(error?.stderr || "")) {
@@ -372,7 +385,34 @@ test("the Codex native permission profile preserves workspace semantics and deni
   }
   assert.ok(workspaceText.includes('"~/.claude"="deny"'));
   assert.ok(workspaceText.includes('"~/.claude.json"="deny"'));
+  assert.ok(workspaceText.includes('"~/.antigravity"="deny"'));
+  assert.ok(workspaceText.includes('"~/.gemini"="deny"'));
   assert.ok(workspaceText.includes(`${JSON.stringify(siblingRoot)}="deny"`));
   assert.ok(workspaceText.includes(`${JSON.stringify(projectPath)}="deny"`));
   assert.doesNotMatch(workspaceText, /~\/\.codex/);
+});
+
+test("the Antigravity guard preserves its runtime roots and isolates host and agent data", () => {
+  const home = "/Users/example";
+  const projectPath = "/Users/example/project";
+  const siblingRoots = [
+    "/private/tmp/roundtable-agent-sandbox-codex-example",
+    "/private/tmp/roundtable-agent-sandbox-claude-example",
+  ];
+  const profile = buildAntigravitySandboxProfile({
+    home,
+    homeEntries: [".antigravity", ".gemini", ".codex", ".claude", "Documents"],
+    projectPath,
+    siblingRoots,
+  });
+
+  assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".codex")}"))`));
+  assert.ok(profile.includes(`(deny file-read* (subpath "${join(home, ".claude")}"))`));
+  assert.ok(profile.includes(`(deny file-read* (subpath "${projectPath}"))`));
+  assert.doesNotMatch(profile, /deny file-write\* \(subpath "\/Users\/example\/\.antigravity"\)/);
+  assert.doesNotMatch(profile, /deny file-write\* \(subpath "\/Users\/example\/\.gemini"\)/);
+  for (const root of siblingRoots) {
+    assert.ok(profile.includes(`(deny file-read* (subpath "${root}"))`));
+    assert.ok(profile.includes(`(deny file-write* (subpath "${root}"))`));
+  }
 });

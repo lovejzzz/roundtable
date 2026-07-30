@@ -1,8 +1,9 @@
 # Roundtable
 
-Roundtable gives Codex CLI and Claude CLI one visible, steerable project discussion.
+Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
+steerable project discussion.
 
-Current release: **v0.0.0.9**
+Current release: **v0.0.0.10**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -11,7 +12,8 @@ discussion outcome and implementation details behind every release.
 
 ## Start it
 
-Both CLIs must already be installed and signed in. From this folder:
+All three CLIs must already be installed and signed in. The Antigravity command
+is `agy`. From this folder:
 
 ```bash
 npm run talk
@@ -24,14 +26,14 @@ The command starts the local bridge and the web room, then opens the connected r
 1. Choose an absolute project folder and a discussion goal.
 2. Review or change the model shown under each CLI participant. Friendly names such as Claude Opus 5 appear above the exact CLI identifier.
 3. Set each agent's reasoning effort with the slider, from low through extra high to max. The bridge starts from each CLI's configured effort.
-4. Codex and Claude alternate turns from separate disposable copies of the same
-   project and read the same shared transcript. Every message records its model
-   and reasoning effort.
-5. Codex may optionally run focused existing tests, linters, type checks, or
-   builds before making a claim. Claude remains on Read, Glob, and Grep until
-   checks can run outside its model-client process. Test artifacts stay in
-   Codex's private copy, and a structured result appears only when Codex reports
-   one.
+4. Codex, Claude, and Antigravity take turns in that order from separate
+   disposable copies of the same project and read the same shared transcript.
+   Every message records its model and reasoning effort.
+5. Codex and Antigravity may optionally run focused existing tests, linters,
+   type checks, or builds before making a claim. Claude remains on Read, Glob,
+   and Grep until checks can run outside its model-client process. Generated
+   artifacts stay in the producing agent's private copy, and a structured result
+   appears only when that agent reports one.
 6. Add a steering note at any time. It is added to the transcript before the next agent turn.
 7. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
@@ -112,18 +114,20 @@ an agent.
 
 ## Optional test sandboxes
 
-Roundtable lazily creates a different temporary project copy for each agent.
-Codex receives workspace-write access only inside its CLI sandbox. Claude always
-uses plan mode with only Read, Glob, and Grep; it never receives Bash.
-Codex's native permission profile and Claude's outer macOS guard protect the real
-project, isolate the agents' workspaces, and read-deny common host credential
-paths.
-Each CLI remains operational with the runtime/auth access it requires; Claude
+Roundtable creates all three temporary project copies before the first turn so
+every sandbox can deny both sibling roots from the start. Codex receives
+workspace-write access only inside its native CLI sandbox. Antigravity runs in
+plan mode with its native terminal sandbox inside a separate outer macOS guard.
+Claude always uses plan mode with only Read, Glob, and Grep; it never receives
+Bash. The native profiles and outer guards protect the real project, isolate the
+agents' workspaces, and read-deny common host credential paths.
+Each CLI remains operational with the runtime/auth access it requires. Claude
 writes only to a bounded set of runtime entries while settings and other
-existing `.claude` state remain write-denied, and each agent is denied the other
-CLI's auth/config path. Bridge credentials are removed from both agent
-environments before either CLI starts. Home entries are refreshed for every
-Claude turn rather than being frozen at bridge startup. The copies omit
+existing `.claude` state remain write-denied. Antigravity retains only its
+`.antigravity` and `.gemini` runtime write roots, and each agent is denied the
+other CLIs' auth/config paths. Bridge credentials are removed from all agent
+environments before any CLI starts. Home entries are refreshed for every
+guarded turn rather than being frozen at bridge startup. The copies omit
 repository metadata and generated build directories, reuse installed
 dependencies when present, preserve safe relative symlinks inside the copy, and
 reject absolute, dangling, external, or relocation-unsafe symlinks. Every copied
@@ -135,12 +139,15 @@ after they become stale without touching live or reply-output directories.
 Links into intentionally omitted generated trees also fail closed rather than
 silently changing meaning in the copy.
 
-Testing remains optional and currently belongs to Codex. Its discussion prompt
-asks it to run only focused, existing checks when evidence would improve a claim,
-to report the exact command and result, and not to intentionally edit source
-files. Claude's prompt explicitly discloses its read-only tool set and tells it
-not to claim test execution. A generated artifact or an accidental edit in the
-Codex copy cannot change the real project or Claude's view.
+Testing remains optional. Codex and Antigravity are asked to run only focused,
+existing checks when evidence would improve a claim, report the exact command
+and result, and not intentionally edit source files. Antigravity's headless tool
+approval is contained by its disposable copy, plan mode, native terminal
+sandbox, and outer host guard. Its full growing prompt is delivered through a
+one-use file in the disposable workspace instead of a command-line argument.
+Claude's prompt explicitly discloses its read-only tool set and tells it not to
+claim test execution. A generated artifact or accidental edit in one copy
+cannot change the real project or another agent's view.
 
 The v0.0.0.7 audit showed that wrapping Claude and Bash in one outer macOS profile
 cannot isolate shell execution from Claude's required network and runtime

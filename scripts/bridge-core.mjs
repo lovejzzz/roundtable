@@ -3,7 +3,13 @@ import { randomUUID } from "node:crypto";
 import { redactVisibleString } from "./redaction.mjs";
 
 export const TERMINAL_PHASES = new Set(["complete", "stopped", "error", "interrupted"]);
-const OUTCOME_OWNERS = new Set(["You", "Codex", "Claude", "Unassigned"]);
+const AGENT_ROLES = Object.freeze(["codex", "claude", "antigravity"]);
+const AGENT_NAMES = Object.freeze({
+  codex: "Codex",
+  claude: "Claude",
+  antigravity: "Antigravity",
+});
+const OUTCOME_OWNERS = new Set(["You", ...Object.values(AGENT_NAMES), "Unassigned"]);
 const CHECK_STATUSES = new Set(["passed", "failed", "blocked"]);
 const CHECK_FENCE = /(?:^|\n)```roundtable-checks\s*\n([\s\S]*?)\n```\s*$/;
 const DISSENT_POSITIONS = new Set(["accept", "reject", "uncertain"]);
@@ -228,7 +234,7 @@ export function extractReportedChecks(raw, { sandboxPaths = [], round } = {}) {
 function makeMessage(now, role, body, round, model, effort, checks = []) {
   return {
     id: randomUUID(),
-    author: role === "codex" ? "Codex" : role === "claude" ? "Claude" : "You",
+    author: AGENT_NAMES[role] || "You",
     role,
     body: body.trim(),
     at: now().toISOString(),
@@ -244,9 +250,11 @@ function safeVisibleError(error) {
   return redactVisibleString(raw, 700);
 }
 
-function buildPrompt(session, role, turn) {
-  const participant = role === "codex" ? "Codex CLI" : "Claude CLI";
-  const other = role === "codex" ? "Claude CLI" : "Codex CLI";
+export function buildPrompt(session, role, turn) {
+  const participant = `${AGENT_NAMES[role]} CLI`;
+  const others = AGENT_ROLES.filter((candidate) => candidate !== role)
+    .map((candidate) => `${AGENT_NAMES[candidate]} CLI`)
+    .join(" and ");
   const transcript = buildTranscript(session.messages);
   const capabilityPrompt =
     role === "codex"
@@ -264,14 +272,28 @@ your reply with this versioned block (valid JSON, no text after the fence):
 The only statuses are "passed", "failed", and "blocked". Use "blocked" only when the environment
 prevented a meaningful result. Omit exitCode when none exists. This is agent-reported evidence,
 not independent bridge verification.`
-      : `READ-ONLY PROJECT COPY
+      : role === "claude"
+        ? `READ-ONLY PROJECT COPY
 Your CLI is running in a disposable copy of the project with Read, Glob, and Grep only. Use the
 current working directory for inspection; never target the original absolute project path above.
 You cannot run shell commands or tests. This is a deliberate fail-closed boundary until test
 execution can run in a separate brokered process. Do not claim to have run a check and do not emit
-a roundtable-checks block.`;
+a roundtable-checks block.`
+        : `DISPOSABLE ANTIGRAVITY SANDBOX
+Your CLI is running in plan mode with its native terminal sandbox, inside a disposable copy of the
+project. Use the current working directory only; never target the original absolute project path
+above or another agent's workspace. You may inspect files and optionally run focused existing
+tests, linters, type checks, or builds when they would validate a claim. Do not intentionally edit
+source files. Generated test and build artifacts are allowed in this disposable copy and will be
+deleted after the discussion. If you run a check, report it accurately. Only when you ran at least
+one check, end your reply with this versioned block (valid JSON, no text after the fence):
+\`\`\`roundtable-checks
+{"version":1,"checks":[{"command":"npm test","status":"passed","exitCode":0,"summary":"concise result, not raw output"}]}
+\`\`\`
+The only statuses are "passed", "failed", and "blocked". Omit exitCode when none exists. This is
+agent-reported evidence, not independent bridge verification.`;
 
-  return `You are ${participant} in a visible project roundtable with ${other} and a human project owner.
+  return `You are ${participant} in a visible project roundtable with ${others} and a human project owner.
 
 PROJECT FOLDER
 ${session.projectPath}
@@ -298,7 +320,7 @@ consensus or action items. Return only one JSON object, without markdown fences,
 {
   "decision": "the recommendation or explicit no-consensus result",
   "rationale": "why the room reached this result",
-  "actions": [{"owner": "You|Codex|Claude|Unassigned", "text": "ordered next action"}],
+  "actions": [{"owner": "You|Codex|Claude|Antigravity|Unassigned", "text": "ordered next action"}],
   "openQuestions": ["unresolved question or disagreement"],
   "consensus": true
 }
@@ -309,7 +331,7 @@ ${outcomeInput.text}`;
 }
 
 export function buildDissentPrompt(session, role, reviewInput) {
-  const participant = role === "codex" ? "Codex CLI" : "Claude CLI";
+  const participant = `${AGENT_NAMES[role]} CLI`;
   const validLabels = session.messages.map((_, index) => `M${index + 1}`).join(", ");
   return `You are ${participant}, performing a narrow dissent-coverage review after a visible project roundtable.
 
@@ -532,14 +554,15 @@ export function createBridge({
 
   async function runSession(session) {
     try {
+      await agentRunner.prepare?.(session);
       session.phase = session.stopRequested ? "stopping" : "running";
       turnLoop:
       for (let turn = 0; turn < session.totalTurns; turn += 1) {
         if (session.phase === "stopping" || session.stopRequested) break;
         session.currentTurn = turn;
         flushSteering(session, turn);
-        const role = turn % 2 === 0 ? "codex" : "claude";
-        const round = Math.floor(turn / 2) + 1;
+        const role = AGENT_ROLES[turn % AGENT_ROLES.length];
+        const round = Math.floor(turn / AGENT_ROLES.length) + 1;
         let attempts = 0;
         emit(session, {
           type: "session.status",
@@ -556,7 +579,7 @@ export function createBridge({
           try {
             const reply = await agentRunner.run({ session, role, prompt });
             if (!reply) {
-              throw new Error(`${role === "codex" ? "Codex" : "Claude"} returned no text.`);
+              throw new Error(`${AGENT_NAMES[role]} returned no text.`);
             }
             replyText = reply;
           } catch (error) {
@@ -587,7 +610,7 @@ export function createBridge({
             if (action === "expired") {
               setPhase(session, "error", {
                 failedTurn: session.failedTurn,
-                note: `${role === "codex" ? "Codex" : "Claude"} retry window expired.`,
+                note: `${AGENT_NAMES[role]} retry window expired.`,
               });
               return;
             }
@@ -599,8 +622,8 @@ export function createBridge({
           }
         }
         session.failedTurn = null;
-        const model = role === "codex" ? session.codexModel : session.claudeModel;
-        const effort = role === "codex" ? session.codexEffort : session.claudeEffort;
+        const model = session[`${role}Model`];
+        const effort = session[`${role}Effort`];
         const sandboxPaths = [...(session.testSandboxes?.values() || [])].flatMap(
           ({ root, workspace }) => [root, workspace],
         );
@@ -673,14 +696,14 @@ export function createBridge({
       if (session.reviewDissent) {
         const validLabels = session.messages.map((_, index) => `M${index + 1}`);
         const reviewInput = buildOutcomeInput(session.topic, session.messages);
-        for (const role of ["codex", "claude"]) {
+        for (const role of AGENT_ROLES) {
           const reviewedAt = now().toISOString();
           if (session.outcome?.status !== "available") {
             emit(session, {
               type: "session.dissent",
               review: {
                 role,
-                author: role === "codex" ? "Codex" : "Claude",
+                author: AGENT_NAMES[role],
                 status: "unavailable",
                 at: reviewedAt,
                 coverage: reviewInput.coverage,
@@ -692,7 +715,7 @@ export function createBridge({
           }
           setPhase(session, "reviewing", {
             speaker: role,
-            note: `${role === "codex" ? "Codex" : "Claude"} is checking dissent coverage.`,
+            note: `${AGENT_NAMES[role]} is checking dissent coverage.`,
           });
           try {
             const rawDissent = await agentRunner.run({
@@ -705,7 +728,7 @@ export function createBridge({
             const items = parsed.map((item) => ({
               ...item,
               id: `D${session.nextDissentId++}`,
-              author: role === "codex" ? "Codex" : "Claude",
+              author: AGENT_NAMES[role],
               role,
               at: reviewedAt,
             }));
@@ -713,7 +736,7 @@ export function createBridge({
               type: "session.dissent",
               review: {
                 role,
-                author: role === "codex" ? "Codex" : "Claude",
+                author: AGENT_NAMES[role],
                 status: "completed",
                 at: reviewedAt,
                 coverage: reviewInput.coverage,
@@ -726,7 +749,7 @@ export function createBridge({
               type: "session.dissent",
               review: {
                 role,
-                author: role === "codex" ? "Codex" : "Claude",
+                author: AGENT_NAMES[role],
                 status: "unavailable",
                 at: reviewedAt,
                 coverage: reviewInput.coverage,
@@ -784,8 +807,10 @@ export function createBridge({
       createdAt: session.createdAt,
       codexModel: session.codexModel,
       claudeModel: session.claudeModel,
+      antigravityModel: session.antigravityModel,
       codexEffort: session.codexEffort,
       claudeEffort: session.claudeEffort,
+      antigravityEffort: session.antigravityEffort,
       totalTurns: session.totalTurns,
       completedTurns: session.completedTurns,
       messages: session.messages,
@@ -976,8 +1001,8 @@ export function createBridge({
       }
 
       if (request.method === "POST" && url.pathname === "/sessions") {
-        if (!health.codex.available || !health.claude.available) {
-          sendJson(request, response, 400, { error: "Both CLIs must be available." });
+        if (AGENT_ROLES.some((role) => !health[role].available)) {
+          sendJson(request, response, 400, { error: "All three CLIs must be available." });
           return;
         }
         const payload = await readJson(request);
@@ -985,8 +1010,14 @@ export function createBridge({
         const rounds = Math.max(1, Math.min(5, Number(payload.rounds) || 3));
         const codexModel = String(payload.codexModel || health.models.codex.configured).trim();
         const claudeModel = String(payload.claudeModel || health.models.claude.configured).trim();
+        const antigravityModel = String(
+          payload.antigravityModel || health.models.antigravity.configured,
+        ).trim();
         const codexEffort = String(payload.codexEffort || health.models.codex.effort).trim();
         const claudeEffort = String(payload.claudeEffort || health.models.claude.effort).trim();
+        const antigravityEffort = String(
+          payload.antigravityEffort || health.models.antigravity.effort,
+        ).trim();
         const keepHistory = Boolean(payload.keepHistory && historyStore.enabled);
         const reviewDissent = Boolean(payload.reviewDissent);
 
@@ -1004,14 +1035,16 @@ export function createBridge({
         const modelPattern = /^[A-Za-z0-9._:/[\]-]+$/;
         if (
           (codexModel && !modelPattern.test(codexModel)) ||
-          (claudeModel && !modelPattern.test(claudeModel))
+          (claudeModel && !modelPattern.test(claudeModel)) ||
+          (antigravityModel && !modelPattern.test(antigravityModel))
         ) {
           sendJson(request, response, 400, { error: "Model names contain unsupported characters." });
           return;
         }
         if (
           !health.models.codex.efforts.includes(codexEffort) ||
-          !health.models.claude.efforts.includes(claudeEffort)
+          !health.models.claude.efforts.includes(claudeEffort) ||
+          !health.models.antigravity.efforts.includes(antigravityEffort)
         ) {
           sendJson(request, response, 400, { error: "Reasoning effort is not supported." });
           return;
@@ -1031,9 +1064,11 @@ export function createBridge({
           topic,
           codexModel,
           claudeModel,
+          antigravityModel,
           codexEffort,
           claudeEffort,
-          totalTurns: rounds * 2,
+          antigravityEffort,
+          totalTurns: rounds * AGENT_ROLES.length,
           completedTurns: 0,
           currentTurn: -1,
           messages: [],
@@ -1059,7 +1094,7 @@ export function createBridge({
             type: "session.status",
             status: "running",
             turn: 0,
-            totalTurns: rounds * 2,
+            totalTurns: rounds * AGENT_ROLES.length,
           },
         };
         sessions.set(id, session);

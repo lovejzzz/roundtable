@@ -24,9 +24,15 @@ const health = {
       effort: "high",
       efforts: ["low", "medium", "high"],
     },
+    antigravity: {
+      configured: "gemini-test",
+      effort: "high",
+      efforts: ["low", "medium", "high"],
+    },
   },
   codex: { available: true, version: "codex-test" },
   claude: { available: true, version: "claude-test" },
+  antigravity: { available: true, version: "antigravity-test" },
 };
 
 function authHeaders(extra = {}) {
@@ -92,7 +98,7 @@ test("queues steering after the active reply and includes it once in the next pr
       body: JSON.stringify({
         projectPath: "/test/project",
         topic: "Improve the app",
-        rounds: 2,
+        rounds: 3,
       }),
     });
     assert.equal(createResponse.status, 201);
@@ -130,6 +136,12 @@ test("queues steering after the active reply and includes it once in the next pr
     assert.match(prompts[1], /You cannot run shell commands or tests/);
     assert.match(prompts[1], /do not emit\s+a roundtable-checks block/);
     assert.doesNotMatch(prompts[1], /You may run\s+focused existing tests/);
+    assert.match(prompts[2], /DISPOSABLE ANTIGRAVITY SANDBOX/);
+    assert.match(prompts[2], /native terminal sandbox/);
+    assert.match(prompts[2], /You may inspect files and optionally run focused existing/);
+    assert.match(prompts[2], /Codex CLI and Claude CLI/);
+    assert.match(prompts[5], /You are Antigravity CLI/);
+    assert.match(prompts[8], /You are Antigravity CLI/);
 
     const lateSteer = await fetch(`${bridge.baseUrl}/sessions/${id}/steer`, {
       method: "POST",
@@ -176,7 +188,7 @@ test("restores snapshots and closes terminal SSE streams after replay", async ()
       const value = await response.json();
       return value.phase === "complete" ? value : null;
     });
-    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.messages.length, 3);
     assert.equal(snapshot.outcome.status, "available");
     assert.equal(snapshot.outcome.synthesizedBy, "Codex");
     assert.equal(snapshot.outcome.actions[0].owner, "Codex");
@@ -347,6 +359,8 @@ test("isolates a malformed dissent pass and preserves the frozen brief", async (
     assert.equal(snapshot.dissentReviews.codex.status, "unavailable");
     assert.equal(snapshot.dissentReviews.claude.status, "completed");
     assert.equal(snapshot.dissentReviews.claude.itemCount, 0);
+    assert.equal(snapshot.dissentReviews.antigravity.status, "completed");
+    assert.equal(snapshot.dissentReviews.antigravity.itemCount, 0);
   } finally {
     await bridge.close();
   }
@@ -431,10 +445,14 @@ test("runs opt-in dissent reviews and durably accepts human judgments", async ()
       return current.phase === "complete" ? current : null;
     });
     assert.equal(snapshot.reviewDissent, true);
-    assert.deepEqual(snapshot.dissent.map((item) => item.id), ["D1", "D2"]);
-    assert.deepEqual(snapshot.dissent.map((item) => item.author), ["Codex", "Claude"]);
+    assert.deepEqual(snapshot.dissent.map((item) => item.id), ["D1", "D2", "D3"]);
+    assert.deepEqual(
+      snapshot.dissent.map((item) => item.author),
+      ["Codex", "Claude", "Antigravity"],
+    );
     assert.equal(snapshot.dissentReviews.codex.status, "completed");
     assert.equal(snapshot.dissentReviews.claude.status, "completed");
+    assert.equal(snapshot.dissentReviews.antigravity.status, "completed");
     assert.doesNotMatch(synthesisPrompts[0], /\[D1\]|codex concern|roundtable-dissent/i);
 
     const judgmentResponse = await fetch(`${bridge.baseUrl}/history/${id}/judgment`, {
@@ -512,7 +530,7 @@ test("a synthesis failure preserves the transcript and completes with an unavail
       const value = await response.json();
       return value.phase === "complete" ? value : null;
     });
-    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.messages.length, 3);
     assert.equal(snapshot.outcome.status, "unavailable");
     assert.equal(snapshot.outcome.reason, "failed");
     assert.match(snapshot.outcome.message, /synthetic test failure/);
@@ -565,7 +583,7 @@ test("stopping during synthesis skips only the brief", async () => {
       const value = await response.json();
       return value.phase === "complete" ? value : null;
     });
-    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.messages.length, 3);
     assert.equal(snapshot.outcome.reason, "skipped");
   } finally {
     await bridge.close();
@@ -701,7 +719,7 @@ test("retries the same failed role and turn without changing its prompt or dupli
     assert.equal(prompts[0], prompts[1]);
     assert.deepEqual(
       completed.messages.map((message) => message.role),
-      ["codex", "claude"],
+      ["codex", "claude", "antigravity"],
     );
     assert.equal(completed.failedTurn, null);
     assert.equal(completed.outcome.status, "available");
@@ -994,7 +1012,7 @@ test("history write failures do not stop the live discussion and surface a warni
       const value = await response.json();
       return value.phase === "complete" ? value : null;
     });
-    assert.equal(snapshot.messages.length, 2);
+    assert.equal(snapshot.messages.length, 3);
     assert.equal(snapshot.outcome.status, "available");
     assert.match(snapshot.historyWarning, /disk full/);
   } finally {

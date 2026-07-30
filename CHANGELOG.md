@@ -1,8 +1,88 @@
 # Changelog
 
-Every Roundtable release represents one complete iteration: a visible Codex–Claude
-discussion, the implementation selected from that discussion, and verification of
-the resulting app. Versions advance in `v0.0.0.1` increments.
+Every Roundtable release represents one complete iteration: a visible agent
+discussion, the implementation selected from that discussion, and verification
+of the resulting app. Versions advance in `v0.0.0.1` increments.
+
+## [v0.0.0.10] — 2026-07-29
+
+### Conversation
+
+Prompt: add the locally installed Antigravity CLI as a first-class Roundtable
+participant, then validate the three-agent room against the real repository and
+production sandbox path.
+
+The installed `agy` 1.1.8 CLI exposed a usable non-interactive contract with
+model selection, low/medium/high effort, plan mode, native terminal sandboxing,
+and eleven discoverable models. The first live integration gate correctly
+paused Antigravity's turn when the CLI exited 0 without a reply. Exact stderr
+reproduction showed that headless Antigravity auto-denied its own `read_file`
+tool unless permissions were pre-approved.
+
+After containing headless tool approval inside the existing disposable copy,
+plan mode, native terminal sandbox, and outer macOS guard, Antigravity produced
+a repository-grounded review. It found two integration defects: sibling
+sandboxes were created lazily, so early agents could not deny roots that did not
+yet exist; and Antigravity's value-taking `--print` flag put the growing
+transcript in `argv`, risking `E2BIG` in long rooms. Both findings were accepted
+and repaired before release.
+
+### Third participant
+
+- The bridge now detects `agy`, its version, required flags, configured model,
+  effort levels, and live `agy models` output. A room requires Codex, Claude,
+  and Antigravity to be available.
+- Every round now runs Codex, Claude, then Antigravity. Steering boundaries,
+  progress, failure/retry, completion coverage, stable message labels, and
+  optional dissent review all operate on three agent turns.
+- Antigravity messages, model, effort, reported checks, failures, dissent,
+  outcomes, local history, recovery snapshots, and Markdown exports use the
+  same first-class contracts as the existing participants. Antigravity is also
+  a valid completion-action owner.
+
+### Model and reasoning controls
+
+- The participant panel shows Antigravity CLI 1.1.8, a model field backed by
+  every model reported by the installed CLI, and a low/medium/high reasoning
+  slider.
+- Gemini identifiers receive readable labels while the exact CLI value remains
+  editable. Session settings lock at start, appear on each message and in the
+  context rail, and survive refresh, archive reconstruction, copy, and export.
+- The room headline, metadata, preview transcript, turn order, model routing,
+  presence state, active speaker, and failure cards now visibly represent three
+  agents.
+
+### Antigravity execution boundary
+
+- Antigravity runs with `--mode plan`, native `--sandbox`, and headless tool
+  approval inside its own disposable project copy. The outer macOS profile
+  denies the original project, both sibling sandbox roots, common host
+  credential paths, and the other CLIs' auth/config state. The final live gate
+  found and closed a missing Claude-to-Antigravity edge: Claude now explicitly
+  read-denies both `.antigravity` and `.gemini`.
+- All three disposable copies are created before the first turn. This makes
+  every sibling root concrete before any process profile is built and removes
+  the lazy-isolation gap found by Antigravity.
+- The full Antigravity control prompt is written to a random, owner-only,
+  one-use instruction file inside its disposable workspace. `agy --print`
+  receives only a short reference, avoiding transcript-sized process arguments;
+  the file is removed after the call and the workspace is deleted at session
+  completion.
+
+### Verification
+
+- Added Antigravity invocation, prompt-capability, three-turn routing,
+  three-review dissent, model/effort persistence, UI rendering, and sandbox
+  policy regressions.
+- Ran 36 bridge, archive, environment, invocation, prompt-file lifecycle, copy,
+  sandbox, and redaction tests, lint, and a production build successfully.
+- Ran the actual three-agent bridge against this repository. The first gate
+  reproduced and explained the headless permission failure; a contained exact
+  prompt run then returned a 2,721-character repository review and drove eager
+  sandbox creation plus file-based prompt delivery. The final gate produced a
+  substantive Antigravity turn with exact repository citations, caught the
+  missing Claude credential denials, and drove the executable guard regression
+  before release.
 
 ## [v0.0.0.9] — 2026-07-29
 

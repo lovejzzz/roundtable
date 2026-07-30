@@ -43,9 +43,19 @@ export const CLAUDE_WRITABLE_RUNTIME_PATHS = Object.freeze([
 const CLAUDE_PROTECTED_PATHS = Object.freeze([
   ...HOST_PROTECTED_CREDENTIAL_PATHS,
   ".codex",
+  ".antigravity",
+  ".gemini",
 ]);
 const CODEX_PROTECTED_PATHS = Object.freeze([
   ...HOST_PROTECTED_CREDENTIAL_PATHS,
+  ".claude",
+  ".claude.json",
+  ".antigravity",
+  ".gemini",
+]);
+const ANTIGRAVITY_PROTECTED_PATHS = Object.freeze([
+  ...HOST_PROTECTED_CREDENTIAL_PATHS,
+  ".codex",
   ".claude",
   ".claude.json",
 ]);
@@ -208,6 +218,7 @@ export function buildClaudeSandboxProfile({
   claudeHomeEntries = [],
   projectPath,
   siblingRoot = "",
+  siblingRoots = [],
 }) {
   const claudeHome = join(home, ".claude");
   const writableRuntimePaths = new Set(CLAUDE_WRITABLE_RUNTIME_PATHS);
@@ -234,10 +245,42 @@ export function buildClaudeSandboxProfile({
     `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
     `(deny file-write* (subpath "${sandboxLiteral(projectPath)}"))`,
   ];
-  if (siblingRoot) {
+  for (const root of new Set([siblingRoot, ...siblingRoots].filter(Boolean))) {
     lines.push(
-      `(deny file-read* (subpath "${sandboxLiteral(siblingRoot)}"))`,
-      `(deny file-write* (subpath "${sandboxLiteral(siblingRoot)}"))`,
+      `(deny file-read* (subpath "${sandboxLiteral(root)}"))`,
+      `(deny file-write* (subpath "${sandboxLiteral(root)}"))`,
+    );
+  }
+  return lines.join("\n");
+}
+
+export function buildAntigravitySandboxProfile({
+  home,
+  homeEntries = [],
+  projectPath,
+  siblingRoots = [],
+}) {
+  const writableRoots = new Set([".antigravity", ".gemini"]);
+  const lines = [
+    "(version 1)",
+    "(allow default)",
+    `(deny file-write* (literal "${sandboxLiteral(home)}"))`,
+    ...ANTIGRAVITY_PROTECTED_PATHS.map(
+      (name) => `(deny file-read* (subpath "${sandboxLiteral(join(home, name))}"))`,
+    ),
+    ...homeEntries
+      .filter((name) => name && !writableRoots.has(name))
+      .map(
+        (name) =>
+          `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`,
+      ),
+    `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
+    `(deny file-write* (subpath "${sandboxLiteral(projectPath)}"))`,
+  ];
+  for (const root of new Set(siblingRoots.filter(Boolean))) {
+    lines.push(
+      `(deny file-read* (subpath "${sandboxLiteral(root)}"))`,
+      `(deny file-write* (subpath "${sandboxLiteral(root)}"))`,
     );
   }
   return lines.join("\n");
@@ -250,6 +293,7 @@ function codexConfigString(value) {
 export function buildCodexPermissionArgs({
   readOnly = false,
   siblingRoot = "",
+  siblingRoots = [],
   projectPath = "",
 } = {}) {
   const profileName = readOnly
@@ -257,7 +301,7 @@ export function buildCodexPermissionArgs({
     : "roundtable_workspace";
   const deniedPaths = [
     ...CODEX_PROTECTED_PATHS.map((name) => `~/${name}`),
-    ...(siblingRoot ? [siblingRoot] : []),
+    ...new Set([siblingRoot, ...siblingRoots].filter(Boolean)),
     ...(projectPath ? [projectPath] : []),
   ];
   const filesystemTable = deniedPaths
