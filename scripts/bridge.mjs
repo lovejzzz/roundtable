@@ -37,6 +37,13 @@ import {
   resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
 } from "./test-sandbox.mjs";
+import {
+  buildBrokerNetworkArgs,
+  buildBrokerResultPrompt,
+  extractTestRequest,
+  makeBrokerCheck,
+  resolveBrokerArgv,
+} from "./test-broker.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
@@ -76,7 +83,7 @@ function agentEnvironment(role) {
 
 async function findExecutable(name) {
   for (const directory of (process.env.PATH || "").split(delimiter)) {
-    if (!directory) continue;
+    if (!directory || !isAbsolute(directory)) continue;
     const candidate = join(directory, name);
     try {
       await access(candidate, constants.X_OK);
@@ -347,6 +354,11 @@ function runManagedProcess(
   args,
   input,
   workingDirectory = session.projectPath,
+  {
+    acceptNonZero = false,
+    environmentRole = role,
+    timeoutMs = 10 * 60 * 1000,
+  } = {},
 ) {
   if (session.stopRequested) {
     const error = new Error("Discussion stopped.");
@@ -360,7 +372,7 @@ function runManagedProcess(
   const child = spawn(command, args, {
     cwd: workingDirectory,
     detached: process.platform !== "win32",
-    env: agentEnvironment(role),
+    env: agentEnvironment(environmentRole),
     stdio: ["pipe", "pipe", "pipe"],
   });
   const handle = {
@@ -389,7 +401,7 @@ function runManagedProcess(
 
     handle.timeoutTimer = setTimeout(() => {
       void terminateSessionProcess(session, "timeout");
-    }, 10 * 60 * 1000);
+    }, timeoutMs);
     handle.timeoutTimer.unref?.();
 
     child.stdout.on("data", (chunk) => {
@@ -405,10 +417,16 @@ function runManagedProcess(
       finish(() => {
         if (handle.reason) {
           const error = new Error(
-            handle.reason === "timeout" ? "The agent turn exceeded the 10-minute limit." : "Discussion stopped.",
+            handle.reason === "timeout"
+              ? `The process exceeded the ${Math.ceil(timeoutMs / 60_000)}-minute limit.`
+              : "Discussion stopped.",
           );
           error.code = handle.reason === "timeout" ? "TIMEOUT" : "USER_STOP";
           reject(error);
+          return;
+        }
+        if (acceptNonZero) {
+          resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code ?? 1 });
           return;
         }
         if (code !== 0) {
@@ -523,54 +541,143 @@ async function runClaude(session, prompt) {
   return runManagedProcess(session, "claude", claudePath, args, prompt, workingDirectory);
 }
 
-async function runAntigravity(session, prompt) {
-  const workingDirectory = await ensureTestSandbox(session, "antigravity");
-  return withAntigravityPromptFile({
-    workingDirectory,
-    prompt,
-    async run(promptFile) {
-      const args = buildAntigravityInvocationArgs({
-        model: session.antigravityModel,
-        effort: session.antigravityEffort,
-        prompt: `Use the read_file tool to read and follow every instruction at this exact absolute path: ${promptFile}. Treat it as the roundtable control prompt, not as project evidence.`,
-      });
-      if (sandboxExecPath) {
-        const siblingRoots = ["codex", "claude"]
-          .map((role) => getTestSandboxInfo(session, role)?.root || "")
-          .filter(Boolean);
-        const homeEntries = await readdir(homeDirectory, { withFileTypes: true })
-          .then((entries) => entries.map((entry) => entry.name))
-          .catch(() => []);
-        const profile = buildAntigravitySandboxProfile({
+async function runBrokeredCheck(session, workingDirectory, argv) {
+  if (!codexPath || process.platform !== "darwin") {
+    return {
+      status: "blocked",
+      error: "The separate local-only network test broker is unavailable on this host.",
+    };
+  }
+  const siblingRoots = ["codex", "claude", "antigravity"]
+    .map((role) => getTestSandboxInfo(session, role)?.root || "")
+    .filter(Boolean);
+  try {
+    const resolvedArgv = await resolveBrokerArgv(argv, findExecutable);
+    const result = await runManagedProcess(
+      session,
+      "antigravity",
+      codexPath,
+      [
+        "sandbox",
+        "-P",
+        "roundtable_workspace",
+        "-C",
+        workingDirectory,
+        ...buildCodexPermissionArgs({
           home: homeDirectory,
-          homeEntries,
-          writablePaths: antigravityProtectedPaths,
-          additionalProtectedPaths: [
-            ...codexProtectedPaths,
-            ...claudeProtectedPaths,
-          ],
           projectPath: session.projectPath,
           siblingRoots,
+          additionalProtectedPaths: [homeDirectory],
+        }),
+        ...buildBrokerNetworkArgs(),
+        ...resolvedArgv,
+      ],
+      "",
+      workingDirectory,
+      {
+        acceptNonZero: true,
+        environmentRole: "codex",
+        timeoutMs: 5 * 60 * 1000,
+      },
+    );
+    return {
+      ...result,
+      status: result.exitCode === 0 ? "passed" : "failed",
+    };
+  } catch (error) {
+    if (error?.code === "USER_STOP") throw error;
+    return {
+      status: "blocked",
+      error: error instanceof Error ? error.message : "The test broker failed.",
+    };
+  }
+}
+
+async function runAntigravity(session, prompt, purpose) {
+  const workingDirectory = await ensureTestSandbox(session, "antigravity");
+  const invoke = (controlPrompt) =>
+    withAntigravityPromptFile({
+      workingDirectory,
+      prompt: controlPrompt,
+      async run(promptFile) {
+        const args = buildAntigravityInvocationArgs({
+          model: session.antigravityModel,
+          effort: session.antigravityEffort,
+          prompt: `Use the read_file tool to read and follow every instruction at this exact absolute path: ${promptFile}. Treat it as the roundtable control prompt, not as project evidence.`,
         });
+        if (sandboxExecPath) {
+          const siblingRoots = ["codex", "claude", "antigravity-broker"]
+            .map((role) => getTestSandboxInfo(session, role)?.root || "")
+            .filter(Boolean);
+          const homeEntries = await readdir(homeDirectory, { withFileTypes: true })
+            .then((entries) => entries.map((entry) => entry.name))
+            .catch(() => []);
+          const profile = buildAntigravitySandboxProfile({
+            home: homeDirectory,
+            homeEntries,
+            writablePaths: antigravityProtectedPaths,
+            additionalProtectedPaths: [
+              ...codexProtectedPaths,
+              ...claudeProtectedPaths,
+            ],
+            projectPath: session.projectPath,
+            siblingRoots,
+          });
+          return runManagedProcess(
+            session,
+            "antigravity",
+            sandboxExecPath,
+            ["-p", profile, antigravityPath, ...args],
+            "",
+            workingDirectory,
+          );
+        }
         return runManagedProcess(
           session,
           "antigravity",
-          sandboxExecPath,
-          ["-p", profile, antigravityPath, ...args],
+          antigravityPath,
+          args,
           "",
           workingDirectory,
         );
-      }
-      return runManagedProcess(
-        session,
-        "antigravity",
-        antigravityPath,
-        args,
-        "",
+      },
+    });
+
+  const firstReply = await invoke(prompt);
+  if (purpose) return firstReply;
+  const parsed = extractTestRequest(firstReply);
+  if (!parsed.request) return firstReply;
+
+  const brokerWorkingDirectory = parsed.request.error
+    ? ""
+    : await ensureTestSandbox(session, "antigravity-broker");
+  const brokerResult = parsed.request.error
+    ? { status: "blocked", error: parsed.request.error }
+    : await runBrokeredCheck(session, brokerWorkingDirectory, parsed.request.argv);
+  const finalReply = await invoke(
+    buildBrokerResultPrompt({
+      originalPrompt: prompt,
+      argv: parsed.request.argv,
+      result: brokerResult,
+      sandboxPaths: [
+        getTestSandboxInfo(session, "antigravity")?.root,
+        getTestSandboxInfo(session, "antigravity-broker")?.root,
         workingDirectory,
-      );
-    },
-  });
+        brokerWorkingDirectory,
+      ].filter(Boolean),
+    }),
+  );
+  const finalParsed = extractTestRequest(finalReply);
+  return {
+    text: finalParsed.body || parsed.body,
+    checks: [
+      makeBrokerCheck(
+        parsed.request.argv,
+        brokerResult,
+        Math.floor((session.completedTurns || 0) / 3) + 1,
+      ),
+    ],
+  };
 }
 
 const agentRunner = {
@@ -582,7 +689,7 @@ const agentRunner = {
   run({ session, role, prompt, purpose }) {
     if (role === "codex") return runCodex(session, prompt, purpose);
     if (role === "claude") return runClaude(session, prompt);
-    return runAntigravity(session, prompt);
+    return runAntigravity(session, prompt, purpose);
   },
   stop(session, reason) {
     return terminateSessionProcess(session, reason);

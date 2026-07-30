@@ -197,8 +197,9 @@ test("queues steering after the active reply and includes it once in the next pr
     assert.match(prompts[1], /do not emit\s+a roundtable-checks block/);
     assert.doesNotMatch(prompts[1], /You may run\s+focused existing tests/);
     assert.match(prompts[2], /DISPOSABLE ANTIGRAVITY SANDBOX/);
-    assert.match(prompts[2], /native terminal sandbox/);
-    assert.match(prompts[2], /You may inspect files and optionally run focused existing/);
+    assert.match(prompts[2], /OPTIONAL ROUNDTABLE TEST BROKER/);
+    assert.match(prompts[2], /roundtable-test-request/);
+    assert.match(prompts[2], /without a shell/);
     assert.match(prompts[2], /Codex CLI and Claude CLI/);
     assert.match(prompts[5], /You are Antigravity CLI/);
     assert.match(prompts[8], /You are Antigravity CLI/);
@@ -550,16 +551,77 @@ test("extracts bounded agent-reported checks without losing malformed replies", 
       summary: "token=[redacted] could not listen",
       round: 2,
       exitCode: 1,
+      provenance: "agent-reported",
     },
   ]);
   const transcript = buildTranscript([
     { author: "Codex", body: parsed.body, checks: parsed.checks },
   ]);
   assert.match(transcript, /agent-reported, not bridge-verified/i);
-  assert.match(transcript, /\[BLOCKED\] npm test/);
+  assert.match(transcript, /\[BLOCKED\]\[AGENT-REPORTED\] npm test/);
 
   const malformed = "Keep this whole reply.\n```roundtable-checks\n{\"version\":1}\n```";
   assert.deepEqual(extractReportedChecks(malformed), { body: malformed, checks: [] });
+});
+
+test("stores bridge-brokered evidence separately from agent-reported checks", async () => {
+  const agentRunner = {
+    run: async ({ role, purpose }) => {
+      if (purpose === "synthesis") {
+        return JSON.stringify({
+          decision: "Keep the broker boundary.",
+          rationale: "The check ran outside the model process.",
+          actions: [],
+          openQuestions: [],
+          consensus: true,
+        });
+      }
+      if (role === "antigravity") {
+        return {
+          text: "The focused bridge suite supports the recommendation.",
+          checks: [
+            {
+              command: "npm run test:bridge",
+              status: "passed",
+              exitCode: 0,
+              summary: "Roundtable executed the isolated check; it passed.",
+              round: 1,
+              provenance: "bridge-broker",
+            },
+          ],
+        };
+      }
+      return `${role} reply`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Verify brokered evidence",
+        rounds: 1,
+      }),
+    });
+    const { id } = await response.json();
+    const completed = await waitFor(async () => {
+      const snapshot = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      }).then((result) => result.json());
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+    assert.equal(completed.messages[2].checks[0].provenance, "bridge-broker");
+    assert.match(
+      buildTranscript([completed.messages[2]]),
+      /brokered checks were executed by Roundtable/i,
+    );
+  } finally {
+    await bridge.close();
+  }
 });
 
 test("a synthesis failure preserves the transcript and completes with an unavailable outcome", async () => {
@@ -790,6 +852,7 @@ test("retries the same failed role and turn without changing its prompt or dupli
         summary: "Recovery check passed.",
         round: 1,
         exitCode: 0,
+        provenance: "agent-reported",
       },
     ]);
   } finally {

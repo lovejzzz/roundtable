@@ -69,12 +69,14 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.doesNotMatch(packageJson, /site-creator-vinext-starter|react-loading-skeleton/);
   assert.match(page, /Retry failed turn|Retry .* turn|failed-turn-card/i);
   assert.match(page, /Retry or end this turn before adding another note/i);
-  assert.match(page, /Reported by \{message\.author\}/i);
+  assert.match(page, /Reported by/);
   assert.match(page, /Agent-reported, not independently verified/i);
+  assert.match(page, /Verified by Roundtable broker/i);
+  assert.match(page, /separate local-only network sandbox/i);
   assert.match(page, /Claude has no shell access/i);
-  assert.match(page, /Claude remains read-only/i);
-  assert.match(page, /Codex and\s+Antigravity can use them/i);
-  assert.match(page, /Agent-reported checks — \$\{message\.author\}/i);
+  assert.match(page, /Claude\s+remains read-only/i);
+  assert.match(page, /Antigravity can request one approved argv command/i);
+  assert.match(page, /Agent-reported checks/i);
   assert.match(page, /Summaries · not independently verified/i);
   assert.match(page, /Agent-stated summaries; not independently verified/i);
   assert.match(page, /No concerns reported/i);

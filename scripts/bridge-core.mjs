@@ -18,11 +18,18 @@ const DISSENT_FENCE = /```roundtable-dissent\s*\n([\s\S]*?)\n```/;
 
 function reportedChecksText(message) {
   if (!message.checks?.length) return "";
+  const brokered = message.checks.some(
+    (check) => check.provenance === "bridge-broker",
+  );
   return [
-    `REPORTED CHECKS BY ${message.author.toUpperCase()} (agent-reported, not bridge-verified):`,
+    brokered
+      ? `CHECK EVIDENCE FOR ${message.author.toUpperCase()} (brokered checks were executed by Roundtable):`
+      : `REPORTED CHECKS BY ${message.author.toUpperCase()} (agent-reported, not bridge-verified):`,
     ...message.checks.map(
       (check) =>
-        `- [${check.status.toUpperCase()}] ${check.command} — ${check.summary}` +
+        `- [${check.status.toUpperCase()}][${
+          check.provenance === "bridge-broker" ? "BRIDGE-BROKERED" : "AGENT-REPORTED"
+        }] ${check.command} — ${check.summary}` +
         (Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""),
     ),
   ].join("\n");
@@ -217,7 +224,13 @@ export function extractReportedChecks(raw, { sandboxPaths = [], round } = {}) {
     if (!command || !summary || !CHECK_STATUSES.has(status)) {
       return { body: source, checks: [] };
     }
-    const check = { command, status, summary, ...(round ? { round } : {}) };
+    const check = {
+      command,
+      status,
+      summary,
+      ...(round ? { round } : {}),
+      provenance: "agent-reported",
+    };
     if (candidate.exitCode !== undefined) {
       if (!Number.isInteger(candidate.exitCode) || candidate.exitCode < 0 || candidate.exitCode > 255) {
         return { body: source, checks: [] };
@@ -281,18 +294,23 @@ You cannot run shell commands or tests. This is a deliberate fail-closed boundar
 execution can run in a separate brokered process. Do not claim to have run a check and do not emit
 a roundtable-checks block.`
         : `DISPOSABLE ANTIGRAVITY SANDBOX
-Your CLI is running in plan mode with its native terminal sandbox, inside a disposable copy of the
-project. Use the current working directory only; never target the original absolute project path
-above or another agent's workspace. You may inspect files and optionally run focused existing
-tests, linters, type checks, or builds when they would validate a claim. Do not intentionally edit
-source files. Generated test and build artifacts are allowed in this disposable copy and will be
-deleted after the discussion. If you run a check, report it accurately. Only when you ran at least
-one check, end your reply with this versioned block (valid JSON, no text after the fence):
-\`\`\`roundtable-checks
-{"version":1,"checks":[{"command":"npm test","status":"passed","exitCode":0,"summary":"concise result, not raw output"}]}
+Your CLI is running in plan mode inside a disposable copy of the project. Use the current working
+directory only; never target the original absolute project path above or another agent's workspace.
+You may inspect files, but do not invoke terminal tools: macOS cannot apply Antigravity's
+restrictive command sandbox from inside Roundtable's outer credential guard.
+
+OPTIONAL ROUNDTABLE TEST BROKER
+When one focused existing test, lint, type-check, or build command would validate a claim, request
+it by ending your draft with exactly this versioned block (valid JSON, no text after the fence):
+\`\`\`roundtable-test-request
+{"version":1,"argv":["npm","run","test:bridge"]}
 \`\`\`
-The only statuses are "passed", "failed", and "blocked". Omit exitCode when none exists. This is
-agent-reported evidence, not independent bridge verification.`;
+The bridge will execute at most one approved argv request without a shell, in a separate
+local-only network sandbox over a fresh broker-only project copy, then return the real result for
+your final answer. Loopback is available for local test servers; external and private-network
+destinations are blocked. Changes made by that command cannot affect your own workspace. This is
+optional. Never claim the request ran until the bridge returns its result. Do not emit a
+roundtable-checks block.`;
 
   return `You are ${participant} in a visible project roundtable with ${others} and a human project owner.
 
@@ -574,6 +592,7 @@ export function createBridge({
           failedTurn: null,
         });
         let replyText;
+        let bridgeChecks = [];
         while (replyText === undefined) {
           if (session.stopRequested) break turnLoop;
           const prompt = buildPrompt(session, role, turn);
@@ -582,7 +601,14 @@ export function createBridge({
             if (!reply) {
               throw new Error(`${AGENT_NAMES[role]} returned no text.`);
             }
-            replyText = reply;
+            if (typeof reply === "string") {
+              replyText = reply;
+            } else if (reply && typeof reply.text === "string") {
+              replyText = reply.text;
+              bridgeChecks = Array.isArray(reply.checks) ? reply.checks : [];
+            } else {
+              throw new Error(`${AGENT_NAMES[role]} returned an invalid reply.`);
+            }
           } catch (error) {
             if (
               session.phase === "stopping" ||
@@ -628,10 +654,11 @@ export function createBridge({
         const sandboxPaths = [...(session.testSandboxes?.values() || [])].flatMap(
           ({ root, workspace }) => [root, workspace],
         );
-        const { body, checks } = extractReportedChecks(replyText, {
+        const { body, checks: reportedChecks } = extractReportedChecks(replyText, {
           sandboxPaths,
           round,
         });
+        const checks = [...reportedChecks, ...bridgeChecks].slice(0, 6);
         emit(session, {
           type: "message",
           message: makeMessage(now, role, body, round, model, effort, checks),

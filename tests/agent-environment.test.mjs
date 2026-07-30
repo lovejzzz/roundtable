@@ -112,7 +112,8 @@ test("bridge probes and managed turns share the role-scoped environment contract
     new URL("../scripts/bridge.mjs", import.meta.url),
     "utf8",
   );
-  assert.equal(source.match(/env: agentEnvironment\(role\)/g)?.length, 2);
+  assert.equal(source.match(/env: agentEnvironment\(role\)/g)?.length, 1);
+  assert.equal(source.match(/env: agentEnvironment\(environmentRole\)/g)?.length, 1);
   assert.match(source, /runSmallCommandResult\(codexPath, \["login", "status"\], "codex"\)/);
   assert.match(source, /runSmallCommandResult\(claudePath, \["auth", "status"\], "claude"\)/);
   assert.match(source, /const codexGuardProbe/);

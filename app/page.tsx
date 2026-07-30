@@ -30,6 +30,7 @@ type ReportedCheck = {
   summary: string;
   exitCode?: number;
   round?: number;
+  provenance?: "agent-reported" | "bridge-broker";
 };
 
 type Message = {
@@ -352,20 +353,35 @@ function reportedCheckCounts(checks: ReportedCheck[]) {
 
 function ReportedChecks({ message }: { message: Message }) {
   if (!message.checks?.length) return null;
+  const brokeredCount = message.checks.filter(
+    (check) => check.provenance === "bridge-broker",
+  ).length;
+  const agentReportedCount = message.checks.length - brokeredCount;
   return (
     <details className="reported-checks">
       <summary>
-        Reported by {message.author} · {reportedCheckCounts(message.checks)}
+        {brokeredCount && !agentReportedCount
+          ? "Verified by Roundtable broker"
+          : brokeredCount
+            ? "Check evidence"
+            : `Reported by ${message.author}`}{" "}
+        · {reportedCheckCounts(message.checks)}
       </summary>
       <p className="reported-checks-note">
-        Agent-reported, not independently verified. This agent&apos;s disposable workspace is
-        cumulative across its turns.
+        {brokeredCount
+          ? "Brokered checks were executed by Roundtable in a separate local-only network sandbox. Agent-reported checks are identified below."
+          : "Agent-reported, not independently verified. This agent's disposable workspace is cumulative across its turns."}
       </p>
       <ul>
         {message.checks.map((check, index) => (
           <li className={`check-${check.status}`} key={`${check.command}-${index}`}>
             <div>
               <strong>{check.status}</strong>
+              <span>
+                {check.provenance === "bridge-broker"
+                  ? "Roundtable broker"
+                  : "Agent-reported"}
+              </span>
               {check.round && <span>Round {check.round}</span>}
               {Number.isInteger(check.exitCode) && <span>Exit {check.exitCode}</span>}
             </div>
@@ -1235,14 +1251,26 @@ export default function Home() {
         "",
       );
       if (message.checks?.length) {
-        lines.push(`### Agent-reported checks — ${message.author}`, "");
+        const brokered = message.checks.some(
+          (check) => check.provenance === "bridge-broker",
+        );
         lines.push(
-          "> These results were reported by the agent, not independently verified. The agent workspace is cumulative across its turns.",
+          `### ${brokered ? "Check evidence" : "Agent-reported checks"} — ${message.author}`,
+          "",
+        );
+        lines.push(
+          brokered
+            ? "> Checks marked Roundtable broker were executed in a separate local-only network sandbox. Other checks are agent-reported."
+            : "> These results were reported by the agent, not independently verified. The agent workspace is cumulative across its turns.",
           "",
         );
         message.checks.forEach((check) => {
           lines.push(
-            `- **${check.status.toUpperCase()}** \`${check.command}\`${
+            `- **${check.status.toUpperCase()}** · ${
+              check.provenance === "bridge-broker"
+                ? "Roundtable broker"
+                : "Agent-reported"
+            } · \`${check.command}\`${
               Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""
             }${check.round ? ` · Round ${check.round}` : ""} — ${check.summary}`,
           );
@@ -2116,8 +2144,9 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Agents work from separate disposable copies, never the selected project. Codex and
-                Antigravity can write generated artifacts only inside their native sandboxes.
+                Agents work from separate disposable copies, never the selected project. Codex can
+                write generated artifacts only inside its native sandbox; Antigravity&apos;s model
+                process stays behind its native and outer guards.
                 {health?.projectWriteGuard
                   ? " Native permissions plus outer macOS guards read-deny common host credential paths and isolate every workspace. Claude has no shell access; it remains on Read, Glob, and Grep until checks can run beyond the model-client boundary."
                   : " Without a supported OS guard, Claude stays read-only."}
@@ -2132,8 +2161,12 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Focused checks in separate disposable project copies are optional. Codex and
-                Antigravity can use them; Claude remains read-only.{" "}
+                Focused checks in separate disposable project copies are optional. Codex can run
+                them natively. Antigravity can request one approved argv command; Roundtable runs
+                it without a shell in a fresh broker-only project copy with loopback-only network
+                access and returns the result. External and private-network destinations stay
+                blocked, and test mutations are discarded before Antigravity&apos;s follow-up.
+                Claude remains read-only.{" "}
                 {health?.testSandbox?.claudeReason ||
                   "Claude checks require a separate brokered runner."}
               </p>

@@ -13,7 +13,7 @@ import {
   utimes,
   writeFile,
 } from "node:fs/promises";
-import { platform, tmpdir } from "node:os";
+import { homedir, platform, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -28,6 +28,7 @@ import {
   resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
 } from "../scripts/test-sandbox.mjs";
+import { buildBrokerNetworkArgs } from "../scripts/test-broker.mjs";
 
 const execFileAsync = promisify(execFile);
 const CREDENTIAL_FILE_PATHS = new Set([
@@ -609,6 +610,83 @@ test("the Codex native permission profile preserves workspace semantics and deni
   assert.ok(workspaceText.includes(`${JSON.stringify(relocatedClaudeHome)}="deny"`));
   assert.doesNotMatch(workspaceText, /\/Users\/example\/\.codex/);
 });
+
+test(
+  "the broker sandbox permits loopback and workspace output while denying external network and protected paths",
+  { skip: platform() !== "darwin" },
+  async (context) => {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-broker-fixture-"));
+    const workspace = join(fixtureRoot, "workspace");
+    const protectedProject = join(fixtureRoot, "original-project");
+    try {
+      await Promise.all([
+        mkdir(workspace),
+        mkdir(protectedProject),
+      ]);
+      const marker = join(protectedProject, "marker");
+      await writeFile(marker, "protected\n");
+      const args = [
+        "sandbox",
+        "-P",
+        "roundtable_workspace",
+        "-C",
+        workspace,
+        ...buildCodexPermissionArgs({
+          home: homedir(),
+          projectPath: protectedProject,
+          additionalProtectedPaths: [homedir()],
+        }),
+        ...buildBrokerNetworkArgs(),
+        process.execPath,
+        "-e",
+        `const fs = require("fs");
+const net = require("net");
+fs.writeFileSync("generated.txt", "allowed");
+let readDenied = false;
+try { fs.readFileSync(process.argv[1]); } catch (error) {
+  readDenied = ["EPERM", "EACCES"].includes(error.code);
+}
+const server = net.createServer((socket) => socket.end("ok"));
+server.once("error", () => process.exit(42));
+server.listen(0, "127.0.0.1", () => {
+  const local = net.connect(server.address().port, "127.0.0.1");
+  local.once("error", () => process.exit(43));
+  local.once("data", () => {
+    local.destroy();
+    const external = net.connect({ host: "1.1.1.1", port: 80, timeout: 1_000 });
+    external.once("connect", () => process.exit(44));
+    external.once("error", (error) => {
+      const externalDenied = ["EPERM", "EACCES", "ENETUNREACH", "ECONNREFUSED"].includes(error.code);
+      server.close(() => process.exit(readDenied && externalDenied ? 0 : 45));
+    });
+    external.once("timeout", () => {
+      external.destroy();
+      server.close(() => process.exit(readDenied ? 0 : 46));
+    });
+  });
+});
+`,
+        marker,
+      ];
+      try {
+        await execFileAsync("codex", args);
+      } catch (error) {
+        if (
+          error?.code === "ENOENT" ||
+          error?.code === "EPERM" ||
+          /sandbox_apply: Operation not permitted/i.test(error?.stderr || "")
+        ) {
+          context.skip("The Codex command sandbox is unavailable in this environment.");
+          return;
+        }
+        throw error;
+      }
+      assert.equal(await readFile(join(workspace, "generated.txt"), "utf8"), "allowed");
+    } finally {
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  },
+);
 
 test("the Antigravity guard preserves its runtime roots and isolates host and agent data", () => {
   const home = "/Users/example";

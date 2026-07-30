@@ -4,6 +4,82 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion, the implementation selected from that discussion, and verification
 of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.13] — 2026-07-29
+
+### Conversation and audit
+
+Prompt: explain why macOS blocks Antigravity's nested sandbox and safely
+unblock it.
+
+The first reproduction corrected an overbroad assumption: a trivial nested
+`sandbox-exec` profile can start, but applying a second restrictive Seatbelt
+policy from inside Roundtable's restrictive outer credential guard fails with
+`sandbox_apply: Operation not permitted` and exit 71. Removing either layer
+was rejected. Removing the outer guard would expose the real project, sibling
+workspaces, and host configuration; removing Antigravity's native command
+sandbox would let test subprocesses inherit the model client's network and
+runtime access.
+
+A live Codex audit accepted bridge-owned provenance but found two weaknesses in
+the first broker draft: it reused Antigravity's own disposable copy, allowing a
+test mutation to affect later inspection, and it approved executables by
+basename even when supplied through an arbitrary path. Claude's turn then
+stopped because its persisted OAuth token has been revoked, so the release gate
+continued with direct Antigravity validation rather than hiding the unrelated
+authentication failure.
+
+### Broker-only Antigravity checks
+
+- Antigravity can end a draft with one bounded
+  `roundtable-test-request` JSON block containing an argv array. The bridge
+  validates 1–16 arguments, rejects control characters and oversized input,
+  accepts only exact executable names, and never invokes a shell.
+- The bridge creates a fourth, fresh broker-only project copy on demand and
+  launches the requested command from the unsandboxed bridge parent. This
+  avoids nesting a restrictive command sandbox inside Antigravity's outer
+  Seatbelt profile.
+- The command runs under the installed Codex command-sandbox engine with
+  workspace-only writes. Host home data, the original project, the three agent
+  workspaces, and sibling broker roots are denied.
+- Network policy allows only loopback targets so HTTP integration tests can
+  start local servers. A live containment probe bound and connected to
+  `127.0.0.1`, while a direct socket to `1.1.1.1` failed with `EPERM`.
+  External and private-network destinations remain blocked.
+- Test-created or modified files remain in the broker copy, which is deleted
+  with the session. Antigravity's second invocation is denied that broker root
+  and receives only bounded, redacted stdout/stderr plus the bridge-owned
+  status and exit code.
+
+### Honest evidence UI
+
+- Broker results carry `provenance: "bridge-broker"` and render as
+  **Verified by Roundtable broker**. Existing Codex evidence is explicitly
+  tagged `agent-reported`; mixed evidence stays distinguishable in later
+  prompts, history, completion input, and Markdown export.
+- Antigravity cannot create broker provenance through its response. The bridge
+  constructs the evidence record from the process it launched, strips a second
+  request instead of executing it, and gives the agent one result-aware final
+  response pass.
+- The safety and test-capability panels now disclose the broker-only copy,
+  shell-free argv execution, loopback-only network boundary, discarded test
+  mutations, and Claude's still-read-only status.
+
+### Verification
+
+- Added request parsing, exact-executable rejection, output redaction,
+  bridge-provenance, result-prompt, response-object, network-policy, protected
+  path, workspace write, loopback allow, and external-network deny regressions.
+- All 53 bridge tests pass on the host. The complete `npm run test:bridge`
+  command also exits 0 inside a broker-only copy with 50 passes and three
+  expected self-skips for tests that intentionally attempt another nested
+  command sandbox.
+- A real Antigravity handshake inspected the implementation, emitted
+  `["npm","run","test:bridge"]`, received an exit-0 broker result, emitted no
+  second request, and accurately summarized 53 tests, 50 passes, zero failures,
+  and three environment-dependent skips.
+- Lint, the production build, rendered-page checks, and the full release suite
+  passed before tagging.
+
 ## [v0.0.0.12] — 2026-07-29
 
 ### Conversation
