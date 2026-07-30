@@ -84,6 +84,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /showCompletionBrief/);
   assert.match(page, /promptAttachments/);
   assert.match(page, /attachmentManifestId/);
+  assert.match(page, /launchSearchValue\("project"\)/);
+  assert.match(page, /launchSearchValue\("topic"\)/);
+  assert.match(page, /useState\(launchRounds\)/);
   assert.match(page, /Attachment set/);
   assert.match(page, /Attachment manifest/);
   assert.match(page, /contentBase64/);

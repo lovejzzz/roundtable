@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.21**
+Current release: **v0.0.0.22**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -27,6 +27,38 @@ reports the failing stage instead of leaving a partial room running. Press
 `Control-C` in the terminal to stop both. Set `ROUNDTABLE_BRIDGE_PORT` when the
 default bridge port 4317 is unavailable; the advertised room uses the same
 configured port.
+
+## Use it from another Codex project
+
+The personal **Roundtable** plugin on this workstation can launch the room from
+any Codex project. Start a new task in the target project, then select
+`@Roundtable` from the desktop plugin picker or explicitly invoke the bundled
+skill:
+
+```text
+Use $roundtable for this project.
+```
+
+The natural-language form `use @roundtable for this project` is also an
+implicit trigger after the plugin is installed. Codex resolves the current Git
+root (or current working folder), opens Roundtable with that project and the
+discussion goal prefilled, and leaves **Start discussion** for you to confirm.
+This preserves the visible model, effort, rounds, history, and attachment
+choices before any CLI call begins. Newly installed or updated plugins are
+picked up in a new Codex task.
+
+The launcher itself supports the same behavior without the plugin:
+
+```bash
+node "/path/to/roundtable/scripts/talk.mjs" \
+  --project "$PWD" \
+  --topic "Review this project's architecture and highest-leverage risks." \
+  --rounds 2
+```
+
+Relative `--project` values resolve from the caller's working directory.
+`--rounds` accepts one through five. Set `ROUNDTABLE_HOME` if the personal
+plugin should use a Roundtable checkout in a different location.
 
 Roundtable uses each CLI's persisted interactive sign-in. Ambient API keys,
 access tokens, database URLs, registry credentials, and unrelated terminal

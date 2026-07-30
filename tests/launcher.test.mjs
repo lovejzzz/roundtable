@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
 import {
+  buildRoundtableUrl,
   createDeferred,
+  parseTalkArguments,
   resolveBridgePort,
   signalStartedProcessTree,
   stopStartedProcesses,
@@ -10,6 +12,54 @@ import {
   waitForBridgeHealth,
   waitForLauncherReadiness,
 } from "../scripts/launcher.mjs";
+
+test("talk launch options prefill another project without changing the caller cwd", () => {
+  assert.deepEqual(
+    parseTalkArguments(
+      [
+        "--project",
+        "../other-project",
+        "--topic",
+        "Audit release readiness",
+        "--rounds",
+        "2",
+      ],
+      "/Users/example/current",
+    ),
+    {
+      help: false,
+      projectPath: "/Users/example/other-project",
+      topic: "Audit release readiness",
+      rounds: 2,
+    },
+  );
+});
+
+test("talk launch options reject missing, unknown, and unsafe values", () => {
+  assert.throws(() => parseTalkArguments(["--project"]), /requires a value/);
+  assert.throws(() => parseTalkArguments(["--topic", "  "]), /non-empty text/);
+  assert.throws(() => parseTalkArguments(["--rounds", "6"]), /1 through 5/);
+  assert.throws(() => parseTalkArguments(["--autostart"]), /Unknown Roundtable option/);
+});
+
+test("connected room URL carries encoded launch context", () => {
+  const url = new URL(
+    buildRoundtableUrl({
+      bridgeUrl: "http://127.0.0.1:4317",
+      token: "private-token",
+      projectPath: "/Users/example/Project & Notes",
+      topic: "Review auth & release?",
+      rounds: 2,
+    }),
+  );
+
+  assert.equal(url.origin, "http://localhost:3000");
+  assert.equal(url.searchParams.get("bridge"), "http://127.0.0.1:4317");
+  assert.equal(url.searchParams.get("token"), "private-token");
+  assert.equal(url.searchParams.get("project"), "/Users/example/Project & Notes");
+  assert.equal(url.searchParams.get("topic"), "Review auth & release?");
+  assert.equal(url.searchParams.get("rounds"), "2");
+});
 
 test("launcher bridge port follows the configured environment", () => {
   assert.equal(resolveBridgePort({}), 4317);

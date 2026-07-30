@@ -1,8 +1,12 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
+  buildRoundtableUrl,
   createDeferred,
   LAUNCHER_SHUTDOWN_GRACE_MS,
+  parseTalkArguments,
   resolveBridgePort,
   stopStartedProcesses,
   unexpectedChildExitError,
@@ -10,10 +14,38 @@ import {
   waitForLauncherReadiness,
 } from "./launcher.mjs";
 
+const roundtableRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+let launchOptions;
+try {
+  launchOptions = parseTalkArguments(process.argv.slice(2), process.cwd());
+} catch (error) {
+  console.error(
+    `Roundtable: ${error instanceof Error ? error.message : "Invalid launch options."}`,
+  );
+  process.exit(1);
+}
+
+if (launchOptions.help) {
+  console.log(`Usage: npm run talk -- [options]
+
+Options:
+  --project <path>  Prefill the project folder (relative paths use the caller's directory)
+  --topic <text>    Prefill the discussion goal
+  --rounds <1-5>    Prefill the number of rounds
+  --help            Show this help`);
+  process.exit(0);
+}
+
 const token = randomBytes(24).toString("base64url");
 const bridgePort = resolveBridgePort();
 const bridgeUrl = `http://127.0.0.1:${bridgePort}`;
-const appUrl = `http://localhost:3000/?bridge=${encodeURIComponent(bridgeUrl)}&token=${encodeURIComponent(token)}`;
+const appUrl = buildRoundtableUrl({
+  bridgeUrl,
+  token,
+  projectPath: launchOptions.projectPath,
+  topic: launchOptions.topic,
+  rounds: launchOptions.rounds,
+});
 const children = new Set();
 const startupFailure = createDeferred();
 const webReady = createDeferred();
@@ -23,7 +55,7 @@ let shuttingDown = false;
 
 function start(label, command, args, environment = {}) {
   const child = spawn(command, args, {
-    cwd: process.cwd(),
+    cwd: roundtableRoot,
     env: { ...process.env, ...environment },
     stdio: ["inherit", "pipe", "pipe"],
     detached: process.platform !== "win32",

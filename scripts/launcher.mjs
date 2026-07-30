@@ -1,8 +1,84 @@
 import { spawnSync } from "node:child_process";
+import { isAbsolute, resolve } from "node:path";
 
 export const LAUNCHER_STARTUP_TIMEOUT_MS = 60_000;
 export const LAUNCHER_SHUTDOWN_GRACE_MS = 2_000;
 export const LAUNCHER_FORCE_WAIT_MS = 1_000;
+export const LAUNCHER_TOPIC_MAX_CHARACTERS = 4_000;
+
+function requiredArgumentValue(argv, index, option) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${option} requires a value.`);
+  }
+  return value;
+}
+
+export function parseTalkArguments(argv = [], cwd = process.cwd()) {
+  const options = {
+    help: false,
+    projectPath: "",
+    topic: "",
+    rounds: null,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const option = argv[index];
+    if (option === "--help" || option === "-h") {
+      options.help = true;
+      continue;
+    }
+    if (option === "--project") {
+      const value = requiredArgumentValue(argv, index, option).trim();
+      if (!value) throw new Error("--project requires a non-empty path.");
+      options.projectPath = isAbsolute(value) ? value : resolve(cwd, value);
+      index += 1;
+      continue;
+    }
+    if (option === "--topic") {
+      const value = requiredArgumentValue(argv, index, option).trim();
+      if (!value) throw new Error("--topic requires non-empty text.");
+      if (value.length > LAUNCHER_TOPIC_MAX_CHARACTERS) {
+        throw new Error(
+          `--topic must be at most ${LAUNCHER_TOPIC_MAX_CHARACTERS} characters.`,
+        );
+      }
+      options.topic = value;
+      index += 1;
+      continue;
+    }
+    if (option === "--rounds") {
+      const value = requiredArgumentValue(argv, index, option);
+      const rounds = Number(value);
+      if (!Number.isInteger(rounds) || rounds < 1 || rounds > 5) {
+        throw new Error("--rounds must be an integer from 1 through 5.");
+      }
+      options.rounds = rounds;
+      index += 1;
+      continue;
+    }
+    throw new Error(`Unknown Roundtable option: ${option}`);
+  }
+
+  return options;
+}
+
+export function buildRoundtableUrl({
+  appOrigin = "http://localhost:3000/",
+  bridgeUrl,
+  token,
+  projectPath = "",
+  topic = "",
+  rounds = null,
+}) {
+  const url = new URL(appOrigin);
+  url.searchParams.set("bridge", bridgeUrl);
+  url.searchParams.set("token", token);
+  if (projectPath) url.searchParams.set("project", projectPath);
+  if (topic) url.searchParams.set("topic", topic);
+  if (rounds !== null) url.searchParams.set("rounds", String(rounds));
+  return url.toString();
+}
 
 export function resolveBridgePort(environment = process.env) {
   const rawPort = environment.ROUNDTABLE_BRIDGE_PORT || "4317";

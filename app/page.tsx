@@ -311,6 +311,16 @@ const MAX_PROMPT_ATTACHMENTS = 5;
 const MAX_PROMPT_ATTACHMENT_BYTES = 1024 * 1024;
 const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
 
+function launchSearchValue(name: string) {
+  if (typeof window === "undefined") return "";
+  return new URLSearchParams(window.location.search).get(name)?.trim() || "";
+}
+
+function launchRounds() {
+  const value = launchSearchValue("rounds");
+  return ["1", "2", "3", "4", "5"].includes(value) ? value : "3";
+}
+
 function encodedModelEffort(model: string) {
   return model.toLowerCase().match(/-(low|medium|high)$/)?.[1] || "";
 }
@@ -718,12 +728,12 @@ export default function Home() {
   const [speaker, setSpeaker] = useState<AgentRole | null>(null);
   const [turn, setTurn] = useState(0);
   const [totalTurns, setTotalTurns] = useState(9);
-  const [projectPath, setProjectPath] = useState("");
-  const [topic, setTopic] = useState(DEFAULT_TOPIC);
+  const [projectPath, setProjectPath] = useState(() => launchSearchValue("project"));
+  const [topic, setTopic] = useState(() => launchSearchValue("topic") || DEFAULT_TOPIC);
   const [promptAttachments, setPromptAttachments] = useState<PromptAttachment[]>([]);
   const [attachmentManifestId, setAttachmentManifestId] = useState("");
   const [attachmentError, setAttachmentError] = useState("");
-  const [rounds, setRounds] = useState("3");
+  const [rounds, setRounds] = useState(launchRounds);
   const [codexModel, setCodexModel] = useState("");
   const [claudeModel, setClaudeModel] = useState("");
   const [antigravityModel, setAntigravityModel] = useState("");

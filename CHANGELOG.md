@@ -1,8 +1,86 @@
 # Changelog
 
 Every Roundtable release represents one complete iteration: a visible agent
-discussion, the implementation selected from that discussion, and verification
-of the resulting app. Versions advance in `v0.0.0.1` increments.
+discussion or explicit user-directed capability, its implementation, and
+verification of the resulting app. Versions advance in `v0.0.0.1` increments.
+
+## [v0.0.0.22] — 2026-07-30
+
+### Request and platform audit
+
+Request: make Roundtable reusable from any other Codex project with the prompt
+`use @roundtable for this project`.
+
+The current Codex manual distinguishes the two explicit surfaces: the desktop
+plugin picker can select `@Roundtable`, while Codex skills use the canonical
+`$roundtable` mention. Installed skills may also trigger implicitly from a
+matching natural-language request. A personal skills-only plugin therefore
+covers the requested workflow without adding an MCP server, remote service,
+connector authentication, or broader tool permission.
+
+### Independent audit
+
+- Accepted a personal `roundtable` plugin with one narrowly scoped bundled
+  skill. The workflow needs repeatable local instructions and a launcher, not a
+  new network tool.
+- Accepted current Git-root resolution with the current working folder as the
+  non-Git fallback. “This project” must never silently become the Roundtable
+  source repository merely because the launcher lives there.
+- Accepted project, topic, and round prefilling through validated launcher
+  arguments. Values are encoded through `URL` and `URLSearchParams`, then the
+  existing app removes the launch URL from browser history after consuming it.
+- Kept the visible **Start discussion** confirmation. Plugin invocation may
+  select and prefill a project, but it must not silently spend model calls or
+  bypass the user's model, effort, history, dissent, attachment, and rounds
+  review.
+- Rejected a custom MCP server and automatic implementation pipeline. Neither
+  is required to open a local discussion, and both would materially broaden the
+  plugin's authority.
+
+### Implementation
+
+- `npm run talk --` and direct `talk.mjs` launches now accept `--project`,
+  `--topic`, and `--rounds 1-5`, plus bounded validation and `--help`.
+- `talk.mjs` now locates the Roundtable repository from its own module path, so
+  it can be called while another repository remains the active working
+  directory.
+- The connected room URL carries encoded launch context. Setup initializes its
+  project, goal, and rounds from that context before authenticated bridge
+  connection, while preserving the bridge-provided project fallback for
+  ordinary launches.
+- Created and installed the personal `roundtable` plugin with an implicitly
+  discoverable `$roundtable` skill and the exact requested phrase in its trigger
+  description. Its no-shell Node launcher supports a `ROUNDTABLE_HOME` override
+  and forwards shutdown to the supervised Roundtable launcher.
+- Added cross-project usage, explicit mention syntax, the retained confirmation
+  boundary, direct CLI fallback, and relocation guidance to the README.
+
+### Verification
+
+- The personal skill and plugin pass the skill and plugin validators, and
+  `codex plugin list` reports `roundtable@personal` installed and enabled.
+- Twelve focused launcher tests pass, including relative project resolution,
+  missing/unknown/out-of-range rejection, and exact URL round-tripping for
+  paths and goals containing spaces and punctuation.
+- All 108 bridge tests pass with no skips on the unnested macOS host. Lint, the
+  production build, both rendered-page checks, and `git diff --check` pass.
+- A live launch invoked the installed plugin's script from the separate
+  `Quicky Resume` repository. The supervised room became ready with all three
+  CLIs, and its encoded launch context selected that repository, the requested
+  smoke-test goal, and one round—not the Roundtable source directory.
+- Stopping the plugin-owned process removed both port 3000 and port 4317
+  listeners.
+
+### Remaining limitations
+
+- Codex uses `$roundtable` for the unambiguous bundled-skill mention. The
+  `@Roundtable` form depends on selecting the desktop plugin mention; plain text
+  containing `@roundtable` relies on implicit skill matching.
+- The personal plugin is local to this workstation and points to this local
+  Roundtable checkout by default. Moving the checkout requires
+  `ROUNDTABLE_HOME` and reinstalling or refreshing the plugin.
+- Invocation prefills the setup room but deliberately does not press
+  **Start discussion**.
 
 ## [v0.0.0.21] — 2026-07-30
 
