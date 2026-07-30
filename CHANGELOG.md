@@ -29,6 +29,11 @@ changes from pre-existing code.
   pre-existing observations.
 - Git context generation is best-effort: missing metadata, timeouts, or large
   repositories cannot prevent a discussion from starting.
+- The README now defines an evidence-based, four-arm protocol for comparing
+  Roundtable-assisted Codex and Claude workflows with their single-agent
+  baselines. It separates accepted product output from activity, specifies
+  time, quality, cost, and reliability metrics, and states explicitly that
+  v0.0.0.26 has not yet established a causal efficiency lift.
 
 ### Verification
 

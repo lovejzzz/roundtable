@@ -162,6 +162,143 @@ progressbar semantics, and automatic transcript scrolling becomes instant when
 the operating system requests reduced motion. Opening an archive does not replay
 its transcript through the live announcement channel.
 
+## Measuring workflow efficiency
+
+Roundtable v0.0.0.26 defines how to measure its value; it does **not** claim a
+measured productivity lift yet. The unit of value is a product change that
+reaches a predeclared acceptance standard, not a discussion, message, token,
+commit, or line of code.
+
+### What the research says
+
+Published results differ sharply by task and setting:
+
+| Study | Setting and result | Design lesson for Roundtable |
+| --- | --- | --- |
+| [Peng et al. (2023)](https://www.microsoft.com/en-us/research/publication/the-impact-of-ai-on-developer-productivity-evidence-from-github-copilot/) | In a controlled JavaScript HTTP-server task, developers with GitHub Copilot completed the task 55.8% faster. | Bounded implementation tasks can show large gains, but do not represent mature product work by themselves. |
+| [Cui et al. (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4945566) | Three randomized field experiments at Microsoft, Accenture, and a Fortune 100 company covered 4,867 developers. Pooled access to a coding assistant increased completed tasks by 26.08% (standard error 10.3%), with noisy and varying individual experiments. | Use real work and enough repeated tasks; report uncertainty and differences by task and developer experience. |
+| [Becker et al. (2025)](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) | Sixteen experienced developers completed 246 randomized issues in their own mature repositories. Allowing early-2025 AI tools increased completion time by 19%, even though participants believed the tools made them faster. | Do not use satisfaction or estimated time saved as the efficiency result. Measure actual time and accepted output. |
+| [METR design update (2026)](https://metr.org/blog/2026-02-24-uplift-update/) | A follow-up produced raw estimates consistent with roughly 4–18% speedup, but the authors judged the signal unreliable because participation selection changed and parallel-agent use made time tracking difficult. | Record concurrent runs and active human time explicitly; publish unusable or biased data as such. |
+| [Demirer, Musolff, and Yang (2026)](https://www.nber.org/papers/w35275) | A matched event study of more than 100,000 GitHub developers associated autonomous agents with 180% more commits, but only 30% more releases and no increase in app usage. | Count merge-ready, released, and used improvements. Activity is a diagnostic, not the product outcome. |
+
+[SWE-bench](https://arxiv.org/abs/2310.06770) demonstrates a useful task
+shape—2,294 issue-and-pull-request problems from 12 repositories with executable
+evaluation—but benchmark pass rate alone does not measure the human time,
+steering, review, cost, or downstream product value of a workflow.
+
+Together, these studies rule out a credible universal multiplier. Roundtable
+must be compared with the exact Codex-only and Claude-only workflows, on the
+same repository and task distribution, under the same acceptance and budget
+rules.
+
+### Controlled comparison
+
+Use four arms so the implementing agent is not confused with the value of the
+Roundtable discussion:
+
+| Arm | Workflow |
+| --- | --- |
+| Codex only | Codex plans, implements, tests, and repairs from the original task. |
+| Roundtable → Codex | Roundtable produces a frozen Completion Brief; a fresh Codex run implements from the original task plus that brief. |
+| Claude only | Claude plans, implements, tests, and repairs from the original task. |
+| Roundtable → Claude | Roundtable produces the same kind of frozen brief; a fresh Claude run implements it. |
+
+For each task:
+
+1. Freeze one base commit, task statement, permission profile, tool set,
+   acceptance rubric, and hidden test suite.
+2. Randomize arm order and use fresh worktrees or clones. Never let one arm see
+   another arm's output.
+3. Match the implementing model, reasoning effort, context, and retry policy
+   within each pair. Roundtable's extra calls, time, and cost remain part of its
+   treatment.
+4. Run two complementary protocols:
+   - **Fixed budget:** stop every arm at the same wall-clock and economic budget,
+     then compare accepted quality.
+   - **Fixed quality:** allow repair until the same acceptance gate is reached
+     or a ceiling is hit, then compare time and cost.
+5. Have reviewers who do not know the arm judge requirement coverage,
+   maintainability, and regression risk. Run hidden tests outside the agent
+   workspace.
+6. Keep aborted, failed, and timed-out runs in the result set. Record
+   crossovers, manual rescue, and parallel agent use instead of silently
+   dropping them.
+
+A practical pilot is 12–20 real backlog tasks across four strata: localized
+bugs, cross-cutting changes, security or reliability work, and ambiguous
+product or UX decisions. Four arms with two runs per task produce 96–160 runs.
+That is enough to expose instrumentation problems and estimate variance, but it
+is a pilot—not a guaranteed statistically powered conclusion.
+
+### Metrics and calculation
+
+An **accepted change** must pass all predeclared functional and regression
+checks, satisfy the task rubric, clear a blinded review threshold, and require
+no undisclosed manual repair. Report post-merge rollback, escaped-defect, and
+usage or product-outcome data separately when it becomes available.
+
+The primary workflow metric is accepted output per human active hour:
+
+```text
+throughput = accepted changes / human active hours
+lift (%) = 100 × (Roundtable throughput / single-agent throughput - 1)
+```
+
+Human active time includes task setup, prompting, reading, steering, reviewing,
+repairing, and release preparation. Wall time is reported separately so
+parallel agents do not create imaginary human-time savings.
+
+Also report:
+
+- first-pass and final acceptance rate;
+- hidden-test pass rate and blinded review score;
+- time to first valid patch and time to merge-ready;
+- human active minutes, wall-clock minutes, steering actions, and repair loops;
+- model calls, failures, tokens, and estimated API cost;
+- manual edits after the agent stops;
+- critical regressions, rollbacks, and escaped defects;
+- release and product-impact outcomes when observable.
+
+For an economic view, convert model spend to equivalent labor time at several
+declared loaded hourly rates instead of hiding a subjective rate inside one
+score:
+
+```text
+economic hours = human active hours + model cost / loaded hourly rate
+economic throughput = accepted changes / economic hours
+```
+
+Report the Codex and Claude comparisons independently. For every metric, show
+the paired task delta, median, win/tie/loss count, and a task-clustered bootstrap
+95% confidence interval. Stratify by task type and complexity; do not average a
+small bug fix and an architectural decision into an unexplained headline.
+
+### Roundtable-specific diagnostics
+
+These explain *why* the workflow won or lost but are not substitutes for the
+primary outcome:
+
+- **opening divergence:** materially different proposals in the sealed round;
+- **cross-examination correction:** claims retracted or corrected after peer
+  evidence;
+- **audit yield and precision:** supported concerns found, and the share later
+  judged material;
+- **revision lift:** blinded quality change from draft to audited final brief;
+- **fallback rate:** synthesis or participant failures requiring recovery;
+- **context loss:** shortened or omitted labeled inputs;
+- **deliberation waste:** no divergence, no material audit finding, and no
+  consequential revision.
+
+v0.0.0.26 already records message and event timestamps, model and effort,
+sealed-opening input hashes, context coverage, synthesis attempts, audits,
+revision provenance, and sanitized Git-change evidence. Those fields support
+the diagnostics and an audit trail. A causal efficiency comparison still needs
+an experiment record linking the discussion to its implementation commit,
+arm and budget, human active-time capture, concurrent-run count, token and cost
+usage, hidden acceptance result, blinded score, and downstream release outcome.
+Until those records exist and the controlled runs are completed, the honest
+Roundtable efficiency result is **not yet measured**.
+
 ## Local discussion history
 
 Roundtable asks before archiving anything. If you choose **Keep locally**, new
