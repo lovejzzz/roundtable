@@ -4,6 +4,31 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.28] — 2026-07-31
+
+### Discussion
+
+The final EDUTOOL audit verified the repaired code but blocked release because
+the new retry module appeared only as an untracked path in `status.txt`.
+Reviewers could inspect the copied file, but `changes.patch` did not contain its
+content, so the frozen evidence bundle could not reproduce the working tree it
+was judging.
+
+### Implementation
+
+- Frozen Git context now adds bounded inline patches for untracked files.
+- Metadata records the exact included and omitted untracked paths.
+- Per-file, total-byte, and file-count limits prevent a large untracked tree
+  from overwhelming the audit context; omitted paths remain explicit.
+- Exact-HEAD evidence remains commit-only and never absorbs working-tree files.
+
+### Verification
+
+- Sandbox coverage proves an untracked module and its content appear in
+  `changes.patch`, metadata names it, and `head-changes.patch` excludes it.
+- Focused sandbox tests, all 122 bridge/runtime tests, JavaScript syntax,
+  server-rendered page checks, and whitespace validation pass.
+
 ## [v0.0.0.27] — 2026-07-30
 
 ### Discussion

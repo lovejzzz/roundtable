@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 export const ROUNDTABLE_GIT_CONTEXT_DIRECTORY = ".roundtable-context";
+const MAX_UNTRACKED_PATCH_BYTES = 2 * 1024 * 1024;
+const MAX_UNTRACKED_FILE_BYTES = 512 * 1024;
+const MAX_UNTRACKED_FILES = 100;
 
 async function runGit(projectPath, args) {
   const { stdout } = await execFileAsync("git", args, {
@@ -19,6 +22,81 @@ async function runGit(projectPath, args) {
     },
   });
   return stdout.trimEnd();
+}
+
+async function runGitDiff(projectPath, args) {
+  try {
+    return await runGit(projectPath, args);
+  } catch (error) {
+    if (error?.code === 1 && typeof error.stdout === "string") {
+      return error.stdout.trimEnd();
+    }
+    throw error;
+  }
+}
+
+async function collectUntrackedDiff(projectPath) {
+  const rawPaths = await runGit(projectPath, [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]).catch(() => "");
+  const paths = rawPaths.split("\0").filter(Boolean);
+  const included = [];
+  const omitted = [];
+  const patches = [];
+  let totalBytes = 0;
+
+  for (const path of paths) {
+    if (included.length >= MAX_UNTRACKED_FILES) {
+      omitted.push(path);
+      continue;
+    }
+    const fileSize = await stat(join(projectPath, path))
+      .then((details) => (details.isFile() ? details.size : 0))
+      .catch(() => 0);
+    if (
+      fileSize <= 0 ||
+      fileSize > MAX_UNTRACKED_FILE_BYTES ||
+      totalBytes + fileSize > MAX_UNTRACKED_PATCH_BYTES
+    ) {
+      omitted.push(path);
+      continue;
+    }
+    const patch = await runGitDiff(projectPath, [
+      "diff",
+      "--no-index",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--binary",
+      "--unified=20",
+      "--",
+      "/dev/null",
+      path,
+    ]).catch(() => "");
+    if (!patch) {
+      omitted.push(path);
+      continue;
+    }
+    included.push(path);
+    totalBytes += Buffer.byteLength(patch);
+    patches.push(patch);
+  }
+
+  return {
+    included,
+    omitted,
+    patch: [
+      ...patches,
+      ...(omitted.length
+        ? [
+            "# Untracked files omitted from inline patch evidence:",
+            ...omitted.map((path) => `# - ${path}`),
+          ]
+        : []),
+    ].join("\n\n"),
+  };
 }
 
 async function resolveBaseRef(projectPath) {
@@ -95,14 +173,17 @@ export async function materializeGitContext(projectPath, workspace) {
         `${parentCommit}..${head}`,
       ]).catch(() => "")
     : "";
-  const workingDiff = await runGit(projectPath, [
-    "diff",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--find-renames",
-    "--unified=20",
-    "HEAD",
-  ]).catch(() => "");
+  const [workingDiff, untracked] = await Promise.all([
+    runGit(projectPath, [
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--find-renames",
+      "--unified=20",
+      "HEAD",
+    ]).catch(() => ""),
+    collectUntrackedDiff(projectPath),
+  ]);
 
   const contextDirectory = join(workspace, ROUNDTABLE_GIT_CONTEXT_DIRECTORY);
   await mkdir(contextDirectory, { recursive: true });
@@ -116,7 +197,10 @@ export async function materializeGitContext(projectPath, workspace) {
     mergeBase,
     committedChangesIncluded: Boolean(committedDiff),
     headChangesIncluded: Boolean(headDiff),
-    workingTreeChangesIncluded: Boolean(workingDiff),
+    workingTreeChangesIncluded: Boolean(workingDiff || untracked.patch),
+    untrackedChangesIncluded: untracked.included.length > 0,
+    untrackedFilesIncluded: untracked.included,
+    untrackedFilesOmitted: untracked.omitted,
   };
   const patchSections = [
     `# Roundtable repository change context`,
@@ -129,6 +213,9 @@ export async function materializeGitContext(projectPath, workspace) {
     "",
     "# Working tree changes",
     workingDiff || "# No tracked working tree changes.",
+    "",
+    "# Untracked working tree changes",
+    untracked.patch || "# No untracked working tree changes.",
     "",
   ];
   const headPatchSections = [

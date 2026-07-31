@@ -281,6 +281,7 @@ test("materializes sanitized Git branch and working-tree evidence without copyin
       cwd: projectPath,
     });
     await writeFile(join(projectPath, "source.txt"), "working change\n");
+    await writeFile(join(projectPath, "new-module.mjs"), "export const trackedByRoundtable = true;\n");
 
     const workspace = await ensureTestSandbox(session, "codex", {
       temporaryDirectory,
@@ -300,10 +301,16 @@ test("materializes sanitized Git branch and working-tree evidence without copyin
     assert.equal(metadata.committedChangesIncluded, true);
     assert.equal(metadata.headChangesIncluded, true);
     assert.equal(metadata.workingTreeChangesIncluded, true);
+    assert.equal(metadata.untrackedChangesIncluded, true);
+    assert.deepEqual(metadata.untrackedFilesIncluded, ["new-module.mjs"]);
+    assert.deepEqual(metadata.untrackedFilesOmitted, []);
     assert.match(patch, /branch change/);
     assert.match(patch, /working change/);
+    assert.match(patch, /new-module\.mjs/);
+    assert.match(patch, /export const trackedByRoundtable = true/);
     assert.match(headPatch, /branch change/);
     assert.doesNotMatch(headPatch, /working change/);
+    assert.doesNotMatch(headPatch, /new-module\.mjs/);
     assert.match(headPatch, new RegExp(`# Parent ${metadata.parentCommit}`));
     await assert.rejects(access(join(workspace, ".git")));
   } finally {
