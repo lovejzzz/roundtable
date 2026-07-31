@@ -4,6 +4,70 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.35] — 2026-07-31
+
+### Field finding
+
+A real EDUTOOL checkpoint review could build the application but its standard
+bundle gate aborted at `git ls-files`: Roundtable correctly withheld the host
+repository metadata, but provided no safe local Git surface for ordinary
+repository-aware checks.
+
+The same extended audit also exposed a lifecycle failure: closing launchers
+during post-discussion review could bypass session cleanup, leaving several
+large disposable EDUTOOL copies alive until the next day-old sweep. Those stale
+copies eventually caused ENOSPC failures in an unrelated verification run.
+
+### Implementation
+
+- Git projects now receive a two-commit repository inside each disposable
+  workspace: a baseline path inventory and the session-start tracked and
+  non-ignored snapshot.
+- A local `origin/main` ref preserves the baseline path set needed by repository
+  gates without copying original object history or configuring a remote.
+- Distinct tiny marker blobs encode additions, modifications, deletions, and
+  exact rename pairs in the two local commits without importing original content.
+- The snapshot has no host configuration, refs, hooks, credentials, or remotes;
+  `.roundtable-context` remains authoritative for original branch and diff claims.
+- The synthetic Git environment now discards every inherited `GIT_*` control
+  before installing its fixed identity and no-config settings, preventing host
+  template, hook-path, alternate-object, or config-count injection.
+- Prompts explicitly distinguish the safe local snapshot from original history.
+- Launcher shutdown now stops active sessions and removes prepared source and
+  role sandboxes before forced process escalation and exit, with a 30-second
+  graceful cleanup window.
+- Every disposable root becomes session-owned synchronously after `mkdtemp`,
+  before the first canonicalization await.
+  Cleanup removes the current root set to interrupt partial copies, awaits the
+  complete tracked lifecycle for source materialization, role clones, and
+  request-scoped broker copies, prevents new roots after teardown begins, then
+  sweeps again so a late completion cannot republish a root. Removal retries
+  transient directory races and isolates each root failure. A fresh sweep runs
+  after participant termination rather than reusing the pre-escalation promise.
+  The bridge's emergency force-exit kills active writers first and performs one
+  final synchronous, per-root-fault-isolated registered-root sweep.
+  This closes the field-observed disk leak when a launcher is closed during
+  post-discussion audit phases.
+
+### Verification
+
+- The sandbox integration test proves the original branch/working-tree evidence
+  remains exact while `git ls-files`, status, local log, and baseline diff report
+  additions, modifications, deletions, and an exact `R100` rename.
+- It also proves the synthetic repository has no remotes and does not inherit
+  the host repository's configured identity.
+- Bridge shutdown has a lifecycle regression proving active sessions are
+  stopped, disposable workspaces are cleaned before forced escalation, and
+  streams are closed.
+- Dedicated race regressions pause both source materialization and role cloning,
+  keep a late writer active past the old grace boundary, and prove cleanup cannot
+  return until no disposable root can be republished.
+- Emergency cleanup and hostile inherited Git-environment regressions cover the
+  force-exit and host-authority fallbacks.
+- Root-removal fault regressions prove an `ENOTEMPTY`-style failure cannot skip
+  another root and a later sweep can recover the failed path.
+- The complete 140-test bridge/runtime suite and lint pass.
+
 ## [v0.0.0.34] — 2026-07-31
 
 ### Field finding

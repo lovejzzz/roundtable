@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.34**
+Current release: **v0.0.0.35**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -39,6 +39,21 @@ confused with a dead process or an unhealthy bridge. That exact state now
 explains that a synced or cloud-backed checkout can stall the compiler before
 port binding and recommends a local checkout. Failure still uses bounded
 whole-process-tree cleanup.
+
+Launcher shutdown is also a workspace lifecycle boundary. SIGINT/SIGTERM asks
+the bridge to stop active participants, remove every prepared source and role
+sandbox, and close its streams before forced process escalation. Cleanup waits
+for in-flight source materialization and role cloning. Every disposable root is
+session-owned synchronously after `mkdtemp`, before canonicalization. Every
+source, role clone, and request-scoped broker copy remains an owned operation
+until it settles. Cleanup therefore does not return while a writer can still
+touch disk, and it prevents any new root once teardown starts. Immediately before
+the bridge's emergency force-exit, a synchronous final sweep removes every
+registered root. Root removal is retrying and fault-isolated, and shutdown runs
+a fresh sweep after participant termination so a live writer cannot permanently
+poison a memoized pre-escalation cleanup. Partial
+copies from preparation errors use the same cleanup path; a later startup still
+sweeps abandoned day-old sandboxes as crash recovery.
 
 ## Use it from another Codex project
 
@@ -555,9 +570,20 @@ For Git projects, each disposable copy also receives a generated
 recent log and status text, a patch combining committed branch changes with
 tracked working-tree changes, and `head-changes.patch`, which isolates the exact
 committed `HEAD^..HEAD` change with its parent recorded in metadata. Agents are
-told to inspect this evidence before reviewing a PR or release. The snapshot
-never contains `.git`, Git configuration, or untracked file contents; if Git
-context cannot be produced, sandbox creation continues with the copied source.
+told to inspect this evidence before reviewing a PR or release. The private host
+`.git`, Git configuration, refs, hooks, credentials, and remotes are never
+copied. Instead, Git projects receive a new local-only repository with a
+synthetic baseline-path commit and a session-start snapshot commit. A local
+`origin/main` ref names only that path baseline; no remote is configured and no
+original commit identity or historical file content crosses the boundary. Tiny
+synthetic marker blobs preserve added, modified, deleted, and exact rename-pair
+evidence. This
+lets repository-aware checks use `git ls-files`, status, local diffs, and baseline
+file inventories without treating the synthetic history as original evidence.
+The synthetic index suppresses worktree content comparisons;
+`.roundtable-context` owns original content diffs. If Git context or the
+synthetic snapshot cannot be produced, sandbox creation continues with the
+copied source.
 
 When a discussion has prompt files, Roundtable restores the entire private
 attachment namespace from immutable in-memory payloads before every participant

@@ -52,7 +52,7 @@ async function waitFor(check, timeoutMs = 2_000) {
 }
 
 async function startTestBridge(agentRunner, options = {}) {
-  const { server, sessions } = createBridge({
+  const { server, sessions, shutdown } = createBridge({
     token,
     defaultProject: "/test/project",
     health: options.health || health,
@@ -68,9 +68,51 @@ async function startTestBridge(agentRunner, options = {}) {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     sessions,
+    shutdown,
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
+
+test("bridge shutdown stops sessions and cleans disposable workspaces before closing", async () => {
+  let releaseTurn;
+  const stopped = [];
+  const cleaned = [];
+  const lifecycle = [];
+  const agentRunner = {
+    prepare: async () => {},
+    run: () =>
+      new Promise((resolve) => {
+        releaseTurn = resolve;
+      }),
+    stop: async (session, reason, { beforeEscalation, afterTermination }) => {
+      stopped.push({ id: session.id, reason });
+      lifecycle.push("term");
+      await beforeEscalation();
+      lifecycle.push("force");
+      await afterTermination();
+      releaseTurn?.("stopped");
+    },
+    cleanup: async (session) => {
+      cleaned.push(session.id);
+      lifecycle.push("cleanup");
+    },
+  };
+  const bridge = await startTestBridge(agentRunner);
+  const response = await fetch(`${bridge.baseUrl}/sessions`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ projectPath: "/test/project", topic: "Clean shutdown", rounds: 1 }),
+  });
+  const { id } = await response.json();
+  await waitFor(() => releaseTurn);
+
+  await bridge.shutdown("test_shutdown");
+
+  assert.deepEqual(stopped, [{ id, reason: "test_shutdown" }]);
+  assert.ok(cleaned.includes(id));
+  assert.deepEqual(lifecycle.slice(0, 4), ["term", "cleanup", "force", "cleanup"]);
+  assert.equal(bridge.sessions.get(id).clients.size, 0);
+});
 
 test("rejects an Antigravity model and effort combination the CLI cannot run", async () => {
   const agentRunner = {

@@ -40,6 +40,7 @@ import {
   buildClaudeSandboxProfile,
   collectAncestorDirectoryEntries,
   cleanupTestSandboxes,
+  cleanupTestSandboxesSync,
   createDisposableTestSandbox,
   ensureTestSandbox,
   getTestSandboxInfo,
@@ -358,16 +359,45 @@ function signalProcessTree(handle, signal) {
   }
 }
 
-function terminateSessionProcess(session, reason) {
+async function terminateSessionProcess(
+  session,
+  reason,
+  { beforeEscalation, afterTermination } = {},
+) {
   const handle = session.child;
-  if (!handle) return Promise.resolve();
+  if (!handle) {
+    await afterTermination?.();
+    return;
+  }
   if (!handle.reason) handle.reason = reason;
   signalProcessTree(handle, "SIGTERM");
-  if (!handle.escalationTimer) {
-    handle.escalationTimer = setTimeout(() => signalProcessTree(handle, "SIGKILL"), 2_000);
-    handle.escalationTimer.unref?.();
+  let graceTimer;
+  await Promise.race([
+    handle.closed,
+    new Promise((resolve) => {
+      graceTimer = setTimeout(resolve, 2_000);
+      graceTimer.unref?.();
+    }),
+  ]);
+  clearTimeout(graceTimer);
+  const cleanupErrors = [];
+  if (session.child === handle) {
+    try {
+      await beforeEscalation?.();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (session.child === handle) signalProcessTree(handle, "SIGKILL");
   }
-  return handle.closed;
+  await handle.closed;
+  try {
+    await afterTermination?.();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  if (cleanupErrors.length) {
+    throw new AggregateError(cleanupErrors, "Roundtable session cleanup did not complete.");
+  }
 }
 
 function runManagedProcess(
@@ -754,8 +784,8 @@ const agentRunner = {
       participantSandboxPaths: [getTestSandboxInfo(session, role)?.root],
     });
   },
-  stop(session, reason) {
-    return terminateSessionProcess(session, reason);
+  stop(session, reason, options) {
+    return terminateSessionProcess(session, reason, options);
   },
   cleanup(session) {
     session.brokerTransactions?.clear();
@@ -768,7 +798,7 @@ await sweepStaleTestSandboxes();
 const historyStore = createHistoryStore();
 await historyStore.initialize();
 
-const { server } = createBridge({
+const { server, sessions, shutdown } = createBridge({
   token,
   defaultProject: process.cwd(),
   health,
@@ -777,6 +807,24 @@ const { server } = createBridge({
   historyStore,
   allowedOrigins,
 });
+
+let shutdownStarted = false;
+async function shutdownBridge(signal) {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  const forceTimer = setTimeout(() => {
+    for (const session of sessions.values()) signalProcessTree(session.child, "SIGKILL");
+    for (const session of sessions.values()) cleanupTestSandboxesSync(session);
+    process.exit(1);
+  }, 25_000);
+  forceTimer.unref();
+  await shutdown(`bridge_${String(signal || "shutdown").toLowerCase()}`).catch(() => {});
+  clearTimeout(forceTimer);
+  process.exit(0);
+}
+
+process.once("SIGINT", () => void shutdownBridge("SIGINT"));
+process.once("SIGTERM", () => void shutdownBridge("SIGTERM"));
 
 server.listen(port, host, () => {
   console.log("");

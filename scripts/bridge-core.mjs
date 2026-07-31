@@ -498,8 +498,13 @@ roundtable-checks block.`;
 When .roundtable-context/metadata.json exists, inspect it and
 .roundtable-context/changes.patch before making claims about the current branch or pull-request
 diff. These files are generated directly from the selected repository's Git state; the private
-.git directory and Git configuration remain excluded from your disposable workspace. Cite the
-actual changed code, and distinguish branch-diff findings from pre-existing tree findings.`;
+host .git directory, configuration, refs, hooks, credentials, and remotes remain excluded from
+your disposable workspace. A local synthetic Git snapshot may be present so repository-aware
+checks can use git ls-files/status/diff. Its local origin/main ref preserves only the selected
+repository's baseline path set, not original commit identities or contents; it has no configured
+remote and is not authoritative for branch or history claims. Use .roundtable-context for those
+claims and content diffs; the synthetic index deliberately suppresses content comparisons. Cite
+the actual changed code, and distinguish branch-diff findings from pre-existing tree findings.`;
 
   const stagePrompt =
     stage === "sealed"
@@ -2134,5 +2139,49 @@ export function createBridge({
     }
   });
 
-  return { server, sessions };
+  let shutdownPromise = null;
+  function shutdown(reason = "bridge_shutdown") {
+    if (shutdownPromise) return shutdownPromise;
+    shutdownPromise = (async () => {
+      const activeSessions = [...sessions.values()];
+      const cleanupPromises = new Map();
+      const cleanupSession = (session) => {
+        if (!cleanupPromises.has(session)) {
+          cleanupPromises.set(
+            session,
+            Promise.resolve().then(() => agentRunner.cleanup?.(session)),
+          );
+        }
+        return cleanupPromises.get(session);
+      };
+      for (const session of activeSessions) {
+        session.stopRequested = true;
+        session.phase = session.phase === "complete" ? session.phase : "stopping";
+      }
+      await Promise.allSettled(
+        activeSessions.map((session) =>
+          agentRunner.stop?.(session, reason, {
+            beforeEscalation: () => cleanupSession(session),
+            afterTermination: () =>
+              Promise.resolve().then(() => agentRunner.cleanup?.(session)),
+          }),
+        ),
+      );
+      await Promise.allSettled(
+        activeSessions.map((session) =>
+          Promise.resolve().then(() => agentRunner.cleanup?.(session)),
+        ),
+      );
+      for (const session of activeSessions) {
+        for (const client of session.clients || []) client.end();
+        session.clients?.clear();
+      }
+      if (server.listening) {
+        await new Promise((resolve) => server.close(resolve));
+      }
+    })();
+    return shutdownPromise;
+  }
+
+  return { server, sessions, shutdown };
 }

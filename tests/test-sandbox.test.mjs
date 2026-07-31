@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { rmSync } from "node:fs";
 import {
   access,
   cp,
@@ -11,6 +12,7 @@ import {
   realpath,
   rm,
   symlink,
+  unlink,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -25,8 +27,11 @@ import {
   buildClaudeSandboxProfile,
   collectAncestorDirectoryEntries,
   cleanupTestSandboxes,
+  cleanupTestSandboxesSync,
+  clonePreparedTestSandbox,
   createDisposableTestSandbox,
   ensureTestSandbox,
+  isolatedGitEnvironment,
   prepareTestSandboxes,
   removeDisposableTestSandbox,
   resolveCredentialPathAliases,
@@ -36,6 +41,38 @@ import { buildBrokerNetworkArgs } from "../scripts/test-broker.mjs";
 
 const execFileAsync = promisify(execFile);
 const CREDENTIAL_FILE_PATHS = new Set([".npmrc", ".netrc", ".git-credentials", ".pypirc"]);
+
+test("synthetic Git drops every inherited Git control variable", () => {
+  const environment = isolatedGitEnvironment({
+    PATH: "/test/bin",
+    GIT_TEMPLATE_DIR: "/host/templates",
+    GIT_OBJECT_DIRECTORY: "/host/objects",
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: "/host/alternates",
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "core.hooksPath",
+    GIT_CONFIG_VALUE_0: "/host/hooks",
+    GIT_DIR: "/host/repository",
+  });
+  assert.equal(environment.PATH, "/test/bin");
+  assert.equal(environment.GIT_CONFIG_NOSYSTEM, "1");
+  assert.equal(environment.GIT_CONFIG_GLOBAL, "/dev/null");
+  assert.equal(environment.GIT_TERMINAL_PROMPT, "0");
+  assert.equal(environment.GIT_AUTHOR_EMAIL, "snapshot@roundtable.invalid");
+  assert.deepEqual(
+    Object.keys(environment)
+      .filter((name) => name.startsWith("GIT_"))
+      .sort(),
+    [
+      "GIT_AUTHOR_EMAIL",
+      "GIT_AUTHOR_NAME",
+      "GIT_COMMITTER_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_NOSYSTEM",
+      "GIT_TERMINAL_PROMPT",
+    ],
+  );
+});
 
 function credentialProbePath(home, name) {
   return CREDENTIAL_FILE_PATHS.has(name) ? join(home, name) : join(home, name, "credential");
@@ -355,7 +392,245 @@ test("keeps cancellation and the injected copy seam on prepared role clones", as
   }
 });
 
-test("materializes sanitized Git branch and working-tree evidence without copying .git", async () => {
+test("cleanup waits for in-flight source materialization and removes its late root", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-source-cleanup-race-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath, stopRequested: false };
+  let releaseMaterialization;
+  let materializationStarted;
+  const materializationGate = new Promise((resolve) => {
+    releaseMaterialization = resolve;
+  });
+  const started = new Promise((resolve) => {
+    materializationStarted = resolve;
+  });
+  try {
+    await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+    await writeFile(join(projectPath, "source.txt"), "source\n");
+    const preparation = prepareTestSandboxes(session, ["codex"], {
+      temporaryDirectory,
+      materializeContext: async () => {},
+      materializeSnapshot: async () => {
+        materializationStarted();
+        await materializationGate;
+      },
+      validateSymlinks: async () => {},
+    });
+    await started;
+    const rejectedPreparation = assert.rejects(
+      preparation,
+      (error) => error?.code === "USER_STOP",
+    );
+    session.stopRequested = true;
+    let cleanupFinished = false;
+    const cleanup = cleanupTestSandboxes(session).then(() => {
+      cleanupFinished = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(cleanupFinished, false);
+    releaseMaterialization();
+    await rejectedPreparation;
+    await cleanup;
+    assert.equal(session.testSandboxSource, null);
+    assert.deepEqual(await readdir(temporaryDirectory), []);
+  } finally {
+    releaseMaterialization?.();
+    await cleanupTestSandboxes(session);
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("both sandbox creation paths register roots before canonicalization can pause", async () => {
+  for (const mode of ["source", "clone"]) {
+    const fixtureRoot = await mkdtemp(join(tmpdir(), `roundtable-root-ownership-${mode}-`));
+    const projectPath = join(fixtureRoot, "project");
+    const temporaryDirectory = join(fixtureRoot, "sandboxes");
+    const session = { projectPath, stopRequested: false };
+    let releaseCanonicalization;
+    let canonicalizationStarted;
+    const canonicalizationGate = new Promise((resolve) => {
+      releaseCanonicalization = resolve;
+    });
+    const started = new Promise((resolve) => {
+      canonicalizationStarted = resolve;
+    });
+    try {
+      await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+      await writeFile(join(projectPath, "source.txt"), "source\n");
+      const options = {
+        temporaryDirectory,
+        resolveRoot: async (path) => {
+          canonicalizationStarted();
+          await canonicalizationGate;
+          return realpath(path);
+        },
+        materializeContext: async () => {},
+        materializeSnapshot: async () => {},
+        validateSymlinks: async () => {},
+      };
+      const creation =
+        mode === "source"
+          ? createDisposableTestSandbox(session, "source", options)
+          : clonePreparedTestSandbox(session, "codex", { workspace: projectPath }, options);
+      const rejectedCreation = assert.rejects(creation);
+      await started;
+      session.stopRequested = true;
+      let cleanupFinished = false;
+      const cleanup = cleanupTestSandboxes(session).then(() => {
+        cleanupFinished = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.equal(cleanupFinished, false);
+      releaseCanonicalization();
+      await rejectedCreation;
+      await cleanup;
+      assert.deepEqual(await readdir(temporaryDirectory), []);
+    } finally {
+      releaseCanonicalization?.();
+      await cleanupTestSandboxes(session);
+      await rm(fixtureRoot, { recursive: true, force: true });
+    }
+  }
+});
+
+test("cleanup cannot return before a paused role clone finishes its last write", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-role-cleanup-race-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath, stopRequested: false };
+  let releaseClone;
+  let cloneStarted;
+  const cloneGate = new Promise((resolve) => {
+    releaseClone = resolve;
+  });
+  const started = new Promise((resolve) => {
+    cloneStarted = resolve;
+  });
+  try {
+    await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+    await writeFile(join(projectPath, "source.txt"), "source\n");
+    const preparation = prepareTestSandboxes(session, ["codex"], {
+      temporaryDirectory,
+      copy: async (source, destination, options) => {
+        if (source !== projectPath) {
+          cloneStarted();
+          await cloneGate;
+          await mkdir(destination, { recursive: true });
+          await writeFile(join(destination, "late-write.txt"), "late\n");
+          return;
+        }
+        return cp(source, destination, options);
+      },
+      materializeContext: async () => {},
+      materializeSnapshot: async () => {},
+      validateSymlinks: async () => {},
+    });
+    await started;
+    const rejectedPreparation = assert.rejects(
+      preparation,
+      (error) => error?.code === "USER_STOP",
+    );
+    session.stopRequested = true;
+    let cleanupFinished = false;
+    const cleanup = cleanupTestSandboxes(session).then(() => {
+      cleanupFinished = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(cleanupFinished, false);
+    releaseClone();
+    await rejectedPreparation;
+    await cleanup;
+    assert.equal(session.testSandboxSource, null);
+    assert.deepEqual(await readdir(temporaryDirectory), []);
+  } finally {
+    releaseClone?.();
+    await cleanupTestSandboxes(session);
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("emergency synchronous cleanup removes every registered root before force exit", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-emergency-cleanup-"));
+  const sandboxRoot = join(fixtureRoot, "roundtable-agent-sandbox-late-copy");
+  const session = {
+    testSandboxRoots: new Set([sandboxRoot]),
+    testSandboxes: new Map(),
+  };
+  try {
+    await mkdir(join(sandboxRoot, "workspace"), { recursive: true });
+    await writeFile(join(sandboxRoot, "workspace", "late.txt"), "late\n");
+    cleanupTestSandboxesSync(session);
+    await assert.rejects(access(sandboxRoot));
+    assert.equal(session.testSandboxRoots.size, 0);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("cleanup isolates root removal failures and a later sweep can recover", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-removal-retry-"));
+  const firstRoot = join(fixtureRoot, "roundtable-agent-sandbox-first");
+  const secondRoot = join(fixtureRoot, "roundtable-agent-sandbox-second");
+  const session = {
+    testSandboxRoots: new Set([firstRoot, secondRoot]),
+    testSandboxes: new Map(),
+  };
+  let firstAttempts = 0;
+  try {
+    await Promise.all([
+      mkdir(join(firstRoot, "workspace"), { recursive: true }),
+      mkdir(join(secondRoot, "workspace"), { recursive: true }),
+    ]);
+    const result = await cleanupTestSandboxes(session, {
+      removeRoot: async (root, options) => {
+        assert.equal(options.maxRetries, 3);
+        assert.equal(options.retryDelay, 100);
+        if (root === firstRoot && firstAttempts++ === 0) {
+          const error = new Error("directory changed during removal");
+          error.code = "ENOTEMPTY";
+          throw error;
+        }
+        return rm(root, options);
+      },
+    });
+    assert.equal(result.failures.length, 1);
+    await assert.rejects(access(firstRoot));
+    await assert.rejects(access(secondRoot));
+    assert.ok(session.testSandboxRoots.has(firstRoot));
+    assert.ok(session.testSandboxRoots.has(secondRoot));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("emergency cleanup continues after one root removal throws", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-emergency-isolation-"));
+  const firstRoot = join(fixtureRoot, "roundtable-agent-sandbox-first");
+  const secondRoot = join(fixtureRoot, "roundtable-agent-sandbox-second");
+  const session = {
+    testSandboxRoots: new Set([firstRoot, secondRoot]),
+    testSandboxes: new Map(),
+  };
+  try {
+    await Promise.all([mkdir(firstRoot), mkdir(secondRoot)]);
+    cleanupTestSandboxesSync(session, {
+      removeRootSync: (root, options) => {
+        assert.equal(options.maxRetries, 3);
+        if (root === firstRoot) throw new Error("busy root");
+        rmSync(root, options);
+      },
+    });
+    await access(firstRoot);
+    await assert.rejects(access(secondRoot));
+    assert.ok(session.testSandboxRoots.has(firstRoot));
+    assert.equal(session.testSandboxRoots.has(secondRoot), false);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("materializes sanitized Git evidence plus a remote-free disposable snapshot", async () => {
   const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-git-context-fixture-"));
   const projectPath = join(fixtureRoot, "project");
   const temporaryDirectory = join(fixtureRoot, "sandboxes");
@@ -370,7 +645,11 @@ test("materializes sanitized Git branch and working-tree evidence without copyin
       cwd: projectPath,
     });
     await writeFile(join(projectPath, "source.txt"), "base\n");
-    await execFileAsync("git", ["add", "source.txt"], { cwd: projectPath });
+    await writeFile(join(projectPath, "removed.txt"), "remove me\n");
+    await writeFile(join(projectPath, "renamed-old.txt"), "rename me\n");
+    await execFileAsync("git", ["add", "source.txt", "removed.txt", "renamed-old.txt"], {
+      cwd: projectPath,
+    });
     await execFileAsync("git", ["commit", "-m", "base"], { cwd: projectPath });
     await execFileAsync("git", ["checkout", "-b", "feature/trust-audit"], {
       cwd: projectPath,
@@ -381,6 +660,10 @@ test("materializes sanitized Git branch and working-tree evidence without copyin
       cwd: projectPath,
     });
     await writeFile(join(projectPath, "source.txt"), "working change\n");
+    await unlink(join(projectPath, "removed.txt"));
+    await execFileAsync("git", ["mv", "renamed-old.txt", "renamed-new.txt"], {
+      cwd: projectPath,
+    });
     await writeFile(join(projectPath, "new-module.mjs"), "export const trackedByRoundtable = true;\n");
 
     const workspace = await ensureTestSandbox(session, "codex", {
@@ -412,7 +695,43 @@ test("materializes sanitized Git branch and working-tree evidence without copyin
     assert.doesNotMatch(headPatch, /working change/);
     assert.doesNotMatch(headPatch, /new-module\.mjs/);
     assert.match(headPatch, new RegExp(`# Parent ${metadata.parentCommit}`));
-    await assert.rejects(access(join(workspace, ".git")));
+    await access(join(workspace, ".git"));
+    const { stdout: remotes } = await execFileAsync("git", ["remote"], { cwd: workspace });
+    const { stdout: tracked } = await execFileAsync("git", ["ls-files"], { cwd: workspace });
+    const { stdout: status } = await execFileAsync("git", ["status", "--short"], { cwd: workspace });
+    const { stdout: changedFromBaseline } = await execFileAsync(
+      "git",
+      ["diff", "--name-only", "origin/main...HEAD"],
+      { cwd: workspace },
+    );
+    const { stdout: changedStatusFromBaseline } = await execFileAsync(
+      "git",
+      ["diff", "--name-status", "--find-renames", "origin/main...HEAD"],
+      { cwd: workspace },
+    );
+    const { stdout: subject } = await execFileAsync("git", ["log", "-1", "--pretty=%s"], {
+      cwd: workspace,
+    });
+    const syntheticConfig = await readFile(join(workspace, ".git", "config"), "utf8");
+    assert.equal(remotes, "");
+    assert.deepEqual(tracked.trim().split("\n").sort(), [
+      "new-module.mjs",
+      "renamed-new.txt",
+      "source.txt",
+    ]);
+    assert.equal(status, "");
+    assert.deepEqual(changedFromBaseline.trim().split("\n").sort(), [
+      "new-module.mjs",
+      "removed.txt",
+      "renamed-new.txt",
+      "source.txt",
+    ]);
+    assert.match(
+      changedStatusFromBaseline,
+      /R100\trenamed-old\.txt\trenamed-new\.txt/,
+    );
+    assert.equal(subject.trim(), "Roundtable disposable snapshot");
+    assert.doesNotMatch(syntheticConfig, /Roundtable Test|roundtable@example\.test|remote /);
   } finally {
     await cleanupTestSandboxes(session);
     await rm(fixtureRoot, { recursive: true, force: true });

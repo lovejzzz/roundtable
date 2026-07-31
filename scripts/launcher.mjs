@@ -3,7 +3,10 @@ import { isAbsolute, resolve } from "node:path";
 
 export const LAUNCHER_STARTUP_TIMEOUT_MS = 180_000;
 export const LAUNCHER_STARTUP_TIMEOUT_MAX_MS = 900_000;
-export const LAUNCHER_SHUTDOWN_GRACE_MS = 2_000;
+// Removing several copy-on-write project snapshots can take longer than
+// stopping the model processes themselves. Give the bridge enough time to
+// finish its terminal cleanup before escalating to SIGKILL.
+export const LAUNCHER_SHUTDOWN_GRACE_MS = 30_000;
 export const LAUNCHER_FORCE_WAIT_MS = 1_000;
 export const LAUNCHER_TOPIC_MAX_CHARACTERS = 4_000;
 export const DEFAULT_LAUNCH_TOPIC =
