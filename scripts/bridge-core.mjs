@@ -760,6 +760,7 @@ export function createBridge({
     }
     if (event.type === "session.outcome") session.outcome = event.outcome;
     if (event.type === "session.status") session.lastStatus = event;
+    if (event.type === "session.liveness") session.liveness = event.liveness;
     const payload = `data: ${JSON.stringify(event)}\n\n`;
     for (const client of session.clients) client.write(payload);
     if (
@@ -891,6 +892,37 @@ export function createBridge({
     emit(session, { type: "session.batch", batch });
   }
 
+  async function runAgentWithLiveness(session, invocation, { turn, stage } = {}) {
+    const startedAt = now().toISOString();
+    agentRunner.beginLiveness?.(session);
+    const refresh = () => {
+      const observedAt = now().toISOString();
+      const observed = agentRunner.getLiveness?.(session) || {
+        state: "request-active",
+      };
+      emit(session, {
+        type: "session.liveness",
+        liveness: {
+          role: invocation.role,
+          turn: Number.isInteger(turn) ? turn : session.completedTurns,
+          stage: stage || invocation.purpose || "discussion",
+          startedAt,
+          observedAt,
+          ...observed,
+        },
+      });
+    };
+    refresh();
+    const timer = setInterval(refresh, 5_000);
+    timer.unref?.();
+    try {
+      return await agentRunner.run(invocation);
+    } finally {
+      clearInterval(timer);
+      emit(session, { type: "session.liveness", liveness: null });
+    }
+  }
+
   async function runContribution(session, { turn, role, round, stage, frozenMessages }) {
     session.currentTurn = turn;
     const promptPackage = buildPromptPackage(session, role, turn, {
@@ -923,11 +955,15 @@ export function createBridge({
     while (replyText === undefined) {
       if (session.stopRequested) return false;
       try {
-        const reply = await agentRunner.run({
+        const reply = await runAgentWithLiveness(
           session,
-          role,
-          prompt: promptPackage.prompt,
-        });
+          {
+            session,
+            role,
+            prompt: promptPackage.prompt,
+          },
+          { turn, stage },
+        );
         if (!reply) throw new Error(`${AGENT_NAMES[role]} returned no text.`);
         if (typeof reply === "string") {
           replyText = reply;
@@ -1047,12 +1083,16 @@ export function createBridge({
         note: statusNote(role),
       });
       try {
-        const raw = await agentRunner.run({
+        const raw = await runAgentWithLiveness(
           session,
-          role,
-          purpose,
-          prompt: promptForRole(role),
-        });
+          {
+            session,
+            role,
+            purpose,
+            prompt: promptForRole(role),
+          },
+          { turn: session.completedTurns, stage: purpose },
+        );
         const parsed = extractOutcomeJson(raw);
         attempts.push({
           role,
@@ -1176,12 +1216,16 @@ export function createBridge({
           });
           const reviewedAt = now().toISOString();
           try {
-            const rawAudit = await agentRunner.run({
+            const rawAudit = await runAgentWithLiveness(
               session,
-              role,
-              purpose: "brief-audit",
-              prompt: buildBriefAuditPrompt(session, role, outcomeInput, draft),
-            });
+              {
+                session,
+                role,
+                purpose: "brief-audit",
+                prompt: buildBriefAuditPrompt(session, role, outcomeInput, draft),
+              },
+              { turn: session.completedTurns, stage: "brief-audit" },
+            );
             audit.reviews[role] = {
               role,
               author: AGENT_NAMES[role],
@@ -1303,12 +1347,16 @@ export function createBridge({
             note: `${AGENT_NAMES[role]} is checking dissent coverage.`,
           });
           try {
-            const rawDissent = await agentRunner.run({
+            const rawDissent = await runAgentWithLiveness(
               session,
-              role,
-              purpose: "dissent",
-              prompt: buildDissentPrompt(session, role, reviewInput),
-            });
+              {
+                session,
+                role,
+                purpose: "dissent",
+                prompt: buildDissentPrompt(session, role, reviewInput),
+              },
+              { turn: session.completedTurns, stage: "dissent" },
+            );
             const parsed = extractDissentJson(rawDissent, { validLabels });
             const items = parsed.map((item) => ({
               ...item,
@@ -1412,6 +1460,7 @@ export function createBridge({
       dissentReviews: session.dissentReviews,
       dissentJudgments: session.dissentJudgments,
       failedTurn: session.failedTurn,
+      liveness: session.liveness,
       historyWarning: session.historyWarning,
       lastStatus: session.lastStatus,
     };
@@ -1489,6 +1538,14 @@ export function createBridge({
           );
         }
         response.write(`data: ${JSON.stringify(session.lastStatus)}\n\n`);
+        if (session.liveness) {
+          response.write(
+            `data: ${JSON.stringify({
+              type: "session.liveness",
+              liveness: session.liveness,
+            })}\n\n`,
+          );
+        }
         if (TERMINAL_PHASES.has(session.phase)) {
           response.end();
           return;
@@ -1757,6 +1814,7 @@ export function createBridge({
           briefAudit: null,
           pendingSteering: [],
           failedTurn: null,
+          liveness: null,
           failureGate: null,
           stopRequested: false,
           skipOutcomeRequested: false,

@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   autoScrollBehavior,
+  formatLivenessDuration,
+  livenessDetailText,
   liveStatusText,
 } from "../lib/live-status.mjs";
 
@@ -48,6 +50,39 @@ test("announces a reply using the bridge completed-turn count", () => {
       lastReplyAuthor: "Claude",
     }),
     "Claude replied. 2 of 6 turns complete.",
+  );
+});
+
+test("distinguishes active long reasoning from a dead process", () => {
+  assert.equal(formatLivenessDuration(0), "0s");
+  assert.equal(formatLivenessDuration(79), "1m 19s");
+  assert.equal(
+    livenessDetailText({
+      state: "process-active",
+      elapsedSeconds: 154,
+      quietSeconds: 91,
+    }),
+    "Process active · reasoning 2m 34s · no output for 1m 31s",
+  );
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "running",
+      speaker: "claude",
+      turn: 3,
+      totalTurns: 6,
+      livenessState: "process-active",
+      elapsedSeconds: 154,
+      quietSeconds: 91,
+    }),
+    "Turn 4 of 6: Claude is cross-examining the revealed positions. Process active · reasoning 2m 34s · no output for 1m 31s.",
+  );
+  assert.equal(
+    livenessDetailText({
+      state: "process-exited",
+      elapsedSeconds: 155,
+    }),
+    "Process exited · collecting the result after 2m 35s",
   );
 });
 

@@ -132,6 +132,73 @@ test("returns the first actionable CLI readiness diagnostic", async () => {
   }
 });
 
+test("exposes active-process liveness while a quiet model is still reasoning", async () => {
+  let releaseFirstTurn;
+  const firstTurnGate = new Promise((resolve) => {
+    releaseFirstTurn = resolve;
+  });
+  let calls = 0;
+  const agentRunner = {
+    beginLiveness(session) {
+      session.testLiveness = null;
+    },
+    getLiveness() {
+      return {
+        state: "process-active",
+        processStartedAt: "2026-07-30T12:00:00.000Z",
+        lastActivityAt: "2026-07-30T12:00:00.000Z",
+        timeoutAt: "2026-07-30T12:10:00.000Z",
+      };
+    },
+    async run({ purpose }) {
+      calls += 1;
+      if (calls === 1) await firstTurnGate;
+      if (purpose === "synthesis") {
+        return '{"decision":"Done","rationale":"Verified.","actions":[],"openQuestions":[],"consensus":true}';
+      }
+      return "Evidence-based contribution.";
+    },
+    async stop() {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Observe long reasoning",
+        rounds: 1,
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const { id } = await createResponse.json();
+
+    const snapshot = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const current = await response.json();
+      return current.liveness?.state === "process-active" ? current : null;
+    });
+
+    assert.equal(snapshot.liveness.role, "codex");
+    assert.equal(snapshot.liveness.turn, 0);
+    assert.equal(snapshot.liveness.processStartedAt, "2026-07-30T12:00:00.000Z");
+
+    const stopResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/stop`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(stopResponse.status, 202);
+    releaseFirstTurn();
+  } finally {
+    releaseFirstTurn?.();
+    await bridge.close();
+  }
+});
+
 test("advertises authenticated DELETE requests in CORS preflight", async () => {
   const bridge = await startTestBridge({
     run: async () => "unused",

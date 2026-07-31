@@ -33,6 +33,7 @@ import {
 } from "react";
 import {
   autoScrollBehavior,
+  livenessDetailText,
   liveStatusText,
 } from "../lib/live-status.mjs";
 import {
@@ -221,6 +222,19 @@ type FailedTurn = {
   expiresAt: string;
 };
 
+type SessionLiveness = {
+  role: AgentRole;
+  turn: number;
+  stage: string;
+  state: "preparing" | "request-active" | "process-active" | "process-exited";
+  startedAt: string;
+  observedAt: string;
+  processStartedAt?: string;
+  lastActivityAt?: string;
+  timeoutAt?: string;
+  endedAt?: string;
+};
+
 type SessionEvent =
   | { type: "message"; message: Message }
   | { type: "session.batch"; batch: unknown }
@@ -239,6 +253,7 @@ type SessionEvent =
     }
   | { type: "session.outcome"; outcome: Outcome }
   | { type: "session.history"; warning: string }
+  | { type: "session.liveness"; liveness: SessionLiveness | null }
   | {
       type: "session.status";
       status: SessionStatus;
@@ -287,6 +302,7 @@ type SessionSnapshot = {
   dissentReviews?: Record<string, DissentReview>;
   dissentJudgments?: Record<string, DissentJudgment>;
   failedTurn?: FailedTurn | null;
+  liveness?: SessionLiveness | null;
   historyWarning: string;
   archived?: boolean;
   lastStatus: Extract<SessionEvent, { type: "session.status" }>;
@@ -816,6 +832,7 @@ export default function Home() {
   const [dissentReviews, setDissentReviews] = useState<Record<string, DissentReview>>({});
   const [dissentJudgments, setDissentJudgments] = useState<Record<string, DissentJudgment>>({});
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
+  const [liveness, setLiveness] = useState<SessionLiveness | null>(null);
   const [historyWarning, setHistoryWarning] = useState("");
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -892,6 +909,22 @@ export default function Home() {
   }, [completedTurnCount, totalTurns]);
   const lastAgentReplyAuthor =
     messages.filter((message) => message.role !== "human").at(-1)?.author || "";
+  const elapsedLivenessSeconds = liveness
+    ? Math.max(0, (Date.parse(liveness.observedAt) - Date.parse(liveness.startedAt)) / 1_000)
+    : 0;
+  const quietLivenessSeconds = liveness
+    ? Math.max(
+        0,
+        (Date.parse(liveness.observedAt) -
+          Date.parse(liveness.lastActivityAt || liveness.processStartedAt || liveness.startedAt)) /
+          1_000,
+      )
+    : 0;
+  const livenessDetail = livenessDetailText({
+    state: liveness?.state || "",
+    elapsedSeconds: elapsedLivenessSeconds,
+    quietSeconds: quietLivenessSeconds,
+  });
   const liveStatus = liveStatusText({
     mode: roomMode,
     status,
@@ -900,6 +933,9 @@ export default function Home() {
     turn,
     totalTurns,
     lastReplyAuthor: lastAgentReplyAuthor,
+    livenessState: liveness?.state || "",
+    elapsedSeconds: elapsedLivenessSeconds,
+    quietSeconds: quietLivenessSeconds,
   });
 
   function clearRecoveryTimer() {
@@ -1080,6 +1116,7 @@ export default function Home() {
     setDissentReviews(snapshot.dissentReviews || {});
     setDissentJudgments(snapshot.dissentJudgments || {});
     setFailedTurn(snapshot.failedTurn || snapshot.lastStatus.failedTurn || null);
+    setLiveness(snapshot.liveness || null);
     setHistoryWarning(snapshot.historyWarning || "");
     setViewingHistory(archived);
     setIsPreview(false);
@@ -1301,6 +1338,10 @@ export default function Home() {
         setHistoryWarning(update.warning);
         return;
       }
+      if (update.type === "session.liveness") {
+        setLiveness(update.liveness);
+        return;
+      }
       setStatus(update.status);
       setSpeaker(update.speaker || null);
       if ("failedTurn" in update) setFailedTurn(update.failedTurn || null);
@@ -1443,6 +1484,7 @@ export default function Home() {
     setDissentReviews({});
     setDissentJudgments({});
     setFailedTurn(null);
+    setLiveness(null);
     setHistoryWarning(data.historyWarning || "");
     setViewingHistory(false);
     setIsPreview(false);
@@ -1450,6 +1492,7 @@ export default function Home() {
     setSessionId(data.id);
     sessionStorage.setItem("roundtable.sessionId", data.id);
     setStatus("running");
+    setLiveness(null);
     setTurn(0);
     setTotalTurns(Number(rounds) * 3);
     shouldAutoScrollRef.current = true;
@@ -1494,6 +1537,7 @@ export default function Home() {
     setDissentReviews({});
     setDissentJudgments({});
     setFailedTurn(null);
+    setLiveness(null);
     setHistoryWarning("");
     setViewingHistory(false);
     setIsPreview(true);
@@ -2726,10 +2770,18 @@ export default function Home() {
                     </small>
                   </div>
                 </div>
-                <div className="thinking-line">
-                  <span />
-                  <span />
-                  <span />
+                <div className="thinking-state">
+                  <div className="thinking-line" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <p
+                    className={`process-liveness ${liveness?.state === "process-active" ? "is-active" : ""}`}
+                    data-testid="process-liveness"
+                  >
+                    {livenessDetail || "Starting the agent request…"}
+                  </p>
                 </div>
               </article>
             )}

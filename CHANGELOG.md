@@ -4,6 +4,39 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.27] — 2026-07-30
+
+### Discussion
+
+A real EDUTOOL audit included several long, quiet model turns. They completed
+normally, but Roundtable exposed only an animated waiting state, so a user could
+not tell patient reasoning from a dead CLI process. The resulting requirement
+was to report observed process state without inventing a heartbeat or treating
+silence as failure.
+
+### Implementation
+
+- Added ephemeral liveness events around contributions, synthesis, brief audits,
+  and dissent review, refreshed every five seconds and restored in live session
+  snapshots and event-stream reconnects.
+- The real process runner now records when the child process started, its last
+  stdout or stderr activity, its timeout deadline, and its exit transition.
+- The thinking card distinguishes workspace preparation, an active request, and
+  a live CLI process. Live processes show elapsed reasoning time and, after
+  twenty quiet seconds, time since their last output.
+- Screen-reader turn announcements receive the same liveness detail.
+- Liveness events remain runtime-only and are not written to local discussion
+  history.
+
+### Verification
+
+- Added focused text-formatting coverage for long active reasoning and exited
+  processes.
+- Added bridge coverage proving active-process evidence is available from a
+  recoverable session snapshot while the model call remains quiet.
+- Full bridge/runtime tests, lint, production build, rendered-page checks, and
+  whitespace validation pass.
+
 ## [v0.0.0.26] — 2026-07-30
 
 ### Discussion

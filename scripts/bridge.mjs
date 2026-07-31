@@ -398,14 +398,22 @@ function runManagedProcess(
     env: environment || agentEnvironment(environmentRole),
     stdio: ["pipe", "pipe", "pipe"],
   });
+  const processStartedAt = new Date();
   const handle = {
     child,
     closed,
     reason: null,
     escalationTimer: null,
     timeoutTimer: null,
+    liveness: {
+      state: "process-active",
+      processStartedAt: processStartedAt.toISOString(),
+      lastActivityAt: processStartedAt.toISOString(),
+      timeoutAt: new Date(processStartedAt.getTime() + timeoutMs).toISOString(),
+    },
   };
   session.child = handle;
+  session.processLiveness = handle.liveness;
 
   return new Promise((resolve, reject) => {
     let stdout = "";
@@ -417,6 +425,8 @@ function runManagedProcess(
       settled = true;
       clearTimeout(handle.timeoutTimer);
       clearTimeout(handle.escalationTimer);
+      handle.liveness.state = "process-exited";
+      handle.liveness.endedAt = new Date().toISOString();
       if (session.child === handle) session.child = null;
       resolveClosed();
       callback();
@@ -428,10 +438,12 @@ function runManagedProcess(
     handle.timeoutTimer.unref?.();
 
     child.stdout.on("data", (chunk) => {
+      handle.liveness.lastActivityAt = new Date().toISOString();
       stdout += chunk.toString();
       if (stdout.length > 2_000_000) stdout = stdout.slice(-2_000_000);
     });
     child.stderr.on("data", (chunk) => {
+      handle.liveness.lastActivityAt = new Date().toISOString();
       stderr += chunk.toString();
       if (stderr.length > 40_000) stderr = stderr.slice(-40_000);
     });
@@ -705,6 +717,14 @@ async function runAntigravityModel(session, prompt) {
 }
 
 const agentRunner = {
+  beginLiveness(session) {
+    session.processLiveness = null;
+  },
+  getLiveness(session) {
+    return session.processLiveness
+      ? { ...session.processLiveness }
+      : { state: "preparing" };
+  },
   prepare(session) {
     return Promise.all(
       ["codex", "claude", "antigravity"].map((role) =>

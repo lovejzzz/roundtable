@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.26**
+Current release: **v0.0.0.27**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -159,8 +159,15 @@ The live room exposes concise, polite turn-status announcements without reading
 whole agent replies aloud. Its transcript is a labeled keyboard-focusable log
 with a visible inset focus ring, progress reports completed turns through native
 progressbar semantics, and automatic transcript scrolling becomes instant when
-the operating system requests reduced motion. Opening an archive does not replay
-its transcript through the live announcement channel.
+the operating system requests reduced motion. While an agent is working, the
+room reports whether its isolated workspace is still being prepared, its CLI
+process is alive, or the request remains active. For a live process it shows
+elapsed reasoning time and, after twenty quiet seconds, time since the last
+stdout or stderr activity. Quiet reasoning is therefore not presented as a
+failure; an actual exit, timeout, or agent error continues through the existing
+terminal or retry flow. Liveness is ephemeral runtime state, restored on a live
+reconnect but excluded from archived discussion history. Opening an archive
+does not replay its transcript through the live announcement channel.
 
 ## Measuring decision quality and workflow value
 
