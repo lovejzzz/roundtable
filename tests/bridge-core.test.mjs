@@ -596,6 +596,98 @@ test("keeps steering sealed from opening peers and includes it once in cross-exa
   }
 });
 
+test("rejects steering when a one-round room has no cross-examination recipient", async () => {
+  let releaseFirstTurn;
+  const agentRunner = {
+    run({ purpose }) {
+      if (purpose) {
+        return Promise.resolve(
+          '{"decision":"Done","rationale":"No steering was accepted.","actions":[],"openQuestions":[],"consensus":true}',
+        );
+      }
+      if (!releaseFirstTurn) {
+        return new Promise((resolve) => {
+          releaseFirstTurn = () => resolve("first reply");
+        });
+      }
+      return Promise.resolve("later reply");
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ projectPath: "/test/project", topic: "No recipient", rounds: 1 }),
+    });
+    const { id } = await createResponse.json();
+    await waitFor(() => releaseFirstTurn);
+
+    const steerResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/steer`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ text: "This note has no eligible recipient." }),
+    });
+    assert.equal(steerResponse.status, 409);
+    assert.match((await steerResponse.json()).error, /no remaining cross-examination turn/i);
+    releaseFirstTurn();
+    await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, { headers: authHeaders() });
+      return (await response.json()).phase === "complete";
+    });
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("keeps accepted steering pending when the room stops before its recipient turn", async () => {
+  let releaseFirstTurn;
+  const agentRunner = {
+    run() {
+      return new Promise((resolve) => {
+        releaseFirstTurn = () => resolve("first reply");
+      });
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ projectPath: "/test/project", topic: "Stop before delivery", rounds: 2 }),
+    });
+    const { id } = await createResponse.json();
+    await waitFor(() => releaseFirstTurn);
+
+    const steerResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/steer`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ text: "Deliver only to a real future prompt." }),
+    });
+    assert.equal(steerResponse.status, 202);
+    const stopResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/stop`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(stopResponse.status, 202);
+    releaseFirstTurn();
+
+    const stopped = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, { headers: authHeaders() });
+      const snapshot = await response.json();
+      return snapshot.phase === "stopped" ? snapshot : null;
+    });
+    assert.equal(stopped.pendingSteering.length, 1);
+    assert.equal(stopped.messages.some((message) => message.role === "human"), false);
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("adds complete rounds to a live discussion without resetting its transcript", async () => {
   let releaseFirstTurn;
   let callCount = 0;
@@ -1552,6 +1644,8 @@ test("a stop accepted before process registration prevents agent work from start
 test("retries the same failed role and turn without changing its prompt or duplicating messages", async () => {
   const prompts = [];
   let turnAttempts = 0;
+  let claudeContributions = 0;
+  let releaseClaude;
   const agentRunner = {
     async run({ role, purpose, prompt }) {
       if (purpose === "synthesis") {
@@ -1560,6 +1654,11 @@ test("retries the same failed role and turn without changing its prompt or dupli
       prompts.push(prompt);
       if (role === "codex" && turnAttempts++ === 0) {
         throw new Error("529 Overloaded");
+      }
+      if (role === "claude" && !purpose && claudeContributions++ === 0) {
+        return new Promise((resolve) => {
+          releaseClaude = () => resolve("claude recovered reply");
+        });
       }
       return role === "codex"
         ? `codex recovered reply
@@ -1579,7 +1678,7 @@ test("retries the same failed role and turn without changing its prompt or dupli
       body: JSON.stringify({
         projectPath: "/test/project",
         topic: "Recover a failed turn",
-        rounds: 1,
+        rounds: 2,
       }),
     });
     const { id } = await createResponse.json();
@@ -1613,6 +1712,24 @@ test("retries the same failed role and turn without changing its prompt or dupli
       [202, 409],
     );
 
+    await waitFor(() => releaseClaude);
+    const recoveredResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+      headers: authHeaders(),
+    });
+    const recovered = await recoveredResponse.json();
+    assert.equal(recovered.phase, "running");
+    assert.equal(recovered.failedTurn, null);
+    assert.equal(recovered.lastStatus.status, "running");
+    assert.equal(recovered.lastStatus.speaker, "claude");
+
+    const steerResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/steer`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ text: "Keep the recovered discussion code-based." }),
+    });
+    assert.equal(steerResponse.status, 202);
+    releaseClaude();
+
     const completed = await waitFor(async () => {
       const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
         headers: authHeaders(),
@@ -1621,9 +1738,10 @@ test("retries the same failed role and turn without changing its prompt or dupli
       return snapshot.phase === "complete" ? snapshot : null;
     });
     assert.equal(prompts[0], prompts[1]);
+    assert.match(prompts[4], /Keep the recovered discussion code-based\./);
     assert.deepEqual(
       completed.messages.map((message) => message.role),
-      ["codex", "claude", "antigravity"],
+      ["codex", "claude", "antigravity", "human", "codex", "claude", "antigravity"],
     );
     assert.equal(completed.failedTurn, null);
     assert.equal(completed.sealedBatch.roles.codex.status, "completed");

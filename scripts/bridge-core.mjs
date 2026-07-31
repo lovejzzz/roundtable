@@ -1051,7 +1051,17 @@ export function createBridge({
       }
     }
 
+    const recoveredTurn = Boolean(session.failedTurn);
     session.failedTurn = null;
+    if (recoveredTurn) {
+      setPhase(session, "running", {
+        speaker: role,
+        turn,
+        failedTurn: null,
+        stage,
+        note: `${AGENT_NAMES[role]} recovered the failed turn.`,
+      });
+    }
     const model = session[`${role}Model`];
     const effort = session[`${role}Effort`];
     const sandboxPaths = [...(session.testSandboxes?.values() || [])].flatMap(
@@ -1191,7 +1201,6 @@ export function createBridge({
         }
       }
 
-      flushSteering(session);
       if (session.phase === "stopping" || session.stopRequested) {
         const stoppedInput = buildOutcomeInput(session.topic, session.messages);
         emit(session, {
@@ -1448,7 +1457,6 @@ export function createBridge({
       }
       setPhase(session, session.stopRequested ? "stopped" : "complete");
     } catch (error) {
-      flushSteering(session);
       if (session.phase === "stopping" || error?.code === "USER_STOP") {
         if (!session.outcome) {
           const stoppedInput = buildOutcomeInput(session.topic, session.messages);
@@ -1944,15 +1952,18 @@ export function createBridge({
           if (session.phase !== "running") {
             sendJson(request, response, 409, {
               error:
-                session.phase === "failed" || session.phase === "retrying"
+                session.phase === "failed"
                   ? "Retry or end the failed turn before adding another note."
+                  : session.phase === "retrying"
+                    ? "The retry is in progress. Add the note after it finishes."
                   : "This discussion has already ended.",
             });
             return;
           }
-          if (session.currentTurn >= session.totalTurns - 1) {
+          const nextEligibleTurn = Math.max(session.currentTurn + 1, AGENT_ROLES.length);
+          if (nextEligibleTurn >= session.totalTurns) {
             sendJson(request, response, 409, {
-              error: "There is no remaining agent turn to steer.",
+              error: "There is no remaining cross-examination turn to steer.",
             });
             return;
           }
@@ -1969,12 +1980,12 @@ export function createBridge({
           const message = makeMessage(now, "human", text);
           session.pendingSteering.push({
             message,
-            targetTurn: Math.max(0, session.currentTurn + 1),
+            targetTurn: nextEligibleTurn,
           });
           await persistHistory(session, {
             type: "steering.queued",
             message,
-            targetTurn: Math.max(0, session.currentTurn + 1),
+            targetTurn: nextEligibleTurn,
           });
           sendJson(request, response, 202, {
             ok: true,

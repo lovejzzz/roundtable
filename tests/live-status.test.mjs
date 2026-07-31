@@ -67,7 +67,7 @@ test("announces truthful workspace preparation without invented progress", () =>
   );
 });
 
-test("distinguishes active long reasoning from a dead process", () => {
+test("reports observable liveness without claiming hidden reasoning progress", () => {
   assert.equal(formatLivenessDuration(0), "0s");
   assert.equal(formatLivenessDuration(79), "1m 19s");
   assert.equal(
@@ -76,7 +76,7 @@ test("distinguishes active long reasoning from a dead process", () => {
       elapsedSeconds: 154,
       quietSeconds: 91,
     }),
-    "Process active · reasoning 2m 34s · no output for 1m 31s",
+    "Process alive · 2m 34s elapsed · no CLI output for 1m 31s",
   );
   assert.equal(
     liveStatusText({
@@ -89,7 +89,7 @@ test("distinguishes active long reasoning from a dead process", () => {
       elapsedSeconds: 154,
       quietSeconds: 91,
     }),
-    "Turn 4 of 6: Claude is cross-examining the revealed positions. Process active · reasoning 2m 34s · no output for 1m 31s.",
+    "Turn 4 of 6: Claude is cross-examining the revealed positions. Process alive · 2m 34s elapsed · no CLI output for 1m 31s.",
   );
   assert.equal(
     livenessDetailText({
@@ -97,6 +97,10 @@ test("distinguishes active long reasoning from a dead process", () => {
       elapsedSeconds: 155,
     }),
     "Process exited · collecting the result after 2m 35s",
+  );
+  assert.equal(
+    livenessDetailText({ state: "request-active", elapsedSeconds: 42 }),
+    "Request open · 42s elapsed · provider progress is not observable",
   );
 });
 

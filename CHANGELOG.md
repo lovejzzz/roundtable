@@ -4,6 +4,36 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.34] — 2026-07-31
+
+### Field finding
+
+A real EDUTOOL review recovered after Claude re-authentication and completed its
+retry, but the retained room phase stayed `retrying`. The other agents kept
+working while owner steering was incorrectly rejected. The same long-running
+turn also showed that a live provider process is observable while its private
+reasoning progress is not.
+
+### Implementation
+
+- A successful retry clears the failed-turn record and atomically restores the
+  session to `running` before the transcript advances.
+- Owner steering is accepted again after recovery only when a future
+  cross-examination prompt can actually receive it.
+- Liveness copy reports only observable facts: process alive, elapsed time, and
+  time since CLI output. Request-only activity explicitly says provider
+  progress is not observable.
+
+### Verification
+
+- The retry integration test pauses the following Claude turn, proves the room
+  is `running`, proves the failure record is gone, and proves a submitted note
+  reaches the next cross-examination prompt before the discussion finishes.
+- Status-copy coverage rejects the former unsupported `reasoning` claim and
+  pins process, request, quiet-time, and exit wording.
+- The full bridge/runtime suite, production lint, production build, rendered
+  HTML checks, syntax checks, and whitespace validation pass.
+
 ## [v0.0.0.33] — 2026-07-31
 
 ### Field finding
