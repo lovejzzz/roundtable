@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   buildAutostartPayload,
   buildRoundtableUrl,
+  buildWebDevArgs,
   createDeferred,
   parseTalkArguments,
   resolveBridgePort,
@@ -90,6 +91,18 @@ test("alternate web ports produce matching browser origins", () => {
     "http://127.0.0.1:3003",
   ]);
   assert.throws(() => roundtableWebOrigins(0), /valid port/);
+});
+
+test("web startup binds the selected port strictly", () => {
+  assert.deepEqual(buildWebDevArgs(3010), [
+    "run",
+    "dev",
+    "--",
+    "--port",
+    "3010",
+    "--strictPort",
+  ]);
+  assert.throws(() => buildWebDevArgs(0), /valid port/);
 });
 
 test("auto-start uses the requested launch context and configured CLI defaults", async () => {
@@ -276,6 +289,35 @@ test("launcher readiness waits for both the web app and bridge", async () => {
   await readiness;
   assert.equal(settled, true);
   assert.equal(readyCount, 1);
+});
+
+test("launcher readiness attributes a living unbound web process without hiding bridge health", async () => {
+  const componentState = {
+    bridge: { process: "alive", readiness: "pending" },
+    web: { process: "alive", readiness: "pending", port: "unknown" },
+  };
+  const webReady = waitForWebHealth({
+    webUrl: "http://127.0.0.1:3100/",
+    port: 3100,
+    timeoutMs: 5,
+    retryMs: 1,
+    fetchImpl: async () => {
+      throw new TypeError("fetch failed");
+    },
+  });
+
+  await assert.rejects(
+    waitForLauncherReadiness({
+      bridgeReady: Promise.resolve({ ok: true }),
+      webReady,
+      failure: new Promise(() => {}),
+      timeoutMs: 100,
+      componentState,
+    }),
+    /bridge=ready; web process=alive; web port=unbound/,
+  );
+  assert.equal(componentState.bridge.readiness, "ready");
+  assert.equal(componentState.web.readiness, "failed");
 });
 
 test("launcher readiness aborts on zero and signal child exits", async () => {

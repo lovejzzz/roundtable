@@ -157,20 +157,43 @@ export async function ensureTestSandbox(
     copy = cp,
     copyTimeoutMs = 2 * 60 * 1000,
     clock = Date.now,
+    preparedSource = null,
   } = {},
 ) {
   session.testSandboxes ||= new Map();
   const existing = session.testSandboxes.get(role);
   if (existing) return existing.workspace;
 
-  const sandbox = await createDisposableTestSandbox(session, role, {
-    temporaryDirectory,
-    copy,
-    copyTimeoutMs,
-    clock,
-  });
+  const sandbox = preparedSource
+    ? await clonePreparedTestSandbox(session, role, preparedSource, {
+        temporaryDirectory,
+        copy,
+        copyTimeoutMs,
+        clock,
+      })
+    : await createDisposableTestSandbox(session, role, {
+        temporaryDirectory,
+        copy,
+        copyTimeoutMs,
+        clock,
+      });
   session.testSandboxes.set(role, sandbox);
   return sandbox.workspace;
+}
+
+function enforceCopyControl(session, startedAt, copyTimeoutMs, clock) {
+  if (session.stopRequested) {
+    const error = new Error("Discussion stopped while preparing the test sandbox.");
+    error.code = "USER_STOP";
+    throw error;
+  }
+  if (clock() - startedAt > copyTimeoutMs) {
+    const error = new Error(
+      "Preparing the disposable test sandbox exceeded the 2-minute limit.",
+    );
+    error.code = "TIMEOUT";
+    throw error;
+  }
 }
 
 export async function createDisposableTestSandbox(
@@ -181,6 +204,8 @@ export async function createDisposableTestSandbox(
     copy = cp,
     copyTimeoutMs = 2 * 60 * 1000,
     clock = Date.now,
+    materializeContext = materializeGitContext,
+    validateSymlinks = validateCopiedSymlinks,
   } = {},
 ) {
   if (!/^[a-z0-9-]+$/i.test(role)) {
@@ -198,30 +223,134 @@ export async function createDisposableTestSandbox(
       dereference: false,
       verbatimSymlinks: true,
       filter: (sourcePath, destinationPath) => {
-        if (session.stopRequested) {
-          const error = new Error("Discussion stopped while preparing the test sandbox.");
-          error.code = "USER_STOP";
-          throw error;
-        }
-        if (clock() - startedAt > copyTimeoutMs) {
-          const error = new Error(
-            "Preparing the disposable test sandbox exceeded the 2-minute limit.",
-          );
-          error.code = "TIMEOUT";
-          throw error;
-        }
+        enforceCopyControl(session, startedAt, copyTimeoutMs, clock);
         return shouldCopy(session.projectPath, workspace, sourcePath, destinationPath);
       },
     });
-    await validateCopiedSymlinks(workspace);
+    await validateSymlinks(workspace);
     // Git context improves review precision but must never make the sandbox
     // unavailable when Git metadata is incomplete or a probe times out.
-    await materializeGitContext(session.projectPath, workspace).catch(() => null);
+    await materializeContext(session.projectPath, workspace).catch(() => null);
   } catch (error) {
     await rm(root, { recursive: true, force: true });
     throw error;
   }
   return { root, workspace };
+}
+
+export async function clonePreparedTestSandbox(
+  session,
+  role,
+  preparedSource,
+  {
+    temporaryDirectory = tmpdir(),
+    copy = cp,
+    copyTimeoutMs = 2 * 60 * 1000,
+    clock = Date.now,
+  } = {},
+) {
+  if (!/^[a-z0-9-]+$/i.test(role)) {
+    throw new Error("The sandbox role contains unsupported characters.");
+  }
+  if (!preparedSource?.workspace) {
+    throw new Error("A validated preparation source is required.");
+  }
+  const createdRoot = await mkdtemp(join(temporaryDirectory, `${TEST_SANDBOX_PREFIX}${role}-`));
+  const root = await realpath(createdRoot);
+  const workspace = join(root, "workspace");
+  const startedAt = clock();
+  try {
+    await copy(preparedSource.workspace, workspace, {
+      recursive: true,
+      preserveTimestamps: true,
+      mode: constants.COPYFILE_FICLONE,
+      dereference: false,
+      verbatimSymlinks: true,
+      filter: () => {
+        enforceCopyControl(session, startedAt, copyTimeoutMs, clock);
+        return true;
+      },
+    });
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
+  return { root, workspace };
+}
+
+export async function ensurePreparedTestSandboxSource(
+  session,
+  {
+    temporaryDirectory = tmpdir(),
+    copy = cp,
+    copyTimeoutMs = 2 * 60 * 1000,
+    clock = Date.now,
+    materializeContext = materializeGitContext,
+    validateSymlinks = validateCopiedSymlinks,
+    onStage = () => {},
+  } = {},
+) {
+  if (session.testSandboxSource) return session.testSandboxSource;
+  if (!session.testSandboxSourcePromise) {
+    onStage({ stage: "validating-source" });
+    session.testSandboxSourcePromise = createDisposableTestSandbox(session, "source", {
+      temporaryDirectory,
+      copy,
+      copyTimeoutMs,
+      clock,
+      materializeContext,
+      validateSymlinks,
+    })
+      .then((source) => {
+        session.testSandboxSource = source;
+        onStage({ stage: "source-ready" });
+        return source;
+      })
+      .finally(() => {
+        session.testSandboxSourcePromise = null;
+      });
+  }
+  return session.testSandboxSourcePromise;
+}
+
+export async function prepareTestSandboxes(
+  session,
+  roles,
+  {
+    temporaryDirectory = tmpdir(),
+    copy = cp,
+    copyTimeoutMs = 2 * 60 * 1000,
+    clock = Date.now,
+    materializeContext = materializeGitContext,
+    validateSymlinks = validateCopiedSymlinks,
+    onStage = () => {},
+  } = {},
+) {
+  const source = await ensurePreparedTestSandboxSource(session, {
+    temporaryDirectory,
+    copy,
+    copyTimeoutMs,
+    clock,
+    materializeContext,
+    validateSymlinks,
+    onStage,
+  });
+  const results = await Promise.allSettled(
+    roles.map(async (role) => {
+      onStage({ stage: "cloning-role", role });
+      return ensureTestSandbox(session, role, {
+        temporaryDirectory,
+        copy,
+        copyTimeoutMs,
+        clock,
+        preparedSource: source,
+      });
+    }),
+  );
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
+  onStage({ stage: "ready" });
+  return results.map((result) => result.value);
 }
 
 export async function removeDisposableTestSandbox(sandbox) {
@@ -236,8 +365,15 @@ export function getTestSandboxInfo(session, role) {
 
 export async function cleanupTestSandboxes(session) {
   const sandboxes = [...(session.testSandboxes?.values() || [])];
+  const source = session.testSandboxSource;
   session.testSandboxes?.clear();
-  await Promise.all(sandboxes.map(({ root }) => rm(root, { recursive: true, force: true })));
+  session.testSandboxSource = null;
+  session.testSandboxSourcePromise = null;
+  await Promise.all(
+    [...sandboxes, source]
+      .filter(Boolean)
+      .map(({ root }) => rm(root, { recursive: true, force: true })),
+  );
 }
 
 export async function sweepStaleTestSandboxes({

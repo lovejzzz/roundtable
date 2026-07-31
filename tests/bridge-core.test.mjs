@@ -199,6 +199,76 @@ test("exposes active-process liveness while a quiet model is still reasoning", a
   }
 });
 
+test("exposes truthful preparation stages and accepts a stop before agent work", async () => {
+  let releasePreparation;
+  const preparationGate = new Promise((resolve) => {
+    releasePreparation = resolve;
+  });
+  let runCalls = 0;
+  let stopCalls = 0;
+  const agentRunner = {
+    async prepare(_session, { onStage }) {
+      onStage({ stage: "cloning-role", role: "claude" });
+      await preparationGate;
+    },
+    async run() {
+      runCalls += 1;
+      return "unused";
+    },
+    async stop() {
+      stopCalls += 1;
+    },
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Observe preparation",
+        rounds: 1,
+      }),
+    });
+    assert.equal(createResponse.status, 201);
+    const { id } = await createResponse.json();
+
+    const preparing = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const current = await response.json();
+      return current.lastStatus?.stage === "cloning-role" ? current : null;
+    });
+    assert.equal(preparing.phase, "preparing");
+    assert.equal(preparing.lastStatus.status, "preparing");
+    assert.match(preparing.lastStatus.note, /Claude/);
+    assert.equal(preparing.liveness, null);
+
+    const stopResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/stop`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(stopResponse.status, 202);
+    releasePreparation();
+
+    const stopped = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const current = await response.json();
+      return current.phase === "stopped" ? current : null;
+    });
+    assert.equal(stopped.lastStatus.status, "stopped");
+    assert.equal(runCalls, 0);
+    assert.equal(stopCalls, 1);
+  } finally {
+    releasePreparation?.();
+    await bridge.close();
+  }
+});
+
 test("advertises authenticated DELETE requests in CORS preflight", async () => {
   const bridge = await startTestBridge({
     run: async () => "unused",

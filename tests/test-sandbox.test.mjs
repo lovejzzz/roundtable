@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
   access,
+  cp,
   mkdir,
   mkdtemp,
   readdir,
@@ -26,6 +27,7 @@ import {
   cleanupTestSandboxes,
   createDisposableTestSandbox,
   ensureTestSandbox,
+  prepareTestSandboxes,
   removeDisposableTestSandbox,
   resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
@@ -251,6 +253,104 @@ test("creates isolated per-agent project copies and removes them after the room 
     await assert.rejects(access(codexRoot));
     await assert.rejects(access(claudeRoot));
   } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("validates one preparation source while keeping role and broker freshness contracts distinct", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-prepared-source-fixture-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath };
+  const copyCalls = [];
+  let validationCalls = 0;
+  let materializationCalls = 0;
+
+  try {
+    await Promise.all([
+      mkdir(join(projectPath, "node_modules", "fixture"), { recursive: true }),
+      mkdir(temporaryDirectory, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(projectPath, "source.txt"), "session start\n"),
+      writeFile(join(projectPath, "node_modules", "fixture", "index.js"), "dependency\n"),
+    ]);
+
+    const [codexWorkspace, claudeWorkspace, antigravityWorkspace] =
+      await prepareTestSandboxes(session, ["codex", "claude", "antigravity"], {
+        temporaryDirectory,
+        copy: async (source, destination, options) => {
+          copyCalls.push([source, destination]);
+          return cp(source, destination, options);
+        },
+        validateSymlinks: async () => {
+          validationCalls += 1;
+        },
+        materializeContext: async (_project, workspace) => {
+          materializationCalls += 1;
+          await mkdir(join(workspace, ".roundtable-context"));
+          await writeFile(
+            join(workspace, ".roundtable-context", "metadata.json"),
+            '{"snapshot":"session-start"}\n',
+          );
+        },
+      });
+
+    assert.equal(copyCalls.length, 4);
+    assert.equal(copyCalls[0][0], projectPath);
+    assert.ok(copyCalls.slice(1).every(([source]) => source === session.testSandboxSource.workspace));
+    assert.equal(validationCalls, 1);
+    assert.equal(materializationCalls, 1);
+    assert.equal(
+      await readFile(join(codexWorkspace, ".roundtable-context", "metadata.json"), "utf8"),
+      '{"snapshot":"session-start"}\n',
+    );
+    assert.equal(
+      await readFile(join(claudeWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
+      "dependency\n",
+    );
+
+    await writeFile(join(projectPath, "source.txt"), "host changed\n");
+    const broker = await createDisposableTestSandbox(session, "claude-broker", {
+      temporaryDirectory,
+    });
+    assert.equal(await readFile(join(codexWorkspace, "source.txt"), "utf8"), "session start\n");
+    assert.equal(await readFile(join(antigravityWorkspace, "source.txt"), "utf8"), "session start\n");
+    assert.equal(await readFile(join(broker.workspace, "source.txt"), "utf8"), "host changed\n");
+    await removeDisposableTestSandbox(broker);
+
+    const sourceRoot = session.testSandboxSource.root;
+    await cleanupTestSandboxes(session);
+    await assert.rejects(access(sourceRoot));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("keeps cancellation and the injected copy seam on prepared role clones", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-prepared-clone-cancel-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath, stopRequested: false };
+  try {
+    await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+    await writeFile(join(projectPath, "source.txt"), "source\n");
+    await prepareTestSandboxes(session, [], { temporaryDirectory });
+
+    await assert.rejects(
+      ensureTestSandbox(session, "codex", {
+        temporaryDirectory,
+        preparedSource: session.testSandboxSource,
+        copy: async (source, destination, options) => {
+          assert.equal(await options.filter(source, destination), true);
+          session.stopRequested = true;
+          await options.filter(join(source, "next-file"), join(destination, "next-file"));
+        },
+      }),
+      (error) => error?.code === "USER_STOP",
+    );
+  } finally {
+    await cleanupTestSandboxes(session);
     await rm(fixtureRoot, { recursive: true, force: true });
   }
 });

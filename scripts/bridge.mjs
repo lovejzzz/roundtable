@@ -43,6 +43,7 @@ import {
   createDisposableTestSandbox,
   ensureTestSandbox,
   getTestSandboxInfo,
+  prepareTestSandboxes,
   removeDisposableTestSandbox,
   resolveCredentialPathAliases,
   sweepStaleTestSandboxes,
@@ -725,12 +726,10 @@ const agentRunner = {
       ? { ...session.processLiveness }
       : { state: "preparing" };
   },
-  prepare(session) {
-    return Promise.all(
-      ["codex", "claude", "antigravity"].map((role) =>
-        ensureTestSandbox(session, role),
-      ),
-    );
+  prepare(session, { onStage } = {}) {
+    return prepareTestSandboxes(session, ["codex", "claude", "antigravity"], {
+      onStage,
+    });
   },
   run({ session, role, prompt, purpose }) {
     if (role === "codex") return runCodex(session, prompt, purpose);

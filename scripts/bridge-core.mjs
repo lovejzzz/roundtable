@@ -826,6 +826,19 @@ export function createBridge({
     });
   }
 
+  function preparationNote({ stage = "validating-source", role = "" } = {}) {
+    if (stage === "cloning-role" && AGENT_NAMES[role]) {
+      return `Cloning the validated source for ${AGENT_NAMES[role]}.`;
+    }
+    if (stage === "source-ready") {
+      return "The validated preparation source is ready.";
+    }
+    if (stage === "ready") {
+      return "All isolated role workspaces are ready.";
+    }
+    return "Validating one isolated source for the role workspaces.";
+  }
+
   function waitForFailedTurnAction(session) {
     return new Promise((resolve) => {
       const gate = {
@@ -1129,8 +1142,25 @@ export function createBridge({
 
   async function runSession(session) {
     try {
-      await agentRunner.prepare?.(session);
-      session.phase = session.stopRequested ? "stopping" : "running";
+      setPhase(session, "preparing", {
+        stage: "validating-source",
+        note: preparationNote(),
+      });
+      await agentRunner.prepare?.(session, {
+        onStage(update = {}) {
+          if (session.stopRequested || session.phase === "stopping") return;
+          setPhase(session, "preparing", {
+            stage: update.stage || "validating-source",
+            note: preparationNote(update),
+          });
+        },
+      });
+      setPhase(session, session.stopRequested ? "stopping" : "running", {
+        stage: session.stopRequested ? "stopping" : "ready",
+        note: session.stopRequested ? "Stopping workspace preparation." : preparationNote({
+          stage: "ready",
+        }),
+      });
       const sealedMessages = Object.freeze([...session.messages]);
       session.sealedBatch = {
         phase: "sealed-opening",
@@ -1850,9 +1880,11 @@ export function createBridge({
           outcome: null,
           lastStatus: {
             type: "session.status",
-            status: "running",
+            status: "preparing",
             turn: 0,
             totalTurns: rounds * AGENT_ROLES.length,
+            stage: "queued",
+            note: "Preparing isolated role workspaces.",
           },
         };
         sessions.set(id, session);
@@ -1947,7 +1979,7 @@ export function createBridge({
         }
 
         if (request.method === "POST" && action === "extend") {
-          if (!["starting", "running", "failed", "retrying"].includes(session.phase)) {
+          if (!["starting", "preparing", "running", "failed", "retrying"].includes(session.phase)) {
             sendJson(request, response, 409, {
               error: "Rounds can only be added while the discussion is still live.",
             });
@@ -1975,7 +2007,7 @@ export function createBridge({
           session.totalTurns += additionalRounds * AGENT_ROLES.length;
           emit(session, {
             type: "session.status",
-            status: session.phase === "starting" ? "running" : session.phase,
+            status: session.phase === "starting" ? "preparing" : session.phase,
             speaker: session.lastStatus?.speaker,
             turn: session.completedTurns,
             totalTurns: session.totalTurns,

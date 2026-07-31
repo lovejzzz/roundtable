@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.30**
+Current release: **v0.0.0.31**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -31,6 +31,12 @@ open cannot block a new meeting. Direct launcher users may set
 to three minutes by default so a healthy first compile is not mistaken for a
 dead launch; set `ROUNDTABLE_STARTUP_TIMEOUT_MS` from 1000 through 900000 to
 override that deadline.
+
+The web dev server binds the selected port strictly. Startup supervision tracks
+bridge readiness, web readiness, and child-process state separately, so a
+living web child that never binds its port is reported as such instead of being
+confused with a dead process or an unhealthy bridge. Failure still uses bounded
+whole-process-tree cleanup.
 
 ## Use it from another Codex project
 
@@ -95,7 +101,7 @@ cleanup.
    `-high` lock the slider to that required level so the room cannot start an
    invalid CLI route.
 5. Round one is a **sealed opening**: Codex, Claude, and Antigravity inspect
-   separate disposable copies of the same project against one immutable input,
+   separate disposable copies of one validated session-start source against one immutable input,
    without seeing peer answers. Later rounds reveal the labeled openings for
    cross-examination in a deterministic reader-specific order. Every message
    records its model, reasoning effort, phase, input hash, and context coverage.
@@ -129,6 +135,13 @@ and records included, shortened, and omitted labels on the resulting message.
 The room and Markdown export surface partial input instead of silently implying
 complete coverage. Completion synthesis separately preserves coverage across
 every labeled message within its larger budget.
+
+Role workspaces deliberately retain their session-start source and Git context.
+Brokered checks deliberately use a fresh request-scoped copy of the current host
+project. If the host project changes during a meeting, an agent can therefore
+retain an older review diff while a later broker check sees newer host files;
+v0.0.0.31 surfaces preparation truthfully but does not claim to detect or
+refresh that staleness automatically.
 
 Agent messages and repository-derived text enter later prompts only inside
 escaped, explicitly untrusted data boundaries. The control prompt says that

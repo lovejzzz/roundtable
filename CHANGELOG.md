@@ -4,6 +4,49 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.31] — 2026-07-31
+
+### Discussion
+
+A six-round self-review used Roundtable against its own source. The first
+source-backed launch left a living web child without a bound port and then
+removed a healthy bridge at the aggregate deadline. The first room also spent
+two minutes traversing the dependency-heavy project three times while exposing
+only an opaque `starting` phase. The audited consensus rejected a broad finding
+database, fabricated snapshot IDs, adaptive stopping, specialist personas, and
+new write authority. Existing evidence provenance and copy-on-write behavior
+were already present; the reproducible gaps were supervision, repeated
+validation work, and preparation visibility.
+
+### Implementation
+
+- Web startup binds the selected port strictly. Launcher readiness now tracks
+  bridge readiness, web readiness, web-child state, and port state separately,
+  then reports the component combination before bounded cleanup.
+- Cached role workspaces clone from one validated session-start source. Source
+  filtering, symlink containment, and Git-context materialization run once;
+  dependency content remains available for offline checks.
+- Clone cancellation, deadlines, the injected copy seam, role isolation, and
+  the existing copy-on-write mode remain intact.
+- Request-scoped broker checks still copy the current host project afresh. The
+  documented boundary is explicit: cached roles can retain older Git context
+  if the host changes during a meeting.
+- The bridge and UI now expose a real `preparing` lifecycle with truthful
+  `validating-source`, `cloning-role`, and `ready` stages without invented
+  percentages.
+
+### Verification
+
+- Launcher coverage reproduces a healthy bridge beside a living, unbound web
+  child and proves strict selected-port startup.
+- Sandbox coverage proves one validation/materialization pass, three isolated
+  role clones, retained dependencies, clone cancellation, source cleanup, and
+  fresh broker visibility after a host-project mutation.
+- Bridge and accessibility coverage prove preparation-stage reconnect state,
+  stop-before-agent behavior, and truthful live announcements.
+- The full bridge/runtime suite, production lint, production build, rendered
+  HTML checks, syntax checks, and whitespace validation pass.
+
 ## [v0.0.0.30] — 2026-07-31
 
 ### Discussion

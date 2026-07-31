@@ -53,6 +53,19 @@ test("announces a reply using the bridge completed-turn count", () => {
   );
 });
 
+test("announces truthful workspace preparation without invented progress", () => {
+  assert.equal(
+    liveStatusText({
+      mode: "session",
+      status: "preparing",
+      preparationStage: "cloning-role",
+      preparationNote: "Cloning the validated source for Claude.",
+      totalTurns: 6,
+    }),
+    "Preparing isolated workspaces: cloning role. Cloning the validated source for Claude.",
+  );
+});
+
 test("distinguishes active long reasoning from a dead process", () => {
   assert.equal(formatLivenessDuration(0), "0s");
   assert.equal(formatLivenessDuration(79), "1m 19s");

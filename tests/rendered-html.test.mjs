@@ -87,6 +87,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /Reported by/);
   assert.match(page, /Agent-reported, not independently verified/i);
   assert.match(page, /Verified by Roundtable broker/i);
+  assert.match(page, /PREPARING ISOLATED WORKSPACES/i);
+  assert.match(page, /Preparing one validated source for the role workspaces/i);
+  assert.match(page, /snapshot\.phase === "preparing"/);
   assert.match(page, /separate local-only network sandbox/i);
   assert.match(page, /Claude has no shell access/i);
   assert.match(page, /Claude(?:&apos;|')s model process remains read-only/i);

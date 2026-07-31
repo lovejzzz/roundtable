@@ -261,12 +261,14 @@ type SessionEvent =
       turn?: number;
       totalTurns?: number;
       note?: string;
+      stage?: string;
       failedTurn?: FailedTurn | null;
     };
 
 type SessionStatus =
   | "idle"
   | "connecting"
+  | "preparing"
   | "running"
   | "failed"
   | "retrying"
@@ -833,6 +835,8 @@ export default function Home() {
   const [dissentJudgments, setDissentJudgments] = useState<Record<string, DissentJudgment>>({});
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
   const [liveness, setLiveness] = useState<SessionLiveness | null>(null);
+  const [statusStage, setStatusStage] = useState("");
+  const [statusNote, setStatusNote] = useState("");
   const [historyWarning, setHistoryWarning] = useState("");
   const [historyRecords, setHistoryRecords] = useState<HistoryRecord[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -879,7 +883,8 @@ export default function Home() {
       : "session";
   const active =
     !viewingHistory &&
-    (status === "running" ||
+    (status === "preparing" ||
+      status === "running" ||
       status === "failed" ||
       status === "retrying" ||
       status === "reviewing");
@@ -924,6 +929,8 @@ export default function Home() {
     state: liveness?.state || "",
     elapsedSeconds: elapsedLivenessSeconds,
     quietSeconds: quietLivenessSeconds,
+    preparationStage: statusStage,
+    preparationNote: statusNote,
   });
   const liveStatus = liveStatusText({
     mode: roomMode,
@@ -1117,6 +1124,8 @@ export default function Home() {
     setDissentJudgments(snapshot.dissentJudgments || {});
     setFailedTurn(snapshot.failedTurn || snapshot.lastStatus.failedTurn || null);
     setLiveness(snapshot.liveness || null);
+    setStatusStage(snapshot.lastStatus.stage || "");
+    setStatusNote(snapshot.lastStatus.note || "");
     setHistoryWarning(snapshot.historyWarning || "");
     setViewingHistory(archived);
     setIsPreview(false);
@@ -1225,6 +1234,7 @@ export default function Home() {
         snapshot.phase === "failed" ||
         snapshot.phase === "retrying" ||
         snapshot.phase === "reviewing" ||
+        snapshot.phase === "preparing" ||
         snapshot.phase === "starting" ||
         snapshot.phase === "stopping" ||
         snapshot.phase === "synthesizing"
@@ -1344,6 +1354,8 @@ export default function Home() {
       }
       setStatus(update.status);
       setSpeaker(update.speaker || null);
+      setStatusStage(update.stage || "");
+      setStatusNote(update.note || "");
       if ("failedTurn" in update) setFailedTurn(update.failedTurn || null);
       if (typeof update.turn === "number") setTurn(update.turn);
       if (typeof update.totalTurns === "number") setTotalTurns(update.totalTurns);
@@ -1485,13 +1497,15 @@ export default function Home() {
     setDissentJudgments({});
     setFailedTurn(null);
     setLiveness(null);
+    setStatusStage("queued");
+    setStatusNote("Preparing isolated role workspaces.");
     setHistoryWarning(data.historyWarning || "");
     setViewingHistory(false);
     setIsPreview(false);
     const generation = beginSessionOwnership(data.id);
     setSessionId(data.id);
     sessionStorage.setItem("roundtable.sessionId", data.id);
-    setStatus("running");
+    setStatus("preparing");
     setLiveness(null);
     setTurn(0);
     setTotalTurns(Number(rounds) * 3);
@@ -1538,6 +1552,8 @@ export default function Home() {
     setDissentJudgments({});
     setFailedTurn(null);
     setLiveness(null);
+    setStatusStage("");
+    setStatusNote("");
     setHistoryWarning("");
     setViewingHistory(false);
     setIsPreview(true);
@@ -1949,6 +1965,8 @@ export default function Home() {
             ? "SYNTHESIZING OUTCOME"
             : status === "reviewing"
               ? `${speaker ? AGENT_LABELS[speaker].toUpperCase() : "AGENT"} REVIEWING DISSENT`
+            : status === "preparing"
+              ? "PREPARING ISOLATED WORKSPACES"
             : status === "failed"
               ? `TURN ${(failedTurn?.turn ?? turn) + 1} PAUSED`
               : status === "retrying"
@@ -2272,6 +2290,8 @@ export default function Home() {
                 ? "Building outcome"
                 : status === "reviewing"
                   ? "Auditing outcome"
+                : status === "preparing"
+                  ? "Preparing workspaces"
                 : status === "failed"
                   ? "Turn paused"
                   : status === "retrying"
@@ -2533,7 +2553,8 @@ export default function Home() {
                   </dd>
                 </div>
               </dl>
-              {roomMode === "session" && status === "running" && (
+              {roomMode === "session" &&
+                (status === "preparing" || status === "running") && (
                 <form className="add-rounds-control" onSubmit={addDiscussionRounds}>
                   <label htmlFor="rounds-to-add">Add rounds</label>
                   <div>
@@ -2751,6 +2772,27 @@ export default function Home() {
                 </div>
               </section>
             )}
+            {status === "preparing" && (
+              <article className="message thinking preparation">
+                <div className="message-meta">
+                  <span className="agent-glyph preparation-glyph">P</span>
+                  <div>
+                    <strong>Preparing isolated workspaces</strong>
+                    <small>{statusStage ? statusStage.replaceAll("-", " ").toUpperCase() : "STARTING"}</small>
+                  </div>
+                </div>
+                <div className="thinking-state">
+                  <div className="thinking-line" aria-hidden="true">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                  <p className="process-liveness is-active">
+                    {statusNote || "Preparing one validated source for the role workspaces."}
+                  </p>
+                </div>
+              </article>
+            )}
             {speaker && (
               <article className={`message thinking ${speaker}`}>
                 <div className="message-meta">
@@ -2814,6 +2856,8 @@ export default function Home() {
                       ? "Add a priority, correction, or question…"
                       : status === "failed" || status === "retrying"
                         ? "Retry or end this turn before adding another note…"
+                        : status === "preparing"
+                          ? "Preparing isolated workspaces before the first turn…"
                         : status === "synthesizing"
                           ? "The discussion is complete while Codex builds the brief…"
                           : active

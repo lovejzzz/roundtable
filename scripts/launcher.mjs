@@ -175,6 +175,13 @@ export function roundtableWebOrigins(webPort) {
   return [`http://localhost:${webPort}`, `http://127.0.0.1:${webPort}`];
 }
 
+export function buildWebDevArgs(webPort) {
+  if (!Number.isInteger(webPort) || webPort < 1 || webPort > 65_535) {
+    throw new Error("Roundtable web startup requires a valid port.");
+  }
+  return ["run", "dev", "--", "--port", String(webPort), "--strictPort"];
+}
+
 export function createDeferred() {
   let resolve;
   let reject;
@@ -258,6 +265,7 @@ export async function waitForWebHealth({
   signal,
 }) {
   const startedAt = Date.now();
+  let portState = "unbound";
   while (Date.now() - startedAt < timeoutMs) {
     if (signal?.aborted) throw abortError(signal);
     const remainingMs = timeoutMs - (Date.now() - startedAt);
@@ -269,18 +277,23 @@ export async function waitForWebHealth({
         signal,
       );
       if (response.ok) return;
+      portState = `responding-http-${response.status}`;
     } catch {
       if (signal?.aborted) throw abortError(signal);
+      portState = "unbound";
     }
 
     if (Date.now() - startedAt >= timeoutMs) break;
     await delay(Math.min(retryMs, timeoutMs - (Date.now() - startedAt)), signal);
   }
 
-  throw new Error(
+  const error = new Error(
     `The Roundtable web app on port ${port} did not become ready within ` +
       `${Math.ceil(timeoutMs / 1_000)} seconds.`,
   );
+  error.code = "WEB_NOT_READY";
+  error.portState = portState;
+  throw error;
 }
 
 export async function waitForBridgeHealth({
@@ -356,11 +369,32 @@ export async function waitForLauncherReadiness({
   failure,
   timeoutMs = LAUNCHER_STARTUP_TIMEOUT_MS,
   onReady = () => {},
+  componentState = {
+    bridge: { process: "unknown", readiness: "pending" },
+    web: { process: "unknown", readiness: "pending", port: "unknown" },
+  },
 }) {
+  const observe = (promise, state) =>
+    Promise.resolve(promise).then(
+      (value) => {
+        state.readiness = "ready";
+        if (state === componentState.web) state.port = "ready";
+        return value;
+      },
+      (error) => {
+        state.readiness = "failed";
+        if (state === componentState.web && error?.portState) {
+          state.port = error.portState;
+        }
+        throw error;
+      },
+    );
+  const observedBridge = observe(bridgeReady, componentState.bridge);
+  const observedWeb = observe(webReady, componentState.web);
   let timeout;
   try {
     await Promise.race([
-      Promise.all([bridgeReady, webReady]),
+      Promise.all([observedBridge, observedWeb]),
       failure,
       new Promise((_, reject) => {
         timeout = setTimeout(
@@ -376,6 +410,17 @@ export async function waitForLauncherReadiness({
       }),
     ]);
     onReady();
+  } catch (cause) {
+    const error = cause instanceof Error ? cause : new Error("Roundtable startup failed.");
+    const bridgeSummary = `bridge=${componentState.bridge.readiness}`;
+    const webProcess = `web process=${componentState.web.process}`;
+    const webPort = `web port=${componentState.web.port}`;
+    const diagnosed = new Error(
+      `Roundtable startup failed (${bridgeSummary}; ${webProcess}; ${webPort}). ${error.message}`,
+      { cause: error },
+    );
+    diagnosed.code = error.code || "STARTUP_FAILED";
+    throw diagnosed;
   } finally {
     clearTimeout(timeout);
   }
