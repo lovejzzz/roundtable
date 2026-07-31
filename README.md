@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.27**
+Current release: **v0.0.0.29**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -27,7 +27,10 @@ reports the failing stage instead of leaving a partial room running. Press
 `Control-C` in the terminal to stop both. The personal plugin selects available
 local bridge and web ports for every launch, so a completed room that is still
 open cannot block a new meeting. Direct launcher users may set
-`ROUNDTABLE_BRIDGE_PORT` and `ROUNDTABLE_WEB_PORT` explicitly.
+`ROUNDTABLE_BRIDGE_PORT` and `ROUNDTABLE_WEB_PORT` explicitly. Startup waits up
+to three minutes by default so a healthy first compile is not mistaken for a
+dead launch; set `ROUNDTABLE_STARTUP_TIMEOUT_MS` from 1000 through 900000 to
+override that deadline.
 
 ## Use it from another Codex project
 
@@ -74,8 +77,9 @@ discussion. Every startup command probe has a 15-second deadline and a 64 KiB
 combined-output limit. A stalled or noisy probe is terminated, its captured
 output is discarded, and the affected CLI fails closed with a fixed labeled
 diagnostic; ordinary nonzero authentication results retain their existing login
-guidance. The launcher keeps its separate 60-second aggregate deadline and
-whole-process-tree cleanup.
+guidance. The launcher keeps its separate three-minute aggregate deadline (or
+the bounded `ROUNDTABLE_STARTUP_TIMEOUT_MS` override) and whole-process-tree
+cleanup.
 
 ## How a discussion works
 

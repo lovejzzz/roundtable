@@ -8,6 +8,7 @@ import {
   LAUNCHER_SHUTDOWN_GRACE_MS,
   parseTalkArguments,
   resolveBridgePort,
+  resolveLauncherStartupTimeout,
   resolveWebPort,
   startRoundtableSession,
   stopStartedProcesses,
@@ -43,6 +44,7 @@ Options:
 const token = randomBytes(24).toString("base64url");
 const bridgePort = resolveBridgePort();
 const webPort = resolveWebPort();
+const startupTimeoutMs = resolveLauncherStartupTimeout();
 const bridgeUrl = `http://127.0.0.1:${bridgePort}`;
 const children = new Set();
 const startupFailure = createDeferred();
@@ -108,17 +110,20 @@ try {
     bridgeUrl,
     token,
     port: bridgePort,
+    timeoutMs: startupTimeoutMs,
     signal: startupController.signal,
   });
   const webReady = waitForWebHealth({
     webUrl: `http://localhost:${webPort}/`,
     port: webPort,
+    timeoutMs: startupTimeoutMs,
     signal: startupController.signal,
   });
   await waitForLauncherReadiness({
     bridgeReady,
     webReady,
     failure: startupFailure.promise,
+    timeoutMs: startupTimeoutMs,
     onReady: () => {
       ready = true;
     },

@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { isAbsolute, resolve } from "node:path";
 
-export const LAUNCHER_STARTUP_TIMEOUT_MS = 60_000;
+export const LAUNCHER_STARTUP_TIMEOUT_MS = 180_000;
+export const LAUNCHER_STARTUP_TIMEOUT_MAX_MS = 900_000;
 export const LAUNCHER_SHUTDOWN_GRACE_MS = 2_000;
 export const LAUNCHER_FORCE_WAIT_MS = 1_000;
 export const LAUNCHER_TOPIC_MAX_CHARACTERS = 4_000;
@@ -151,6 +152,20 @@ export function resolveWebPort(environment = process.env) {
     );
   }
   return port;
+}
+
+export function resolveLauncherStartupTimeout(environment = process.env) {
+  const rawTimeout = environment.ROUNDTABLE_STARTUP_TIMEOUT_MS;
+  if (rawTimeout == null || String(rawTimeout).trim() === "") {
+    return LAUNCHER_STARTUP_TIMEOUT_MS;
+  }
+  const timeoutMs = Number(rawTimeout);
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > LAUNCHER_STARTUP_TIMEOUT_MAX_MS) {
+    throw new Error(
+      `ROUNDTABLE_STARTUP_TIMEOUT_MS must be an integer from 1000 through ${LAUNCHER_STARTUP_TIMEOUT_MAX_MS}; received “${rawTimeout}”.`,
+    );
+  }
+  return timeoutMs;
 }
 
 export function roundtableWebOrigins(webPort) {

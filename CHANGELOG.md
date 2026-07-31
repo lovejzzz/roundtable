@@ -4,6 +4,35 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.29] — 2026-07-31
+
+### Discussion
+
+During a real Scion code audit, the bridge became healthy but the Roundtable
+web app’s first compile exceeded the fixed 60-second launcher deadline. The
+launcher then stopped both healthy process trees. Agent liveness correctly
+distinguished long, quiet reasoning from a dead CLI process once the room was
+running; startup needed the same patience without becoming unbounded.
+
+### Implementation
+
+- The supervised launcher now allows three minutes for bridge and web
+  readiness by default.
+- Direct launchers may set `ROUNDTABLE_STARTUP_TIMEOUT_MS` from 1,000 through
+  900,000 milliseconds; invalid values fail closed.
+- One resolved deadline is threaded through bridge health, web health, and the
+  aggregate launcher transaction, so the three checks cannot disagree.
+
+### Verification
+
+- Launcher coverage proves the three-minute default, a valid override, and
+  rejection of too-small or nonnumeric values.
+- The 123-test bridge/runtime suite and the focused 18-test launcher suite pass.
+- Syntax checks for the changed launcher modules and whitespace validation
+  pass. Production lint/build were attempted separately, but this host's
+  cloud-backed source and dependency reads stalled while retained Roundtable
+  rooms remained live, so this release makes no fresh lint/build claim.
+
 ## [v0.0.0.28] — 2026-07-31
 
 ### Discussion

@@ -7,6 +7,7 @@ import {
   createDeferred,
   parseTalkArguments,
   resolveBridgePort,
+  resolveLauncherStartupTimeout,
   resolveWebPort,
   roundtableWebOrigins,
   signalStartedProcessTree,
@@ -17,6 +18,19 @@ import {
   waitForLauncherReadiness,
   waitForWebHealth,
 } from "../scripts/launcher.mjs";
+
+test("launcher startup patience defaults to three minutes and supports a bounded override", () => {
+  assert.equal(resolveLauncherStartupTimeout({}), 180_000);
+  assert.equal(resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "240000" }), 240_000);
+  assert.throws(
+    () => resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "999" }),
+    /integer from 1000 through 900000/,
+  );
+  assert.throws(
+    () => resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "forever" }),
+    /integer from 1000 through 900000/,
+  );
+});
 
 test("talk launch options prefill another project without changing the caller cwd", () => {
   assert.deepEqual(
