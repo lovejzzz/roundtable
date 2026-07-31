@@ -289,13 +289,22 @@ test("materializes sanitized Git branch and working-tree evidence without copyin
       await readFile(join(workspace, ".roundtable-context", "metadata.json"), "utf8"),
     );
     const patch = await readFile(join(workspace, ".roundtable-context", "changes.patch"), "utf8");
+    const headPatch = await readFile(
+      join(workspace, ".roundtable-context", "head-changes.patch"),
+      "utf8",
+    );
 
     assert.equal(metadata.branch, "feature/trust-audit");
     assert.equal(metadata.baseRef, "main");
+    assert.match(metadata.parentCommit, /^[a-f0-9]{40}$/);
     assert.equal(metadata.committedChangesIncluded, true);
+    assert.equal(metadata.headChangesIncluded, true);
     assert.equal(metadata.workingTreeChangesIncluded, true);
     assert.match(patch, /branch change/);
     assert.match(patch, /working change/);
+    assert.match(headPatch, /branch change/);
+    assert.doesNotMatch(headPatch, /working change/);
+    assert.match(headPatch, new RegExp(`# Parent ${metadata.parentCommit}`));
     await assert.rejects(access(join(workspace, ".git")));
   } finally {
     await cleanupTestSandboxes(session);

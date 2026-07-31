@@ -518,11 +518,12 @@ silently changing meaning in the copy.
 
 For Git projects, each disposable copy also receives a generated
 `.roundtable-context` directory. It contains the detected branch/base metadata,
-recent log and status text, and a patch combining committed branch changes with
-tracked working-tree changes. Agents are told to inspect this evidence before
-reviewing a PR or release. The snapshot never contains `.git`, Git configuration,
-or untracked file contents; if Git context cannot be produced, sandbox creation
-continues with the copied source.
+recent log and status text, a patch combining committed branch changes with
+tracked working-tree changes, and `head-changes.patch`, which isolates the exact
+committed `HEAD^..HEAD` change with its parent recorded in metadata. Agents are
+told to inspect this evidence before reviewing a PR or release. The snapshot
+never contains `.git`, Git configuration, or untracked file contents; if Git
+context cannot be produced, sandbox creation continues with the copied source.
 
 When a discussion has prompt files, Roundtable restores the entire private
 attachment namespace from immutable in-memory payloads before every participant

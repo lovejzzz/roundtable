@@ -64,6 +64,12 @@ export async function materializeGitContext(projectPath, workspace) {
     ]).catch(() => ""),
     resolveBaseRef(projectPath),
   ]);
+  const parentCommit = await runGit(projectPath, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    `${head}^`,
+  ]).catch(() => "");
   const mergeBase = base
     ? await runGit(projectPath, ["merge-base", base.commit, head]).catch(
         () => "",
@@ -77,6 +83,16 @@ export async function materializeGitContext(projectPath, workspace) {
         "--find-renames",
         "--unified=40",
         `${mergeBase}...${head}`,
+      ]).catch(() => "")
+    : "";
+  const headDiff = parentCommit
+    ? await runGit(projectPath, [
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--find-renames",
+        "--unified=40",
+        `${parentCommit}..${head}`,
       ]).catch(() => "")
     : "";
   const workingDiff = await runGit(projectPath, [
@@ -94,10 +110,12 @@ export async function materializeGitContext(projectPath, workspace) {
     schemaVersion: 1,
     branch,
     head,
+    parentCommit,
     baseRef: base?.ref || "",
     baseCommit: base?.commit || "",
     mergeBase,
     committedChangesIncluded: Boolean(committedDiff),
+    headChangesIncluded: Boolean(headDiff),
     workingTreeChangesIncluded: Boolean(workingDiff),
   };
   const patchSections = [
@@ -113,6 +131,14 @@ export async function materializeGitContext(projectPath, workspace) {
     workingDiff || "# No tracked working tree changes.",
     "",
   ];
+  const headPatchSections = [
+    "# Roundtable exact HEAD change context",
+    `# HEAD ${head}`,
+    `# Parent ${parentCommit || "(unavailable)"}`,
+    "",
+    headDiff || "# No committed changes from the immediate parent.",
+    "",
+  ];
   await Promise.all([
     writeFile(
       join(contextDirectory, "metadata.json"),
@@ -122,6 +148,11 @@ export async function materializeGitContext(projectPath, workspace) {
     writeFile(
       join(contextDirectory, "changes.patch"),
       patchSections.join("\n"),
+      "utf8",
+    ),
+    writeFile(
+      join(contextDirectory, "head-changes.patch"),
+      headPatchSections.join("\n"),
       "utf8",
     ),
     writeFile(
