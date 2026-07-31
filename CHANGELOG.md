@@ -4,6 +4,32 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.30] — 2026-07-31
+
+### Discussion
+
+The Scion follow-up room reached consensus, but its audited brief revision
+failed three times because the agents assigned a supported follow-up to the
+"CourseMapper team" rather than one of Roundtable's five exact owner labels.
+The original brief remained safe, but the supported action was lost.
+
+### Implementation
+
+- Initial synthesis keeps strict action-owner validation.
+- The revision prompt repeats the exact owner enum and tells agents to use
+  `Unassigned` for project or team labels.
+- Audited revisions safely canonicalize an unknown owner to `Unassigned`
+  instead of discarding the entire revised brief.
+
+### Verification
+
+- Parser coverage proves initial synthesis still rejects an unknown owner and
+  revision mode canonicalizes it.
+- The audited-revision integration test uses a real project-team owner, retains
+  the action as `Unassigned`, and verifies the strengthened prompt.
+- The full 123-test bridge/runtime suite, syntax checks, and whitespace
+  validation pass.
+
 ## [v0.0.0.29] — 2026-07-31
 
 ### Discussion

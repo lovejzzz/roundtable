@@ -778,6 +778,13 @@ test("builds coverage-aware outcome input and validates fenced JSON", () => {
       ),
     /invalid action item/,
   );
+  assert.deepEqual(
+    extractOutcomeJson(
+      '{"decision":"x","rationale":"y","actions":[{"owner":"CourseMapper team","text":"Track the residual."}],"openQuestions":[],"consensus":true}',
+      { unknownActionOwner: "unassigned" },
+    ).actions,
+    [{ owner: "Unassigned", text: "Track the residual." }],
+  );
 });
 
 test("hard-caps transcript context and surfaces stable coverage metadata", () => {
@@ -1287,7 +1294,7 @@ test("falls back across synthesizers and preserves one audited brief revision", 
         return JSON.stringify({
           decision: "Revised decision",
           rationale: "The supported audit concern is now represented.",
-          actions: [],
+          actions: [{ owner: "CourseMapper team", text: "Track the residual." }],
           openQuestions: ["Resolve the risk preserved in M1."],
           consensus: false,
         });
@@ -1325,6 +1332,9 @@ test("falls back across synthesizers and preserves one audited brief revision", 
     assert.equal(snapshot.outcome.audit.reviews.antigravity.status, "completed");
     assert.equal(snapshot.outcome.revision.status, "completed");
     assert.equal(snapshot.outcome.revision.revisedBy, "Claude");
+    assert.deepEqual(snapshot.outcome.actions, [
+      { owner: "Unassigned", text: "Track the residual." },
+    ]);
     assert.deepEqual(
       snapshot.outcome.synthesisAttempts.map((attempt) => [
         attempt.role,
@@ -1344,6 +1354,10 @@ test("falls back across synthesizers and preserves one audited brief revision", 
     assert.match(
       calls.find((call) => call.purpose === "revision").prompt,
       /one permitted revision/i,
+    );
+    assert.match(
+      calls.find((call) => call.purpose === "revision").prompt,
+      /owner must be exactly one of/i,
     );
   } finally {
     await bridge.close();

@@ -211,7 +211,7 @@ export function extractDissentJson(raw, { validLabels = [] } = {}) {
   });
 }
 
-export function extractOutcomeJson(raw) {
+export function extractOutcomeJson(raw, { unknownActionOwner = "reject" } = {}) {
   const source = String(raw || "").trim();
   const unfenced = source
     .replace(/^```(?:json)?\s*/i, "")
@@ -236,7 +236,11 @@ export function extractOutcomeJson(raw) {
     throw new Error("The outcome is missing actions or open questions.");
   }
   const actions = parsed.actions.map((action) => {
-    const owner = String(action?.owner || "").trim();
+    const requestedOwner = String(action?.owner || "").trim();
+    const owner =
+      OUTCOME_OWNERS.has(requestedOwner) || unknownActionOwner !== "unassigned"
+        ? requestedOwner
+        : "Unassigned";
     const text = redactVisibleString(action?.text, 2_400).trim();
     if (!OUTCOME_OWNERS.has(owner) || !text) {
       throw new Error("The outcome contains an invalid action item.");
@@ -623,7 +627,9 @@ ${promptData(JSON.stringify(audits))}
 </roundtable-audit-data>
 
 Return only one JSON object with the same decision, rationale, actions, openQuestions, and
-consensus schema used by the original draft.
+consensus schema used by the original draft. Every action owner must be exactly one of:
+"You", "Codex", "Claude", "Antigravity", or "Unassigned". Use "Unassigned" for a project,
+team, or role that is not one of those five names.
 
 UNTRUSTED DISCUSSION DATA
 <roundtable-discussion-data>
@@ -1071,7 +1077,13 @@ export function createBridge({
 
   async function synthesizeWithFallback(
     session,
-    { purpose, promptForRole, preferredRoles = AGENT_ROLES, statusNote },
+    {
+      purpose,
+      promptForRole,
+      preferredRoles = AGENT_ROLES,
+      statusNote,
+      parseOutcome = extractOutcomeJson,
+    },
   ) {
     const attempts = [];
     for (const role of preferredRoles) {
@@ -1093,7 +1105,7 @@ export function createBridge({
           },
           { turn: session.completedTurns, stage: purpose },
         );
-        const parsed = extractOutcomeJson(raw);
+        const parsed = parseOutcome(raw);
         attempts.push({
           role,
           author: AGENT_NAMES[role],
@@ -1284,6 +1296,10 @@ export function createBridge({
               ),
             statusNote: (role) =>
               `${AGENT_NAMES[role]} is performing the one permitted brief revision.`,
+            parseOutcome: (raw) =>
+              extractOutcomeJson(raw, {
+                unknownActionOwner: "unassigned",
+              }),
           });
           audit.revision = revision;
           if (revision.status === "available") {
