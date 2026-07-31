@@ -28,6 +28,11 @@ import { runBrokerCapableParticipant } from "./broker-controller.mjs";
 import { createBridge } from "./bridge-core.mjs";
 import { buildClaudeInvocationArgs } from "./claude-invocation.mjs";
 import { createHistoryStore } from "./history-store.mjs";
+import {
+  buildRoundtableUrl,
+  resolveWebPort,
+  roundtableWebOrigins,
+} from "./launcher.mjs";
 import { materializePromptAttachments } from "./prompt-attachments.mjs";
 import {
   buildCodexPermissionArgs,
@@ -56,6 +61,8 @@ import {
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
+const webPort = resolveWebPort();
+const allowedOrigins = roundtableWebOrigins(webPort);
 const token = process.env.ROUNDTABLE_BRIDGE_TOKEN || randomBytes(24).toString("base64url");
 const homeDirectory = homedir();
 const codexHome = process.env.CODEX_HOME
@@ -749,6 +756,7 @@ const { server } = createBridge({
   agentRunner,
   resolveProject,
   historyStore,
+  allowedOrigins,
 });
 
 server.listen(port, host, () => {
@@ -770,7 +778,11 @@ server.listen(port, host, () => {
   console.log("");
   console.log("  Open the app with:");
   console.log(
-    `  http://localhost:3000/?bridge=${encodeURIComponent(`http://${host}:${port}`)}&token=${encodeURIComponent(token)}`,
+    `  ${buildRoundtableUrl({
+      appOrigin: `${allowedOrigins[0]}/`,
+      bridgeUrl: `http://${host}:${port}`,
+      token,
+    })}`,
   );
   console.log("");
 });

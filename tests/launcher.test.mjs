@@ -8,6 +8,7 @@ import {
   parseTalkArguments,
   resolveBridgePort,
   resolveWebPort,
+  roundtableWebOrigins,
   signalStartedProcessTree,
   startRoundtableSession,
   stopStartedProcesses,
@@ -67,6 +68,14 @@ test("connected room URL carries encoded launch context", () => {
   assert.equal(url.searchParams.get("topic"), "Review auth & release?");
   assert.equal(url.searchParams.get("rounds"), "2");
   assert.equal(url.searchParams.get("session"), "session-123");
+});
+
+test("alternate web ports produce matching browser origins", () => {
+  assert.deepEqual(roundtableWebOrigins(3003), [
+    "http://localhost:3003",
+    "http://127.0.0.1:3003",
+  ]);
+  assert.throws(() => roundtableWebOrigins(0), /valid port/);
 });
 
 test("auto-start uses the requested launch context and configured CLI defaults", async () => {
