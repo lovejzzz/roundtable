@@ -5,6 +5,7 @@ import {
   formatLivenessDuration,
   livenessDetailText,
   liveStatusText,
+  pendingSteeringPresentation,
 } from "../lib/live-status.mjs";
 
 test("announces the active agent with one-based turn wording", () => {
@@ -193,4 +194,22 @@ test("derives identical text for an identical recovered snapshot", () => {
 test("uses instant auto-scroll when reduced motion is requested", () => {
   assert.equal(autoScrollBehavior(true), "auto");
   assert.equal(autoScrollBehavior(false), "smooth");
+});
+
+test("describes queued steering truthfully before and after a room ends", () => {
+  assert.deepEqual(pendingSteeringPresentation(), {
+    title: "Queued for the next agent turn",
+    description:
+      "These notes are waiting for the next eligible agent turn and are not part of the shared transcript yet.",
+    transcriptDescription:
+      "These steering notes are queued for delivery and are not part of the shared transcript yet.",
+  });
+  assert.equal(
+    pendingSteeringPresentation({ terminal: true }).title,
+    "Queued, never delivered",
+  );
+  assert.equal(
+    pendingSteeringPresentation({ archived: true }).title,
+    "Queued, never delivered",
+  );
 });

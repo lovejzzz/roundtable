@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.31**
+Current release: **v0.0.0.32**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -111,7 +111,10 @@ cleanup.
    copy, then returns the real result for that participant's final contribution.
 7. Add a steering note at any time. During the sealed opening it waits until
    cross-examination so it cannot leak one participant's timing into another's
-   independent input; otherwise it is added before the next agent turn.
+   independent input; otherwise it is added before the next agent turn. While
+   waiting, the room and Markdown export label it as queued. Its arrival in the
+   shared transcript removes the queued copy; only notes stranded by an ended
+   or archived room are labeled never delivered.
 8. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
 9. Only after the final agent turn, Roundtable asks Codex for a structured
@@ -119,7 +122,9 @@ cleanup.
    fails or returns invalid structure. The two non-synthesizing participants
    independently audit the draft against labeled transcript evidence. Material
    concerns permit exactly one fallback-capable revision; the room preserves
-   the original draft, audits, attempts, and final brief.
+   the original draft, audits, attempts, and final brief. The persisted audit
+   state closes as complete or stopped rather than retaining a stale running
+   marker after the room ends.
 10. Optionally enable **Dissent check**. After the audited brief is frozen,
     each agent gets one separate review pass and can identify labeled positions
     the brief missed or flattened. Mark each item **Represented** or **Missed**;

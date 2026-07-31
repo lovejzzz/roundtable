@@ -1365,6 +1365,12 @@ export function createBridge({
             audit: structuredClone(audit),
           });
         }
+        audit.status = session.stopRequested ? "stopped" : "complete";
+        audit.completedAt = now().toISOString();
+        emit(session, {
+          type: "session.audit",
+          audit: structuredClone(audit),
+        });
         emit(session, { type: "session.outcome", outcome: finalOutcome });
       }
 

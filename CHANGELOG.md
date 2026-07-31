@@ -4,6 +4,33 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.32] — 2026-07-31
+
+### Field finding
+
+A real six-round self-review completed successfully but exposed two state
+contradictions. A live steering note was labeled "Queued, never delivered"
+before its eligible turn, and the completed session snapshot retained
+`briefAudit.status: "running"` after the audited revision had finished.
+
+### Implementation
+
+- Live and exported steering copy now distinguishes waiting for the next turn
+  from a note stranded by a terminal or archived room.
+- A streamed human message is the client-side commit signal that removes its
+  matching queued copy as soon as the bridge delivers it.
+- Brief audits emit a final persisted state with a completion timestamp and a
+  truthful `complete` or `stopped` status before the final outcome is exposed.
+
+### Verification
+
+- Steering integration coverage proves delivered notes leave the bridge queue;
+  presentation coverage proves live and terminal labels remain distinct.
+- Audited-revision and terminal replay coverage prove final audit status,
+  timestamp, revision evidence, and event ordering.
+- The full 130-test bridge/runtime suite, production lint, production build,
+  rendered HTML checks, syntax checks, and whitespace validation pass.
+
 ## [v0.0.0.31] — 2026-07-31
 
 ### Discussion

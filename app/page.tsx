@@ -35,6 +35,7 @@ import {
   autoScrollBehavior,
   livenessDetailText,
   liveStatusText,
+  pendingSteeringPresentation,
 } from "../lib/live-status.mjs";
 import {
   RecoveryHttpError,
@@ -881,6 +882,10 @@ export default function Home() {
     : isPreview
       ? "setup"
       : "session";
+  const pendingSteeringCopy = pendingSteeringPresentation({
+    terminal: TERMINAL_STATUSES.has(status),
+    archived: viewingHistory,
+  });
   const active =
     !viewingHistory &&
     (status === "preparing" ||
@@ -1310,6 +1315,9 @@ export default function Home() {
           current.some((message) => message.id === update.message.id)
             ? current
             : [...current, update.message],
+        );
+        setPendingSteering((current) =>
+          current.filter((message) => message.id !== update.message.id),
         );
         return;
       }
@@ -1921,9 +1929,9 @@ export default function Home() {
     }
     if (pendingSteering.length) {
       lines.push(
-        "# Queued, never delivered",
+        `# ${pendingSteeringCopy.title}`,
         "",
-        "These steering notes were saved separately and were never added to an agent turn.",
+        pendingSteeringCopy.transcriptDescription,
         "",
       );
       pendingSteering.forEach((message) => lines.push(`- ${message.body}`));
@@ -2706,14 +2714,11 @@ export default function Home() {
               </article>
             ))}
             {pendingSteering.length > 0 && (
-              <section className="undelivered-steering" aria-labelledby="undelivered-title">
+              <section className="undelivered-steering" aria-labelledby="pending-steering-title">
                 <span className="human-pulse" />
                 <div>
-                  <h2 id="undelivered-title">Queued, never delivered</h2>
-                  <p>
-                    The bridge stopped before these notes reached another agent, so they are not
-                    part of the shared transcript.
-                  </p>
+                  <h2 id="pending-steering-title">{pendingSteeringCopy.title}</h2>
+                  <p>{pendingSteeringCopy.description}</p>
                   <ul>
                     {pendingSteering.map((message) => (
                       <li key={message.id}>{message.body}</li>

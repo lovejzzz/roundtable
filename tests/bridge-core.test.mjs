@@ -558,6 +558,7 @@ test("keeps steering sealed from opening peers and includes it once in cross-exa
     assert.doesNotMatch(prompts[2], /Prioritize reliability/);
     assert.match(prompts[3], /Prioritize reliability/);
     assert.equal(prompts[3].match(/Prioritize reliability/g)?.length, 1);
+    assert.deepEqual(completed.pendingSteering, []);
     assert.match(prompts[0], /SEALED FIRST PASS/);
     assert.match(prompts[1], /SEALED FIRST PASS/);
     assert.match(prompts[2], /SEALED FIRST PASS/);
@@ -785,9 +786,11 @@ test("restores snapshots and closes terminal SSE streams after replay", async ()
     const replay = await streamResponse.text();
     assert.match(replay, /codex reply/);
     assert.match(replay, /"type":"session.outcome"/);
-    assert.match(replay, /"status":"complete"/);
+    assert.match(replay, /"type":"session.audit","audit":\{"status":"complete"/);
+    assert.match(replay, /"type":"session.status","status":"complete"/);
     assert.ok(
-      replay.indexOf('"type":"session.outcome"') < replay.indexOf('"status":"complete"'),
+      replay.indexOf('"type":"session.outcome"') <
+        replay.indexOf('"type":"session.status","status":"complete"'),
       "the persisted outcome replays before terminal status",
     );
     await waitFor(async () => (cleanupCalls === 1 ? true : null));
@@ -1402,6 +1405,9 @@ test("falls back across synthesizers and preserves one audited brief revision", 
     assert.equal(snapshot.outcome.audit.reviews.antigravity.status, "completed");
     assert.equal(snapshot.outcome.revision.status, "completed");
     assert.equal(snapshot.outcome.revision.revisedBy, "Claude");
+    assert.equal(snapshot.briefAudit.status, "complete");
+    assert.match(snapshot.briefAudit.completedAt, /^\d{4}-\d{2}-\d{2}T/);
+    assert.equal(snapshot.briefAudit.revision.status, "available");
     assert.deepEqual(snapshot.outcome.actions, [
       { owner: "Unassigned", text: "Track the residual." },
     ]);
