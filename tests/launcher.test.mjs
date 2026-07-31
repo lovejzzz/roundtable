@@ -314,7 +314,11 @@ test("launcher readiness attributes a living unbound web process without hiding 
       timeoutMs: 100,
       componentState,
     }),
-    /bridge=ready; web process=alive; web port=unbound/,
+    (error) => {
+      assert.match(error.message, /bridge=ready; web process=alive; web port=unbound/);
+      assert.match(error.message, /synced or cloud-backed folder/i);
+      return true;
+    },
   );
   assert.equal(componentState.bridge.readiness, "ready");
   assert.equal(componentState.web.readiness, "failed");

@@ -4,6 +4,35 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.33] — 2026-07-31
+
+### Field finding
+
+A real EDUTOOL audit exposed two misleading failure boundaries. Claude's local
+`auth status` probe reported logged in immediately before the provider rejected
+the persisted OAuth token as revoked, while an iCloud-backed Roundtable checkout
+left a living web compiler process that never bound its selected port.
+
+### Implementation
+
+- Revoked and expired OAuth/access-token failures now become bounded re-login
+  guidance instead of a raw provider error.
+- The message states that local CLI status can remain optimistic after a
+  server-side revocation or expiry; Roundtable does not claim the startup probe
+  made a provider request.
+- A living web compiler with an unbound port now recommends relaunching from a
+  local checkout when the source is on a synced or cloud-backed folder.
+
+### Verification
+
+- Authentication coverage reproduces the exact Claude 401 revoked-token text
+  observed in the EDUTOOL room and proves the local-status boundary remains
+  visible.
+- Launcher coverage reproduces a healthy bridge beside a living, unbound web
+  compiler and proves the targeted local-checkout guidance.
+- The full bridge/runtime suite, production lint, production build, rendered
+  HTML checks, syntax checks, and whitespace validation pass.
+
 ## [v0.0.0.32] — 2026-07-31
 
 ### Field finding

@@ -78,7 +78,11 @@ export function buildAgentEnvironment(
 
 export function classifyAgentAuthenticationFailure(role, message) {
   const raw = String(message || "");
+  const persistedSessionRejected =
+    /\b(?:oauth\s+)?(?:access\s+)?token\b.{0,80}\b(?:revoked|expired|invalid)\b/i.test(raw) ||
+    /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth\s+)?(?:access\s+)?token\b/i.test(raw);
   if (
+    !persistedSessionRejected &&
     !/(?:not logged in|not authenticated|authentication (?:failed|required)|unauthorized|login required|please (?:run|use).{0,30}login|api key.{0,30}(?:missing|required|invalid)|invalid api key)/i.test(
       raw,
     )
@@ -90,5 +94,8 @@ export function classifyAgentAuthenticationFailure(role, message) {
     claude: "Run `claude auth login` in a terminal",
     antigravity: "Open `agy` in a terminal and complete sign-in",
   };
-  return `${instructions[role] || "Sign in to the CLI"}, then retry this turn. Roundtable requires persisted CLI sign-in and does not pass ambient API credentials to agents.`;
+  const statusBoundary = persistedSessionRejected
+    ? " The provider rejected the persisted session; a local CLI status check can still report logged in after server-side revocation or expiry."
+    : "";
+  return `${instructions[role] || "Sign in to the CLI"}, then retry this turn.${statusBoundary} Roundtable requires persisted CLI sign-in and does not pass ambient API credentials to agents.`;
 }

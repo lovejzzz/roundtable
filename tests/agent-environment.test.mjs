@@ -104,6 +104,12 @@ test("classifies authentication failures into persisted-login remediation", () =
     classifyAgentAuthenticationFailure("claude", "Authentication required"),
     /claude auth login/,
   );
+  const revoked = classifyAgentAuthenticationFailure(
+    "claude",
+    "API Error: 401 OAuth access token has been revoked.",
+  );
+  assert.match(revoked, /claude auth login/);
+  assert.match(revoked, /local CLI status check can still report logged in/i);
   assert.equal(
     classifyAgentAuthenticationFailure("antigravity", "Provider timed out"),
     "",

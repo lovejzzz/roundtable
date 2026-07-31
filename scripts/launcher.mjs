@@ -415,8 +415,12 @@ export async function waitForLauncherReadiness({
     const bridgeSummary = `bridge=${componentState.bridge.readiness}`;
     const webProcess = `web process=${componentState.web.process}`;
     const webPort = `web port=${componentState.web.port}`;
+    const stalledCompilerHint =
+      componentState.web.process === "alive" && componentState.web.port === "unbound"
+        ? " The web compiler is alive but has not opened its port. If this checkout is on a synced or cloud-backed folder, use a local checkout and relaunch."
+        : "";
     const diagnosed = new Error(
-      `Roundtable startup failed (${bridgeSummary}; ${webProcess}; ${webPort}). ${error.message}`,
+      `Roundtable startup failed (${bridgeSummary}; ${webProcess}; ${webPort}). ${error.message}${stalledCompilerHint}`,
       { cause: error },
     );
     diagnosed.code = error.code || "STARTUP_FAILED";

@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.32**
+Current release: **v0.0.0.33**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -35,7 +35,9 @@ override that deadline.
 The web dev server binds the selected port strictly. Startup supervision tracks
 bridge readiness, web readiness, and child-process state separately, so a
 living web child that never binds its port is reported as such instead of being
-confused with a dead process or an unhealthy bridge. Failure still uses bounded
+confused with a dead process or an unhealthy bridge. That exact state now
+explains that a synced or cloud-backed checkout can stall the compiler before
+port binding and recommends a local checkout. Failure still uses bounded
 whole-process-tree cleanup.
 
 ## Use it from another Codex project
@@ -83,9 +85,12 @@ discussion. Every startup command probe has a 15-second deadline and a 64 KiB
 combined-output limit. A stalled or noisy probe is terminated, its captured
 output is discarded, and the affected CLI fails closed with a fixed labeled
 diagnostic; ordinary nonzero authentication results retain their existing login
-guidance. The launcher keeps its separate three-minute aggregate deadline (or
-the bounded `ROUNDTABLE_STARTUP_TIMEOUT_MS` override) and whole-process-tree
-cleanup.
+guidance. Those status probes verify local persisted state, not continued
+provider acceptance. If a live turn rejects a revoked or expired OAuth token,
+Roundtable overrides the optimistic startup result with exact re-login guidance
+and explains the distinction. The launcher keeps its separate three-minute
+aggregate deadline (or the bounded `ROUNDTABLE_STARTUP_TIMEOUT_MS` override) and
+whole-process-tree cleanup.
 
 ## How a discussion works
 
