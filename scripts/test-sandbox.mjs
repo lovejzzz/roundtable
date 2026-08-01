@@ -129,11 +129,39 @@ function unsafeSymlinkError(relativePath) {
   return error;
 }
 
-async function shouldCopy(projectPath, workspace, sourcePath, destinationPath) {
+async function trackedGeneratedCopyPolicy(projectPath) {
+  const environment = isolatedGitEnvironment();
+  const tracked = await execFileAsync("git", ["ls-files", "--cached", "-z"], {
+    cwd: projectPath,
+    env: environment,
+    encoding: "buffer",
+    maxBuffer: 32 * 1024 * 1024,
+  })
+    .then(({ stdout }) => stdout.toString("utf8").split("\0").filter(Boolean))
+    .catch(() => []);
+  const paths = new Set();
+  for (const path of tracked) {
+    if (!safeSnapshotPath(path, { allowGenerated: true })) continue;
+    const parts = path.split(/[\\/]+/);
+    if (!GENERATED_DIRECTORIES.has(parts[0])) continue;
+    for (let index = 1; index <= parts.length; index += 1) {
+      paths.add(parts.slice(0, index).join(sep));
+    }
+  }
+  return paths;
+}
+
+async function shouldCopyWithPolicy(
+  projectPath,
+  workspace,
+  sourcePath,
+  destinationPath,
+  trackedGeneratedPaths,
+) {
   const relativePath = relative(projectPath, sourcePath);
   if (!relativePath) return true;
   const [topLevel] = relativePath.split(sep);
-  if (GENERATED_DIRECTORIES.has(topLevel)) return false;
+  if (GENERATED_DIRECTORIES.has(topLevel) && !trackedGeneratedPaths.has(relativePath)) return false;
   const metadata = await lstat(sourcePath);
   if (!metadata.isSymbolicLink()) return true;
   const [linkTarget, resolvedSourceTarget] = await Promise.all([
@@ -185,10 +213,14 @@ export function isolatedGitEnvironment(baseEnvironment = process.env) {
   return environment;
 }
 
-function safeSnapshotPath(path) {
+function safeSnapshotPath(path, { allowGenerated = false } = {}) {
   if (!path || isAbsolute(path)) return false;
   const parts = path.split(/[\\/]+/);
-  return !parts.includes("..") && !GENERATED_DIRECTORIES.has(parts[0]) && parts[0] !== ".roundtable-context";
+  return (
+    !parts.includes("..") &&
+    (allowGenerated || !GENERATED_DIRECTORIES.has(parts[0])) &&
+    parts[0] !== ".roundtable-context"
+  );
 }
 
 function runGitWithInput(args, input, { cwd, env }) {
@@ -226,6 +258,7 @@ async function writeSyntheticPathIndex(paths, blobForPath, { cwd, env }) {
  */
 export async function materializeSyntheticGitSnapshot(projectPath, workspace) {
   const environment = isolatedGitEnvironment();
+  const trackedGeneratedPaths = await trackedGeneratedCopyPolicy(projectPath);
   const remoteHead = await execFileAsync(
     "git",
     ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
@@ -271,7 +304,11 @@ export async function materializeSyntheticGitSnapshot(projectPath, workspace) {
   const paths = snapshotStdout
     .toString("utf8")
     .split("\0")
-    .filter((path) => safeSnapshotPath(path) && !deletedPaths.has(path));
+    .filter(
+      (path) =>
+        safeSnapshotPath(path, { allowGenerated: trackedGeneratedPaths.has(path) }) &&
+        !deletedPaths.has(path),
+    );
   const changedPaths = new Set();
   const renamedPaths = [];
   const changedFields = changedStdout.toString("utf8").split("\0").filter(Boolean);
@@ -284,7 +321,11 @@ export async function materializeSyntheticGitSnapshot(projectPath, workspace) {
       const secondPath = changedFields[index++];
       if (!secondPath) break;
       changedPaths.add(secondPath);
-      if (status.startsWith("R") && safeSnapshotPath(firstPath) && safeSnapshotPath(secondPath)) {
+      if (
+        status.startsWith("R") &&
+        safeSnapshotPath(firstPath, { allowGenerated: trackedGeneratedPaths.has(firstPath) }) &&
+        safeSnapshotPath(secondPath, { allowGenerated: trackedGeneratedPaths.has(secondPath) })
+      ) {
         renamedPaths.push([firstPath, secondPath]);
       }
     }
@@ -308,7 +349,7 @@ export async function materializeSyntheticGitSnapshot(projectPath, workspace) {
   const baselinePaths = baselineStdout
     .toString("utf8")
     .split("\0")
-    .filter(safeSnapshotPath);
+    .filter((path) => safeSnapshotPath(path, { allowGenerated: true }));
   const baselinePathSet = new Set(baselinePaths);
   for (const path of paths) {
     if (!baselinePathSet.has(path)) changedPaths.add(path);
@@ -511,6 +552,7 @@ async function createDisposableTestSandboxOperation(
   }
   const workspace = join(root, "workspace");
   const startedAt = clock();
+  const trackedGeneratedPaths = await trackedGeneratedCopyPolicy(session.projectPath);
   try {
     await copy(session.projectPath, workspace, {
       recursive: true,
@@ -520,7 +562,13 @@ async function createDisposableTestSandboxOperation(
       verbatimSymlinks: true,
       filter: (sourcePath, destinationPath) => {
         enforceCopyControl(session, startedAt, copyTimeoutMs, clock);
-        return shouldCopy(session.projectPath, workspace, sourcePath, destinationPath);
+        return shouldCopyWithPolicy(
+          session.projectPath,
+          workspace,
+          sourcePath,
+          destinationPath,
+          trackedGeneratedPaths,
+        );
       },
     });
     await validateSymlinks(workspace);

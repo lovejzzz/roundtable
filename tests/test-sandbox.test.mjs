@@ -652,9 +652,20 @@ test("materializes sanitized Git evidence plus a remote-free disposable snapshot
     await writeFile(join(projectPath, "source.txt"), "base\n");
     await writeFile(join(projectPath, "removed.txt"), "remove me\n");
     await writeFile(join(projectPath, "renamed-old.txt"), "rename me\n");
-    await execFileAsync("git", ["add", "source.txt", "removed.txt", "renamed-old.txt"], {
+    await writeFile(join(projectPath, ".gitignore"), "verification-output/\n");
+    await mkdir(join(projectPath, "verification-output", "quality"), { recursive: true });
+    await writeFile(
+      join(projectPath, "verification-output", "quality", "tracked-receipt.json"),
+      '{"status":"passed"}\n',
+    );
+    await execFileAsync("git", ["add", "source.txt", "removed.txt", "renamed-old.txt", ".gitignore"], {
       cwd: projectPath,
     });
+    await execFileAsync(
+      "git",
+      ["add", "--force", "verification-output/quality/tracked-receipt.json"],
+      { cwd: projectPath },
+    );
     await execFileAsync("git", ["commit", "-m", "base"], { cwd: projectPath });
     await execFileAsync("git", ["checkout", "-b", "feature/trust-audit"], {
       cwd: projectPath,
@@ -665,6 +676,10 @@ test("materializes sanitized Git evidence plus a remote-free disposable snapshot
       cwd: projectPath,
     });
     await writeFile(join(projectPath, "source.txt"), "working change\n");
+    await writeFile(
+      join(projectPath, "verification-output", "quality", "local-only.json"),
+      '{"status":"untracked"}\n',
+    );
     await unlink(join(projectPath, "removed.txt"));
     await execFileAsync("git", ["mv", "renamed-old.txt", "renamed-new.txt"], {
       cwd: projectPath,
@@ -701,6 +716,16 @@ test("materializes sanitized Git evidence plus a remote-free disposable snapshot
     assert.doesNotMatch(headPatch, /new-module\.mjs/);
     assert.match(headPatch, new RegExp(`# Parent ${metadata.parentCommit}`));
     await access(join(workspace, ".git"));
+    assert.equal(
+      await readFile(
+        join(workspace, "verification-output", "quality", "tracked-receipt.json"),
+        "utf8",
+      ),
+      '{"status":"passed"}\n',
+    );
+    await assert.rejects(
+      access(join(workspace, "verification-output", "quality", "local-only.json")),
+    );
     const { stdout: remotes } = await execFileAsync("git", ["remote"], { cwd: workspace });
     const { stdout: tracked } = await execFileAsync("git", ["ls-files"], { cwd: workspace });
     const { stdout: status } = await execFileAsync("git", ["status", "--short"], { cwd: workspace });
@@ -720,9 +745,11 @@ test("materializes sanitized Git evidence plus a remote-free disposable snapshot
     const syntheticConfig = await readFile(join(workspace, ".git", "config"), "utf8");
     assert.equal(remotes, "");
     assert.deepEqual(tracked.trim().split("\n").sort(), [
+      ".gitignore",
       "new-module.mjs",
       "renamed-new.txt",
       "source.txt",
+      "verification-output/quality/tracked-receipt.json",
     ]);
     assert.equal(status, "");
     assert.deepEqual(changedFromBaseline.trim().split("\n").sort(), [

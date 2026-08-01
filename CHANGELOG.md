@@ -4,6 +4,36 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.38] — 2026-08-01
+
+### Field finding
+
+An exact EDUTOOL release review reported that tracked texture baselines and
+release-history evidence were absent from a clean checkout. They were present
+in Git; Roundtable had omitted the entire `verification-output` tree from its
+disposable workspace, including the small tracked receipts needed to replay
+the release gates. This made a healthy model reach a false release blocker.
+
+### Implementation
+
+- Disposable workspaces now retain files that Git tracks inside generated
+  directories while continuing to omit ignored and untracked bulk output.
+- The synthetic local Git snapshot includes those tracked generated paths, so
+  `git ls-files` and repository-aware audit commands see the same evidence a
+  real clean checkout sees.
+- Generated-directory ancestors are copied only when they lead to a tracked
+  file; EDUTOOL retains 4.6 MB of immutable receipts instead of copying its
+  649 MB local verification tree.
+
+### Verification
+
+- Sandbox coverage proves a force-tracked receipt under an ignored generated
+  directory is present and indexed while its ignored local neighbor is absent.
+- A fresh disposable EDUTOOL sandbox contains the frozen texture receipts and
+  passes `audit:release-history` for v0.17.10.
+- The complete 143-test bridge/runtime suite, production build, rendered-room
+  tests, lint, and symlink-isolation contracts pass.
+
 ## [v0.0.0.37] — 2026-08-01
 
 ### Field finding
