@@ -223,6 +223,13 @@ type FailedTurn = {
   expiresAt: string;
 };
 
+type ParticipantIssue = {
+  role: AgentRole;
+  status: "unavailable";
+  reason: string;
+  detectedAt: string;
+};
+
 type SessionLiveness = {
   role: AgentRole;
   turn: number;
@@ -264,6 +271,7 @@ type SessionEvent =
       note?: string;
       stage?: string;
       failedTurn?: FailedTurn | null;
+      participantIssues?: ParticipantIssue[];
     };
 
 type SessionStatus =
@@ -305,6 +313,7 @@ type SessionSnapshot = {
   dissentReviews?: Record<string, DissentReview>;
   dissentJudgments?: Record<string, DissentJudgment>;
   failedTurn?: FailedTurn | null;
+  participantIssues?: ParticipantIssue[];
   liveness?: SessionLiveness | null;
   historyWarning: string;
   archived?: boolean;
@@ -835,6 +844,7 @@ export default function Home() {
   const [dissentReviews, setDissentReviews] = useState<Record<string, DissentReview>>({});
   const [dissentJudgments, setDissentJudgments] = useState<Record<string, DissentJudgment>>({});
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
+  const [participantIssues, setParticipantIssues] = useState<ParticipantIssue[]>([]);
   const [liveness, setLiveness] = useState<SessionLiveness | null>(null);
   const [statusStage, setStatusStage] = useState("");
   const [statusNote, setStatusNote] = useState("");
@@ -1128,6 +1138,7 @@ export default function Home() {
     setDissentReviews(snapshot.dissentReviews || {});
     setDissentJudgments(snapshot.dissentJudgments || {});
     setFailedTurn(snapshot.failedTurn || snapshot.lastStatus.failedTurn || null);
+    setParticipantIssues(snapshot.participantIssues || snapshot.lastStatus.participantIssues || []);
     setLiveness(snapshot.liveness || null);
     setStatusStage(snapshot.lastStatus.stage || "");
     setStatusNote(snapshot.lastStatus.note || "");
@@ -1365,6 +1376,7 @@ export default function Home() {
       setStatusStage(update.stage || "");
       setStatusNote(update.note || "");
       if ("failedTurn" in update) setFailedTurn(update.failedTurn || null);
+      if ("participantIssues" in update) setParticipantIssues(update.participantIssues || []);
       if (typeof update.turn === "number") setTurn(update.turn);
       if (typeof update.totalTurns === "number") setTotalTurns(update.totalTurns);
       if (TERMINAL_STATUSES.has(update.status)) {
@@ -1504,6 +1516,7 @@ export default function Home() {
     setDissentReviews({});
     setDissentJudgments({});
     setFailedTurn(null);
+    setParticipantIssues([]);
     setLiveness(null);
     setStatusStage("queued");
     setStatusNote("Preparing isolated role workspaces.");
@@ -1559,6 +1572,7 @@ export default function Home() {
     setDissentReviews({});
     setDissentJudgments({});
     setFailedTurn(null);
+    setParticipantIssues([]);
     setLiveness(null);
     setStatusStage("");
     setStatusNote("");
@@ -2794,6 +2808,26 @@ export default function Home() {
                       </button>
                     </div>
                   )}
+                </div>
+              </section>
+            )}
+            {participantIssues.length > 0 && status !== "failed" && status !== "retrying" && (
+              <section
+                className="participant-issue-card"
+                role="status"
+                aria-labelledby="participant-issue-title"
+              >
+                <div className="participant-issue-icon">↗</div>
+                <div>
+                  <span className="context-label">RESILIENT MODE</span>
+                  <h2 id="participant-issue-title">Roundtable kept the discussion moving</h2>
+                  {participantIssues.map((issue) => (
+                    <p key={issue.role}>
+                      <strong>{AGENT_LABELS[issue.role]}</strong> is unavailable for this room. Its
+                      remaining turns are skipped automatically; the available participants continue
+                      without a login interruption.
+                    </p>
+                  ))}
                 </div>
               </section>
             )}

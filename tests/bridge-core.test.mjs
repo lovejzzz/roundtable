@@ -144,9 +144,14 @@ test("rejects an Antigravity model and effort combination the CLI cannot run", a
   }
 });
 
-test("returns the first actionable CLI readiness diagnostic", async () => {
+test("starts in resilient mode when one participant is unavailable", async () => {
   const agentRunner = {
-    run: async () => "unused",
+    run: async ({ purpose }) =>
+      purpose === "synthesis"
+        ? '{"decision":"Done","rationale":"Two participants completed the review.","actions":[],"openQuestions":[],"consensus":true}'
+        : purpose === "brief-audit"
+          ? '{"revise":false,"concerns":[]}'
+          : "available participant reply",
     stop: async () => {},
   };
   const unavailableHealth = structuredClone(health);
@@ -165,9 +170,91 @@ test("returns the first actionable CLI readiness diagnostic", async () => {
         rounds: 1,
       }),
     });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    const completed = await waitFor(async () => {
+      const snapshotResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await snapshotResponse.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+    assert.deepEqual(completed.messages.map((message) => message.role), ["codex", "antigravity"]);
+    assert.equal(completed.participantIssues[0].role, "claude");
+    assert.match(completed.participantIssues[0].reason, /claude auth login/);
+    assert.equal(completed.sealedBatch.roles.claude.status, "skipped");
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("automatically degrades an authentication failure without pausing or retrying the participant", async () => {
+  let claudeCalls = 0;
+  const agentRunner = {
+    async run({ role, purpose }) {
+      if (role === "claude") {
+        claudeCalls += 1;
+        const error = new Error("Claude persisted authentication is unavailable.");
+        error.code = "AUTHENTICATION_UNAVAILABLE";
+        throw error;
+      }
+      if (purpose === "synthesis") {
+        return '{"decision":"Continue","rationale":"Available participants completed the room.","actions":[],"openQuestions":[],"consensus":true}';
+      }
+      if (purpose === "brief-audit") return '{"revise":false,"concerns":[]}';
+      return `${role} contribution`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ projectPath: "/test/project", topic: "Resilient auth", rounds: 2 }),
+    });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    const completed = await waitFor(async () => {
+      const snapshotResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await snapshotResponse.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+
+    assert.equal(claudeCalls, 1);
+    assert.equal(completed.failedTurn, null);
+    assert.equal(completed.participantIssues[0].role, "claude");
+    assert.match(completed.participantIssues[0].reason, /authentication is unavailable/i);
+    assert.deepEqual(
+      completed.messages.map((message) => message.role),
+      ["codex", "antigravity", "codex", "antigravity"],
+    );
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("still refuses to start when fewer than two participants are available", async () => {
+  const unavailableHealth = structuredClone(health);
+  unavailableHealth.claude.available = false;
+  unavailableHealth.claude.diagnostic = "Claude unavailable";
+  unavailableHealth.antigravity.available = false;
+  unavailableHealth.antigravity.diagnostic = "Antigravity unavailable";
+  const bridge = await startTestBridge(
+    { run: async () => "unused", stop: async () => {} },
+    { health: unavailableHealth },
+  );
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ projectPath: "/test/project", topic: "Not enough participants", rounds: 1 }),
+    });
     assert.equal(response.status, 400);
-    const payload = await response.json();
-    assert.match(payload.error, /claude auth login/);
     assert.equal(bridge.sessions.size, 0);
   } finally {
     await bridge.close();

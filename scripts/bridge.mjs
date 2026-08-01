@@ -532,11 +532,10 @@ function runManagedProcess(
         if (code !== 0) {
           const rawError =
             stderr.trim() || stdout.trim() || `Agent process exited with code ${code}.`;
-          reject(
-            new Error(
-              classifyAgentAuthenticationFailure(role, rawError) || rawError,
-            ),
-          );
+          const authenticationFailure = classifyAgentAuthenticationFailure(role, rawError);
+          const error = new Error(authenticationFailure || rawError);
+          if (authenticationFailure) error.code = "AUTHENTICATION_UNAVAILABLE";
+          reject(error);
           return;
         }
         resolve(stdout.trim());

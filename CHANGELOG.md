@@ -4,6 +4,40 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.39] — 2026-08-01
+
+### Field finding
+
+During an exact EDUTOOL release audit, Claude's account-status command still
+reported a valid signed-in account while the provider rejected the next real
+request as an expired, unrefreshable OAuth session. Roundtable paused the whole
+room and asked the owner to run `claude auth login` yet again. The other two
+participants were healthy, so authentication churn in one provider should not
+have become a meeting-wide interruption.
+
+### Implementation
+
+- Authentication failures now carry a machine-readable boundary from the
+  process runner into the meeting controller.
+- A participant whose authentication becomes unavailable is marked once and
+  skipped for the rest of that room; remaining participants continue
+  automatically without a confirmation or repeated failed invocation.
+- Synthesis, brief audit, and optional dissent review also bypass a participant
+  already known to be unavailable instead of retrying stale credentials.
+- Rooms may start with two available participants. They still refuse to start
+  with fewer than two, preserving Roundtable's multi-agent purpose.
+- The live room shows a calm resilient-mode notice explaining that the meeting
+  continued, instead of a red paused-turn login demand.
+
+### Verification
+
+- Integration coverage proves both startup-time and mid-room degradation,
+  verifies that a failed participant is invoked only once, and confirms the
+  transcript and completion brief still finish with the available agents.
+- A separate regression preserves the minimum-two-participant launch guard.
+- The complete bridge/runtime suite, production build, rendered-room tests,
+  and lint pass.
+
 ## [v0.0.0.38] — 2026-08-01
 
 ### Field finding

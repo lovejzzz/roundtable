@@ -827,6 +827,7 @@ export function createBridge({
       turn: session.completedTurns,
       totalTurns: session.totalTurns,
       failedTurn: phase === "failed" || phase === "retrying" ? session.failedTurn : null,
+      participantIssues: Object.values(session.participantIssues || {}),
       ...extra,
     });
   }
@@ -960,6 +961,23 @@ export function createBridge({
         inputHash: promptPackage.context.inputHash,
       });
     }
+    const unavailableParticipant = session.participantIssues?.[role];
+    if (unavailableParticipant) {
+      if (stage === "sealed") {
+        updateSealedRole(session, role, "skipped", {
+          attempts,
+          inputHash: promptPackage.context.inputHash,
+          safeError: unavailableParticipant.reason,
+        });
+      }
+      session.completedTurns = turn + 1;
+      setPhase(session, "running", {
+        turn: session.completedTurns,
+        stage,
+        note: `${AGENT_NAMES[role]} is unavailable for this room; Roundtable continued automatically with the remaining participants.`,
+      });
+      return true;
+    }
     emit(session, {
       type: "session.status",
       status: "running",
@@ -1003,6 +1021,31 @@ export function createBridge({
           return false;
         }
         attempts += 1;
+        if (error?.code === "AUTHENTICATION_UNAVAILABLE") {
+          const issue = {
+            role,
+            status: "unavailable",
+            reason: safeVisibleError(error),
+            detectedAt: now().toISOString(),
+          };
+          session.participantIssues[role] = issue;
+          if (stage === "sealed") {
+            updateSealedRole(session, role, "skipped", {
+              attempts,
+              inputHash: promptPackage.context.inputHash,
+              safeError: issue.reason,
+            });
+          }
+          session.failedTurn = null;
+          session.completedTurns = turn + 1;
+          setPhase(session, "running", {
+            turn: session.completedTurns,
+            failedTurn: null,
+            stage,
+            note: `${AGENT_NAMES[role]} authentication became unavailable; Roundtable continued automatically with the remaining participants.`,
+          });
+          return true;
+        }
         const failedAt = now();
         session.failedTurn = {
           turn,
@@ -1136,6 +1179,16 @@ export function createBridge({
     for (const role of preferredRoles) {
       if (session.stopRequested || session.skipOutcomeRequested) {
         return { status: "skipped", attempts };
+      }
+      const unavailableParticipant = session.participantIssues?.[role];
+      if (unavailableParticipant) {
+        attempts.push({
+          role,
+          author: AGENT_NAMES[role],
+          status: "failed",
+          error: unavailableParticipant.reason,
+        });
+        continue;
       }
       setPhase(session, "synthesizing", {
         speaker: role,
@@ -1285,6 +1338,23 @@ export function createBridge({
         const validLabels = session.messages.map((_, index) => `M${index + 1}`);
         for (const role of auditRoles) {
           if (session.stopRequested) break;
+          const unavailableParticipant = session.participantIssues?.[role];
+          if (unavailableParticipant) {
+            audit.reviews[role] = {
+              role,
+              author: AGENT_NAMES[role],
+              status: "unavailable",
+              at: now().toISOString(),
+              revise: false,
+              concerns: [],
+              message: unavailableParticipant.reason,
+            };
+            emit(session, {
+              type: "session.audit",
+              audit: structuredClone(audit),
+            });
+            continue;
+          }
           setPhase(session, "reviewing", {
             speaker: role,
             note: `${AGENT_NAMES[role]} is independently auditing the draft brief.`,
@@ -1412,6 +1482,22 @@ export function createBridge({
         const reviewInput = buildOutcomeInput(session.topic, session.messages);
         for (const role of AGENT_ROLES) {
           const reviewedAt = now().toISOString();
+          const unavailableParticipant = session.participantIssues?.[role];
+          if (unavailableParticipant) {
+            emit(session, {
+              type: "session.dissent",
+              review: {
+                role,
+                author: AGENT_NAMES[role],
+                status: "unavailable",
+                at: reviewedAt,
+                coverage: reviewInput.coverage,
+                message: unavailableParticipant.reason,
+              },
+              items: [],
+            });
+            continue;
+          }
           if (session.outcome?.status !== "available") {
             emit(session, {
               type: "session.dissent",
@@ -1544,6 +1630,7 @@ export function createBridge({
       dissentReviews: session.dissentReviews,
       dissentJudgments: session.dissentJudgments,
       failedTurn: session.failedTurn,
+      participantIssues: Object.values(session.participantIssues || {}),
       liveness: session.liveness,
       historyWarning: session.historyWarning,
       lastStatus: session.lastStatus,
@@ -1785,10 +1872,10 @@ export function createBridge({
 
       if (request.method === "POST" && url.pathname === "/sessions") {
         const unavailableRoles = AGENT_ROLES.filter((role) => !health[role].available);
-        if (unavailableRoles.length) {
+        if (AGENT_ROLES.length - unavailableRoles.length < 2) {
           const diagnostic = unavailableRoles.map((role) => health[role].diagnostic).find(Boolean);
           sendJson(request, response, 400, {
-            error: diagnostic || "All three CLIs must be installed and signed in.",
+            error: diagnostic || "Roundtable needs at least two available participants.",
           });
           return;
         }
@@ -1898,6 +1985,17 @@ export function createBridge({
           briefAudit: null,
           pendingSteering: [],
           failedTurn: null,
+          participantIssues: Object.fromEntries(
+            unavailableRoles.map((role) => [
+              role,
+              {
+                role,
+                status: "unavailable",
+                reason: health[role].diagnostic || `${AGENT_NAMES[role]} is unavailable.`,
+                detectedAt: now().toISOString(),
+              },
+            ]),
+          ),
           liveness: null,
           failureGate: null,
           stopRequested: false,

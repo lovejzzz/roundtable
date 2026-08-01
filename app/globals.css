@@ -1541,6 +1541,43 @@ button {
   letter-spacing: 0.06em;
 }
 
+.participant-issue-card {
+  margin: 18px 0;
+  border: 1px solid #486656;
+  background:
+    linear-gradient(135deg, rgba(113, 176, 139, 0.08), transparent 58%),
+    #111714;
+  padding: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+}
+
+.participant-issue-icon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #567966;
+  color: #8fc4a4;
+  display: grid;
+  place-items: center;
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 13px;
+}
+
+.participant-issue-card h2 {
+  margin: 5px 0 0;
+  color: #dcebe2;
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.participant-issue-card p {
+  margin: 8px 0 0;
+  color: #9fc2ad;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .failed-turn-actions {
   margin-top: 14px;
   display: flex;

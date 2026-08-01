@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.38**
+Current release: **v0.0.0.39**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -12,8 +12,11 @@ discussion outcome and implementation details behind every release.
 
 ## Start it
 
-All three CLIs must already be installed and signed in. The Antigravity command
-is `agy`. From this folder:
+At least two CLIs must be installed and signed in. The Antigravity command is
+`agy`. If a participant's persisted authentication expires during a room,
+Roundtable marks that participant unavailable and continues automatically with
+the remaining agents; it does not pause the meeting to demand another login.
+From this folder:
 
 ```bash
 npm run talk
