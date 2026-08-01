@@ -30,6 +30,16 @@ test("preserves output and ordinary nonzero exit semantics", async () => {
   assert.equal(nonzero.output, "login required");
 });
 
+test("can provide bounded stdin to probes that require a live request", async () => {
+  const result = await runNode(
+    'process.stdin.setEncoding("utf8"); let body = ""; process.stdin.on("data", (chunk) => body += chunk); process.stdin.on("end", () => process.stdout.write(body.toUpperCase()));',
+    { input: "auth_ok" },
+  );
+
+  assert.equal(result.success, true);
+  assert.equal(result.output, "AUTH_OK");
+});
+
 test("times out a probe and returns no captured output", async () => {
   const result = await runNode(
     'process.stdout.write("fixture-secret"); setInterval(() => {}, 1_000)',

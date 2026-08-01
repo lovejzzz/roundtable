@@ -199,6 +199,35 @@ const antigravityConfiguredEffort =
   process.env.ANTIGRAVITY_EFFORT ||
   antigravityModelEffort(antigravityConfiguredModel) ||
   "medium";
+const CLAUDE_LIVE_AUTH_TTL_MS = 20 * 60 * 1000;
+let claudeLiveAuthCheckedAt = 0;
+async function runClaudeLiveAuthProbe() {
+  const result = await runBoundedProbe({
+    command: claudePath,
+    args: buildClaudeInvocationArgs(),
+    environment: agentEnvironment("claude"),
+    input: "Reply exactly ROUNDTABLE_AUTH_OK and nothing else.",
+    timeoutMs: 30_000,
+  });
+  if (result.success) claudeLiveAuthCheckedAt = Date.now();
+  return result;
+}
+async function ensureClaudeLiveAuthFresh() {
+  if (Date.now() - claudeLiveAuthCheckedAt < CLAUDE_LIVE_AUTH_TTL_MS) return;
+  const result = await runClaudeLiveAuthProbe();
+  if (!result.success) {
+    throw new Error(
+      result.output ||
+        "Claude account metadata is present, but a live request could not refresh its OAuth session.",
+    );
+  }
+}
+const claudeLiveAuthResult = claudeAuthResult.success
+  ? await runClaudeLiveAuthProbe()
+  : { output: "", success: false, reason: "" };
+const claudeLiveAuthenticated = Boolean(
+  claudeAuthResult.success && claudeLiveAuthResult.success,
+);
 const codexCompatible = Boolean(codexPath && codexHelp.includes("--output-last-message"));
 const claudeCompatible = Boolean(
   claudePath &&
@@ -307,19 +336,23 @@ const health = {
     }),
   },
   claude: {
-    available: Boolean(claudeCompatible && claudeAuthResult.success),
+    available: Boolean(claudeCompatible && claudeLiveAuthenticated),
     version: claudeVersion,
-    diagnostic: availabilityDiagnostic({
-      label: "Claude CLI",
-      path: claudePath,
-      probeFailure: firstProbeFailureDiagnostic([
-        ["Claude capability probe", claudeHelpResult],
-        ["Claude authentication probe", claudeAuthResult],
-      ]),
-      compatible: claudeCompatible,
-      authenticated: claudeAuthResult.success,
-      login: "claude auth login",
-    }),
+    diagnostic:
+      claudeAuthResult.success && !claudeLiveAuthResult.success && !claudeLiveAuthResult.reason
+        ? "Claude account metadata is present, but a live request could not refresh its OAuth session. Run `claude auth login`, then restart the bridge."
+        : availabilityDiagnostic({
+            label: "Claude CLI",
+            path: claudePath,
+            probeFailure: firstProbeFailureDiagnostic([
+              ["Claude capability probe", claudeHelpResult],
+              ["Claude authentication metadata probe", claudeAuthResult],
+              ["Claude live authentication probe", claudeLiveAuthResult],
+            ]),
+            compatible: claudeCompatible,
+            authenticated: claudeLiveAuthenticated,
+            login: "claude auth login",
+          }),
   },
   antigravity: {
     available: Boolean(antigravityCompatible && antigravityModelsResult.success),
@@ -411,6 +444,7 @@ function runManagedProcess(
     acceptNonZero = false,
     environment,
     environmentRole = role,
+    livenessState = "process-active",
     timeoutMs = 10 * 60 * 1000,
   } = {},
 ) {
@@ -437,7 +471,7 @@ function runManagedProcess(
     escalationTimer: null,
     timeoutTimer: null,
     liveness: {
-      state: "process-active",
+      state: livenessState,
       processStartedAt: processStartedAt.toISOString(),
       lastActivityAt: processStartedAt.toISOString(),
       timeoutAt: new Date(processStartedAt.getTime() + timeoutMs).toISOString(),
@@ -573,6 +607,10 @@ async function runCodex(session, prompt, purpose) {
 }
 
 async function runClaudeModel(session, prompt) {
+  // A bridge can remain open longer than Claude's access token. Refresh the
+  // persisted CLI session outside the project sandbox on a bounded cadence,
+  // then keep the real repository review read-only inside the sandbox below.
+  await ensureClaudeLiveAuthFresh();
   const workingDirectory = await prepareParticipantInvocation(session, "claude");
   const args = buildClaudeInvocationArgs({
     model: session.claudeModel,
@@ -668,6 +706,7 @@ async function runBrokeredCheck(session, requesterRole, argv) {
       {
         acceptNonZero: true,
         environment: buildAgentEnvironment("broker", { HOME: scratchHome }),
+        livenessState: "broker-active",
         timeoutMs: 5 * 60 * 1000,
       },
     );
@@ -771,6 +810,17 @@ const agentRunner = {
         purpose,
         invoke: (controlPrompt) => runClaudeModel(session, controlPrompt),
         execute: (argv) => runBrokeredCheck(session, role, argv),
+        onBrokerStart: () => {
+          const startedAt = new Date().toISOString();
+          session.processLiveness = {
+            state: "broker-active",
+            processStartedAt: startedAt,
+            lastActivityAt: startedAt,
+          };
+        },
+        onBrokerEnd: () => {
+          session.processLiveness = { state: "request-active" };
+        },
         participantSandboxPaths: [getTestSandboxInfo(session, role)?.root],
       });
     }
@@ -781,6 +831,17 @@ const agentRunner = {
       purpose,
       invoke: (controlPrompt) => runAntigravityModel(session, controlPrompt),
       execute: (argv) => runBrokeredCheck(session, role, argv),
+      onBrokerStart: () => {
+        const startedAt = new Date().toISOString();
+        session.processLiveness = {
+          state: "broker-active",
+          processStartedAt: startedAt,
+          lastActivityAt: startedAt,
+        };
+      },
+      onBrokerEnd: () => {
+        session.processLiveness = { state: "request-active" };
+      },
       participantSandboxPaths: [getTestSandboxInfo(session, role)?.root],
     });
   },

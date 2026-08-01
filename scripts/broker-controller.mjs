@@ -12,6 +12,8 @@ export async function runBrokerCapableParticipant({
   purpose,
   invoke,
   execute,
+  onBrokerStart,
+  onBrokerEnd,
   participantSandboxPaths = [],
 }) {
   if (purpose) return invoke(prompt);
@@ -24,12 +26,20 @@ export async function runBrokerCapableParticipant({
     const firstReply = await invoke(prompt);
     const parsed = extractTestRequest(firstReply);
     if (!parsed.request) return firstReply;
-    const brokerExecution = parsed.request.error
-      ? {
-          result: { status: "blocked", error: parsed.request.error },
-          sandboxPaths: [],
-        }
-      : await execute(parsed.request.argv);
+    let brokerExecution;
+    if (parsed.request.error) {
+      brokerExecution = {
+        result: { status: "blocked", error: parsed.request.error },
+        sandboxPaths: [],
+      };
+    } else {
+      onBrokerStart?.(parsed.request.argv);
+      try {
+        brokerExecution = await execute(parsed.request.argv);
+      } finally {
+        onBrokerEnd?.();
+      }
+    }
     const executedAttachmentManifestId =
       brokerExecution.attachmentManifestId || "";
     if (

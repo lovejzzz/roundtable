@@ -163,3 +163,24 @@ test("keeps a pre-execution broker denial distinct from manifest mismatch", asyn
   assert.equal(reply.checks[0].status, "blocked");
   assert.equal("attachmentManifestId" in reply.checks[0], false);
 });
+
+test("announces broker execution separately from model reasoning", async () => {
+  const session = { completedTurns: 0 };
+  const events = [];
+  let invocations = 0;
+  const reply = await runBrokerCapableParticipant({
+    session,
+    role: "claude",
+    prompt: "Audit",
+    invoke: async () => (++invocations === 1 ? draftWithRequest : "The evidence supports the finding."),
+    execute: async () => {
+      events.push("execute");
+      return { result: { status: "passed", exitCode: 0 }, sandboxPaths: [] };
+    },
+    onBrokerStart: () => events.push("start"),
+    onBrokerEnd: () => events.push("end"),
+  });
+
+  assert.equal(reply.text, "The evidence supports the finding.");
+  assert.deepEqual(events, ["start", "execute", "end"]);
+});

@@ -227,7 +227,7 @@ type SessionLiveness = {
   role: AgentRole;
   turn: number;
   stage: string;
-  state: "preparing" | "request-active" | "process-active" | "process-exited";
+  state: "preparing" | "request-active" | "process-active" | "process-exited" | "broker-active";
   startedAt: string;
   observedAt: string;
   processStartedAt?: string;
@@ -630,7 +630,7 @@ function OutcomeCard({
 
       {!outcome && status === "failed" && (
         <p className="outcome-empty">
-          The transcript is safe. Retry or end the paused turn to continue.
+          The transcript is safe. Retry, continue without this participant, or end the paused turn.
         </p>
       )}
 
@@ -1725,6 +1725,19 @@ export default function Home() {
     }
   }
 
+  async function skipFailedTurn() {
+    if (!sessionId || status !== "failed" || viewingHistory) return;
+    setConnectionError("");
+    const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/skip`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: string };
+      setConnectionError(data.error || "The failed turn could not be skipped.");
+    }
+  }
+
   async function judgeDissent(
     dissentId: string,
     verdict: DissentJudgment["verdict"],
@@ -2768,6 +2781,13 @@ export default function Home() {
                           ? "Retrying…"
                           : `Retry ${AGENT_LABELS[failedTurn.role]} turn`}
                       </button>
+                      <button
+                        type="button"
+                        onClick={() => void skipFailedTurn()}
+                        disabled={status === "retrying"}
+                      >
+                        Continue without {AGENT_LABELS[failedTurn.role]}
+                      </button>
                       <button type="button" onClick={() => void stopDiscussion()}>
                         <CircleStop size={14} />
                         End discussion
@@ -2860,7 +2880,7 @@ export default function Home() {
                     canSteer
                       ? "Add a priority, correction, or question…"
                       : status === "failed" || status === "retrying"
-                        ? "Retry or end this turn before adding another note…"
+                        ? "Retry, skip, or end this turn before adding another note…"
                         : status === "preparing"
                           ? "Preparing isolated workspaces before the first turn…"
                         : status === "synthesizing"

@@ -1845,6 +1845,64 @@ test("stops cleanly from a failed turn without adding a synthetic error message"
   }
 });
 
+test("skips one failed participant turn and continues the discussion without fabricating a reply", async () => {
+  const agentRunner = {
+    async run({ role, purpose }) {
+      if (purpose === "synthesis") {
+        return '{"decision":"Continue","rationale":"Two participants completed the round.","actions":[],"openQuestions":[],"consensus":false}';
+      }
+      if (role === "claude") throw new Error("OAuth session expired and could not be refreshed");
+      return `${role} completed reply`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Continue after one provider fails",
+        rounds: 1,
+      }),
+    });
+    const { id } = await createResponse.json();
+    const failed = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "failed" ? snapshot : null;
+    });
+    assert.equal(failed.failedTurn.role, "claude");
+
+    const skipResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/skip`, {
+      method: "POST",
+      headers: authHeaders(),
+    });
+    assert.equal(skipResponse.status, 202);
+
+    const completed = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+    assert.deepEqual(
+      completed.messages.map((message) => message.role),
+      ["codex", "antigravity"],
+    );
+    assert.equal(completed.completedTurns, 3);
+    assert.equal(completed.sealedBatch.roles.claude.status, "skipped");
+    assert.equal(completed.outcome.status, "available");
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("expires an abandoned failed turn and releases its retained session slot", async () => {
   let calls = 0;
   const agentRunner = {

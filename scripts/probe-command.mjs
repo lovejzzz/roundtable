@@ -51,6 +51,7 @@ export function runBoundedProbe({
   command,
   args = [],
   environment,
+  input = "",
   captureOutput = true,
   timeoutMs = PROBE_TIMEOUT_MS,
   maxOutputBytes = PROBE_MAX_OUTPUT_BYTES,
@@ -66,7 +67,7 @@ export function runBoundedProbe({
     try {
       child = spawnImpl(command, args, {
         ...(environment ? { env: environment } : {}),
-        stdio: captureOutput ? ["ignore", "pipe", "pipe"] : "ignore",
+        stdio: captureOutput || input ? [input ? "pipe" : "ignore", "pipe", "pipe"] : "ignore",
       });
     } catch {
       resolve({ output: "", success: false, reason: "spawn_failed" });
@@ -115,6 +116,9 @@ export function runBoundedProbe({
     if (captureOutput) {
       child.stdout.on("data", onOutput);
       child.stderr.on("data", onOutput);
+    }
+    if (input && child.stdin) {
+      child.stdin.end(input);
     }
 
     const timeoutTimer = setTimeout(

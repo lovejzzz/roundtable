@@ -102,6 +102,10 @@ test("reports observable liveness without claiming hidden reasoning progress", (
     livenessDetailText({ state: "request-active", elapsedSeconds: 42 }),
     "Request open · 42s elapsed · provider progress is not observable",
   );
+  assert.equal(
+    livenessDetailText({ state: "broker-active", elapsedSeconds: 73 }),
+    "Verification check running · 1m 13s elapsed · the model reply is waiting for evidence",
+  );
 });
 
 test("keeps initial, setup, and archived states silent", () => {
@@ -143,7 +147,7 @@ test("announces failed and retried turns without leaking failure details", () =>
       turn: 2,
       totalTurns: 6,
     }),
-    "Antigravity could not complete turn 3. Retry or end the discussion.",
+    "Antigravity could not complete turn 3. Retry, skip, or end the discussion.",
   );
   assert.equal(
     liveStatusText({

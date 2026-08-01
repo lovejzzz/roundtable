@@ -4,6 +4,41 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.36] — 2026-08-01
+
+### Field finding
+
+Long EDUTOOL audits exposed two different states that looked like a dead model:
+Claude account metadata could remain present while a real OAuth-backed request
+could no longer refresh, and a participant that had already exited could spend
+minutes waiting for a Roundtable-brokered verification command. A failed
+participant also forced the owner to retry or end an otherwise useful room.
+
+### Implementation
+
+- Claude readiness now includes a real bounded request, not only account-status
+  metadata, and long-lived bridges refresh that live check before later Claude
+  turns with a twenty-minute freshness window.
+- Probes can receive bounded standard input without exposing their output.
+- Brokered test execution has its own visible liveness state: the UI says a
+  verification check is running and that the model reply is waiting for its
+  evidence, instead of reporting only that the model process exited.
+- Failed turns can be skipped explicitly so the remaining participants can
+  continue without fabricating a reply from the unavailable model.
+- Claude authentication failures remain actionable, while normal access-token
+  refresh is handled proactively. Explicit upstream revocation still requires
+  `claude auth login`.
+
+### Verification
+
+- Regression coverage distinguishes metadata-only Claude state from a live
+  authenticated request and exercises the twenty-minute refresh boundary.
+- Broker lifecycle tests pin the start/execution/end transition and the new
+  user-facing liveness wording.
+- Failed-turn integration coverage proves a skipped participant advances the
+  transcript safely and leaves the room usable.
+- The complete 143-test bridge/runtime suite passes.
+
 ## [v0.0.0.35] — 2026-07-31
 
 ### Field finding

@@ -75,7 +75,7 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.doesNotMatch(layout, /Starter Project|codex-preview|_sites-preview/);
   assert.doesNotMatch(packageJson, /site-creator-vinext-starter|react-loading-skeleton/);
   assert.match(page, /Retry failed turn|Retry .* turn|failed-turn-card/i);
-  assert.match(page, /Retry or end this turn before adding another note/i);
+  assert.match(page, /Retry, skip, or end this turn before adding another note/i);
   assert.match(page, /async function addDiscussionRounds/);
   assert.match(page, /sessions\/\$\{sessionId\}\/extend/);
   assert.match(page, /Extends this room without losing its transcript/i);

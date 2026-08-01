@@ -130,6 +130,10 @@ test("bridge probes and managed turns share the role-scoped environment contract
   assert.match(source, /buildAgentEnvironment\("broker", \{ HOME: scratchHome \}\)/);
   assert.match(source, /runCliProbe\(codexPath, \["login", "status"\], "codex"\)/);
   assert.match(source, /runCliProbe\(claudePath, \["auth", "status"\], "claude"\)/);
+  assert.match(source, /Reply exactly ROUNDTABLE_AUTH_OK/);
+  assert.match(source, /claudeLiveAuthenticated/);
+  assert.match(source, /CLAUDE_LIVE_AUTH_TTL_MS = 20 \* 60 \* 1000/);
+  assert.match(source, /await ensureClaudeLiveAuthFresh\(\)/);
   assert.match(source, /const codexGuardProbe/);
   assert.match(source, /resolveCredentialPathAliases/);
 });

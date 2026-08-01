@@ -1027,6 +1027,25 @@ export function createBridge({
           session.stopRequested = true;
           return false;
         }
+        if (action === "skip") {
+          const skippedTurn = session.failedTurn;
+          if (stage === "sealed") {
+            updateSealedRole(session, role, "skipped", {
+              attempts,
+              inputHash: promptPackage.context.inputHash,
+              safeError: skippedTurn.safeError,
+            });
+          }
+          session.failedTurn = null;
+          session.completedTurns = turn + 1;
+          setPhase(session, "running", {
+            turn: session.completedTurns,
+            failedTurn: null,
+            stage,
+            note: `${AGENT_NAMES[role]} turn ${turn + 1} was skipped; the discussion is continuing with the remaining participants.`,
+          });
+          return true;
+        }
         if (action === "expired") {
           if (stage === "sealed") {
             updateSealedRole(session, role, "expired", {
@@ -1932,7 +1951,7 @@ export function createBridge({
       }
 
       const actionMatch = url.pathname.match(
-        /^\/sessions\/([^/]+)\/(ticket|retry|steer|extend|stop)$/,
+        /^\/sessions\/([^/]+)\/(ticket|retry|skip|steer|extend|stop)$/,
       );
       if (actionMatch) {
         const [, id, action] = actionMatch;
@@ -1958,7 +1977,7 @@ export function createBridge({
             sendJson(request, response, 409, {
               error:
                 session.phase === "failed"
-                  ? "Retry or end the failed turn before adding another note."
+                  ? "Retry, skip, or end the failed turn before adding another note."
                   : session.phase === "retrying"
                     ? "The retry is in progress. Add the note after it finishes."
                   : "This discussion has already ended.",
@@ -2060,6 +2079,25 @@ export function createBridge({
           sendJson(request, response, 202, {
             ok: true,
             attempt: session.failedTurn.attempts + 1,
+          });
+          return;
+        }
+
+        if (request.method === "POST" && action === "skip") {
+          if (
+            session.phase !== "failed" ||
+            !session.failedTurn ||
+            !session.failureGate?.settle("skip")
+          ) {
+            sendJson(request, response, 409, {
+              error: "This failed turn is already resuming or is no longer skippable.",
+            });
+            return;
+          }
+          sendJson(request, response, 202, {
+            ok: true,
+            skippedRole: session.failedTurn.role,
+            skippedTurn: session.failedTurn.turn,
           });
           return;
         }
