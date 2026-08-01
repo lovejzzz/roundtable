@@ -246,6 +246,7 @@ test("creates isolated per-agent project copies and removes them after the room 
       mkdir(join(projectPath, ".next"), { recursive: true }),
       mkdir(join(projectPath, ".wrangler"), { recursive: true }),
       mkdir(join(projectPath, "dist"), { recursive: true }),
+      mkdir(join(projectPath, "verification-output"), { recursive: true }),
       mkdir(join(projectPath, "node_modules", "fixture"), { recursive: true }),
       mkdir(temporaryDirectory, { recursive: true }),
     ]);
@@ -255,6 +256,7 @@ test("creates isolated per-agent project copies and removes them after the room 
       writeFile(join(projectPath, ".next", "cache"), "generated\n"),
       writeFile(join(projectPath, ".wrangler", "state"), "generated\n"),
       writeFile(join(projectPath, "dist", "bundle.js"), "generated\n"),
+      writeFile(join(projectPath, "verification-output", "old-report.json"), "generated\n"),
       writeFile(join(projectPath, "node_modules", "fixture", "index.js"), "dependency\n"),
     ]);
 
@@ -279,6 +281,7 @@ test("creates isolated per-agent project copies and removes them after the room 
     await assert.rejects(access(join(codexWorkspace, ".next")));
     await assert.rejects(access(join(codexWorkspace, ".wrangler")));
     await assert.rejects(access(join(codexWorkspace, "dist")));
+    await assert.rejects(access(join(codexWorkspace, "verification-output")));
 
     await writeFile(join(codexWorkspace, "source.txt"), "sandbox change\n");
     assert.equal(await readFile(join(projectPath, "source.txt"), "utf8"), "original\n");
@@ -343,9 +346,11 @@ test("validates one preparation source while keeping role and broker freshness c
       '{"snapshot":"session-start"}\n',
     );
     assert.equal(
-      await readFile(join(claudeWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
+      await readFile(join(codexWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
       "dependency\n",
     );
+    await assert.rejects(access(join(claudeWorkspace, "node_modules")));
+    await assert.rejects(access(join(antigravityWorkspace, "node_modules")));
 
     await writeFile(join(projectPath, "source.txt"), "host changed\n");
     const broker = await createDisposableTestSandbox(session, "claude-broker", {

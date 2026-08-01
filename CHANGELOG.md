@@ -4,6 +4,35 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.37] — 2026-08-01
+
+### Field finding
+
+A six-round EDUTOOL production audit kept every participant visibly alive, but
+both Claude and Antigravity brokered checks failed before execution with
+`ENOSPC` while Roundtable copied EDUTOOL's heavyweight dependency and prior
+verification trees. The model was healthy; disposable-workspace provisioning
+was exhausting the host disk.
+
+### Implementation
+
+- Read-only Claude and Antigravity workspaces no longer clone `node_modules`;
+  their executable checks already run through a separate fresh broker copy.
+- Codex retains project dependencies for native checks, and broker sandboxes
+  still receive a fresh dependency-bearing project snapshot for approved tests.
+- Generated coverage, browser-report, test-result, cache, and
+  `verification-output` trees are excluded from every disposable copy.
+- The security model is unchanged: source workspaces remain isolated,
+  participant writes stay disposable, and broker commands remain shell-free,
+  request-scoped, and separately sandboxed.
+
+### Verification
+
+- Sandbox tests prove Codex retains dependencies while Claude and Antigravity
+  omit them, and generated verification output never crosses the copy boundary.
+- Fresh broker-copy and cleanup tests continue to pass.
+- The complete 143-test bridge/runtime suite passes.
+
 ## [v0.0.0.36] — 2026-08-01
 
 ### Field finding
