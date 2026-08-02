@@ -419,6 +419,16 @@ const AGENT_GLYPHS: Record<AgentRole, string> = {
   antigravity: "G",
 };
 
+const AUTH_RECOVERY_GUIDANCE =
+  /\b(?:auth(?:entication)?|oauth|sign(?:ed)?\s+in|log(?:ged)?\s+in|login|credential)\b/i;
+
+function unavailableReviewCopy(author: string, message?: string) {
+  const detail = String(message || "").trim();
+  if (!detail) return "Review unavailable.";
+  if (!AUTH_RECOVERY_GUIDANCE.test(detail)) return detail;
+  return `${author} was unavailable for this room, so this review was skipped; Roundtable continued with the available participants.`;
+}
+
 function friendlyModelName(role: AgentRole, model: string) {
   if (!model) return "CLI default";
   const normalized = model.toLowerCase();
@@ -720,7 +730,9 @@ function OutcomeCard({
                   <section key={review.role}>
                     <strong>{review.author}</strong>
                     <small>{review.status}</small>
-                    {review.status === "unavailable" && <p>{review.message}</p>}
+                    {review.status === "unavailable" && (
+                      <p>{unavailableReviewCopy(review.author, review.message)}</p>
+                    )}
                     {review.status === "completed" && review.concerns.length === 0 && (
                       <p>No material correction requested.</p>
                     )}
@@ -776,7 +788,9 @@ function OutcomeCard({
                   {review.coverage.truncated && <span>partial input</span>}
                 </div>
                 {review.status === "unavailable" && (
-                  <p className="dissent-review-message">{review.message}</p>
+                  <p className="dissent-review-message">
+                    {unavailableReviewCopy(review.author, review.message)}
+                  </p>
                 )}
                 {review.status === "completed" && agentItems.length === 0 && (
                   <p className="dissent-review-message">Review completed. No concerns reported.</p>
@@ -1845,7 +1859,14 @@ export default function Home() {
         lines.push("", "## Brief audit", "");
         Object.values(outcome.audit.reviews).forEach((review) => {
           lines.push(`### ${review.author} — ${review.status}`, "");
-          if (review.message) lines.push(review.message, "");
+          if (review.message) {
+            lines.push(
+              review.status === "unavailable"
+                ? unavailableReviewCopy(review.author, review.message)
+                : review.message,
+              "",
+            );
+          }
           if (review.status === "completed" && !review.concerns.length) {
             lines.push("No material correction requested.", "");
           }
@@ -1878,7 +1899,7 @@ export default function Home() {
           "",
         );
         if (review.status === "unavailable") {
-          lines.push(review.message || "Review unavailable.", "");
+          lines.push(unavailableReviewCopy(review.author, review.message), "");
         }
         const agentItems = dissent.filter((item) => item.role === role);
         if (review.status === "completed" && !agentItems.length) {

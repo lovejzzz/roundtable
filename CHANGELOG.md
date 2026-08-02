@@ -4,6 +4,33 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.42] — 2026-08-01
+
+### Field finding
+
+Resilient mode correctly skipped an unavailable Claude and completed an
+EDUTOOL audit, but the finished brief and dissent panels replayed Claude's raw
+authentication diagnostic and told the owner to run `claude auth login`. That
+post-meeting instruction contradicted the calm, non-blocking room behavior and
+made a successfully completed review feel like another login interruption.
+
+### Implementation
+
+- Finished brief-audit and dissent-review cards replace authentication recovery
+  diagnostics with a calm statement that the pass was skipped and the available
+  participants continued.
+- Transcript exports apply the same presentation rule, so an archived or
+  downloaded meeting cannot revive stale login instructions.
+- Non-authentication review failures keep their specific diagnostic; only
+  sign-in, OAuth, credential, or authentication guidance is compacted.
+
+### Verification
+
+- Rendered-app coverage pins the shared unavailable-review presentation helper
+  and its use in the completion surfaces.
+- The complete bridge, production-build, rendered-HTML, and lint suites cover
+  the v0.0.0.42 release.
+
 ## [v0.0.0.41] — 2026-08-01
 
 ### Field finding

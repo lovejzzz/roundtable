@@ -1,6 +1,6 @@
 {
   "name": "roundtable-cli-room",
-  "version": "0.0.0.41",
+  "version": "0.0.0.42",
   "private": true,
   "engines": {
     "node": ">=22.13.0"

@@ -112,6 +112,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /Agent-reported checks/i);
   assert.match(page, /Summaries · not independently verified/i);
   assert.match(page, /Agent-stated summaries; not independently verified/i);
+  assert.match(page, /function unavailableReviewCopy/);
+  assert.match(page, /Roundtable continued with the available participants/);
+  assert.match(page, /unavailableReviewCopy\(review\.author, review\.message\)/);
   assert.match(page, /No concerns reported/i);
   assert.match(page, /represented/);
   assert.match(page, /missed/);
