@@ -35,7 +35,9 @@ export function availabilityDiagnostic({
   if (!path) return `${label} is not installed or is not available on PATH.`;
   if (probeFailure) return probeFailure;
   if (!compatible) return `${label} does not expose the required safe CLI capabilities.`;
-  if (!authenticated) return `${label} is not signed in. Run \`${login}\`, then restart the bridge.`;
+  if (!authenticated) {
+    return `${label} is not signed in. Run \`${login}\`, then start a new discussion; Roundtable rechecks automatically.`;
+  }
   return "";
 }
 

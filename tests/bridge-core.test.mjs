@@ -56,6 +56,7 @@ async function startTestBridge(agentRunner, options = {}) {
     token,
     defaultProject: "/test/project",
     health: options.health || health,
+    refreshHealth: options.refreshHealth,
     agentRunner,
     resolveProject: async () => "/test/project",
     sessionTtlMs: 5_000,
@@ -157,7 +158,7 @@ test("starts in resilient mode when one participant is unavailable", async () =>
   const unavailableHealth = structuredClone(health);
   unavailableHealth.claude.available = false;
   unavailableHealth.claude.diagnostic =
-    "Claude CLI is not signed in. Run `claude auth login`, then restart the bridge.";
+    "Claude CLI is not signed in. Run `claude auth login`, then start a new discussion; Roundtable rechecks automatically.";
   const bridge = await startTestBridge(agentRunner, { health: unavailableHealth });
 
   try {
@@ -183,6 +184,54 @@ test("starts in resilient mode when one participant is unavailable", async () =>
     assert.equal(completed.participantIssues[0].role, "claude");
     assert.match(completed.participantIssues[0].reason, /claude auth login/);
     assert.equal(completed.sealedBatch.roles.claude.status, "skipped");
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("rechecks unavailable participants before a new discussion without restarting the bridge", async () => {
+  const refreshedHealth = structuredClone(health);
+  refreshedHealth.claude.available = false;
+  refreshedHealth.claude.diagnostic =
+    "Claude CLI is not signed in. Run `claude auth login`, then start a new discussion; Roundtable rechecks automatically.";
+  let refreshCalls = 0;
+  const agentRunner = {
+    run: async ({ purpose, role }) =>
+      purpose === "synthesis"
+        ? '{"decision":"Done","rationale":"All participants recovered.","actions":[],"openQuestions":[],"consensus":true}'
+        : purpose === "brief-audit"
+          ? '{"revise":false,"concerns":[]}'
+          : `${role} reply`,
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner, {
+    health: refreshedHealth,
+    refreshHealth: async (roles) => {
+      refreshCalls += 1;
+      assert.deepEqual(roles, ["claude"]);
+      refreshedHealth.claude.available = true;
+      refreshedHealth.claude.diagnostic = "";
+    },
+  });
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ projectPath: "/test/project", topic: "Recover auth", rounds: 1 }),
+    });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    const completed = await waitFor(async () => {
+      const snapshotResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await snapshotResponse.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+    assert.equal(refreshCalls, 1);
+    assert.deepEqual(completed.messages.map((message) => message.role), ["codex", "claude", "antigravity"]);
+    assert.deepEqual(completed.participantIssues, []);
   } finally {
     await bridge.close();
   }

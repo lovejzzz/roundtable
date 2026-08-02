@@ -4,6 +4,35 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.40] — 2026-08-01
+
+### Field finding
+
+After the owner completed Claude's browser login flow, a running Roundtable
+bridge continued to say Claude was unavailable and instructed them to restart.
+The local `claude auth status` command still reported `loggedIn: false`, so
+Roundtable was not terminating a valid session; however, its restart advice
+made recovery needlessly repetitive whenever a later login did persist.
+
+### Implementation
+
+- Before every new discussion, the bridge rechecks only the participants that
+  were previously unavailable.
+- A newly valid Claude session now rejoins the next room without restarting
+  Roundtable or reopening the project.
+- Failed rechecks remain non-blocking when two participants are healthy, so
+  resilient rooms still start instead of returning to a login loop.
+- Authentication guidance now says to finish login and start a new discussion;
+  it no longer tells the owner to restart the bridge.
+
+### Verification
+
+- Integration coverage starts with Claude unavailable, makes the recheck
+  succeed, and proves the next room contains Codex, Claude, and Antigravity
+  with no participant issue.
+- Existing startup and mid-room degradation tests continue to prove that an
+  unsuccessful recheck falls back to the two healthy participants.
+
 ## [v0.0.0.39] — 2026-08-01
 
 ### Field finding

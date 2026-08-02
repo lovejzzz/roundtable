@@ -678,6 +678,7 @@ export function createBridge({
   token,
   defaultProject,
   health,
+  refreshHealth = null,
   agentRunner,
   resolveProject,
   historyStore = {
@@ -1871,6 +1872,15 @@ export function createBridge({
       }
 
       if (request.method === "POST" && url.pathname === "/sessions") {
+        const rolesNeedingRecheck = AGENT_ROLES.filter((role) => !health[role].available);
+        if (rolesNeedingRecheck.length > 0 && typeof refreshHealth === "function") {
+          try {
+            await refreshHealth(rolesNeedingRecheck);
+          } catch {
+            // Rechecking is opportunistic. Preserve resilient startup with the
+            // last known health state when a probe itself cannot complete.
+          }
+        }
         const unavailableRoles = AGENT_ROLES.filter((role) => !health[role].available);
         if (AGENT_ROLES.length - unavailableRoles.length < 2) {
           const diagnostic = unavailableRoles.map((role) => health[role].diagnostic).find(Boolean);

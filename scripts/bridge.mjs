@@ -270,6 +270,25 @@ const codexGuardProbe =
       );
 const codexSafeCompatible = Boolean(codexCompatible && codexGuardProbe.success);
 
+function claudeAvailabilityDiagnostic(claudeAuthenticationResult, claudeLiveResult) {
+  const liveAuthenticated = Boolean(claudeAuthenticationResult.success && claudeLiveResult.success);
+  if (claudeAuthenticationResult.success && !claudeLiveResult.success && !claudeLiveResult.reason) {
+    return "Claude account metadata is present, but a live request could not refresh its OAuth session. Run `claude auth login`, then start a new discussion; Roundtable rechecks automatically.";
+  }
+  return availabilityDiagnostic({
+    label: "Claude CLI",
+    path: claudePath,
+    probeFailure: firstProbeFailureDiagnostic([
+      ["Claude capability probe", claudeHelpResult],
+      ["Claude authentication metadata probe", claudeAuthenticationResult],
+      ["Claude live authentication probe", claudeLiveResult],
+    ]),
+    compatible: claudeCompatible,
+    authenticated: liveAuthenticated,
+    login: "claude auth login",
+  });
+}
+
 const startupWarnings = [
   ...(sandboxExecCandidate && sandboxExecProbe?.reason
     ? [
@@ -338,21 +357,7 @@ const health = {
   claude: {
     available: Boolean(claudeCompatible && claudeLiveAuthenticated),
     version: claudeVersion,
-    diagnostic:
-      claudeAuthResult.success && !claudeLiveAuthResult.success && !claudeLiveAuthResult.reason
-        ? "Claude account metadata is present, but a live request could not refresh its OAuth session. Run `claude auth login`, then restart the bridge."
-        : availabilityDiagnostic({
-            label: "Claude CLI",
-            path: claudePath,
-            probeFailure: firstProbeFailureDiagnostic([
-              ["Claude capability probe", claudeHelpResult],
-              ["Claude authentication metadata probe", claudeAuthResult],
-              ["Claude live authentication probe", claudeLiveAuthResult],
-            ]),
-            compatible: claudeCompatible,
-            authenticated: claudeLiveAuthenticated,
-            login: "claude auth login",
-          }),
+    diagnostic: claudeAvailabilityDiagnostic(claudeAuthResult, claudeLiveAuthResult),
   },
   antigravity: {
     available: Boolean(antigravityCompatible && antigravityModelsResult.success),
@@ -370,6 +375,17 @@ const health = {
     }),
   },
 };
+
+async function refreshUnavailableParticipantHealth(roles = []) {
+  if (!roles.includes("claude")) return health;
+  const refreshedAuth = await runCliProbe(claudePath, ["auth", "status"], "claude");
+  const refreshedLive = refreshedAuth.success
+    ? await runClaudeLiveAuthProbe()
+    : { output: "", success: false, reason: "" };
+  health.claude.available = Boolean(claudeCompatible && refreshedAuth.success && refreshedLive.success);
+  health.claude.diagnostic = claudeAvailabilityDiagnostic(refreshedAuth, refreshedLive);
+  return health;
+}
 
 async function resolveProject(requestedPath) {
   if (!isAbsolute(requestedPath)) throw new Error("Project folder must be an absolute path.");
@@ -862,6 +878,7 @@ const { server, sessions, shutdown } = createBridge({
   token,
   defaultProject: process.cwd(),
   health,
+  refreshHealth: refreshUnavailableParticipantHealth,
   agentRunner,
   resolveProject,
   historyStore,
