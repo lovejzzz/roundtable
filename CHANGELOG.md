@@ -4,6 +4,33 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.41] — 2026-08-01
+
+### Field finding
+
+During a six-round EDUTOOL package audit, Codex was still alive and producing
+useful evidence when Roundtable terminated the turn at its fixed ten-minute
+limit. The room's liveness panel correctly distinguished an active process from
+a quiet one, but the execution policy did not give a long reasoning turn enough
+time to finish. The same room also exposed an enabled **Add rounds** button while
+the room was still preparing even though the bridge could not accept the action.
+
+### Implementation
+
+- Normal agent turns now have a 30-minute safety ceiling. The deliberately
+  bounded broker subprocess keeps its separate five-minute limit.
+- A ceiling error explicitly says the process was still running, avoiding the
+  false implication that a long turn was dead.
+- **Add rounds** is disabled during preparation and explains when it will become
+  available; once the room is live it still extends the transcript in place.
+
+### Verification
+
+- Policy tests pin the 30-minute allowance above the former ten-minute cutoff
+  and the honest safety-ceiling wording.
+- The full bridge, production-build, rendered-HTML, and lint suites cover the
+  revised lifecycle and control state.
+
 ## [v0.0.0.40] — 2026-08-01
 
 ### Field finding

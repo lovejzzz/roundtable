@@ -2597,7 +2597,7 @@ export default function Home() {
                       id="rounds-to-add"
                       value={roundsToAdd}
                       onChange={(event) => setRoundsToAdd(event.target.value)}
-                      disabled={addingRounds}
+                      disabled={addingRounds || status !== "running"}
                       aria-label="Rounds to add"
                     >
                       {[1, 2, 3, 4, 5].map((value) => (
@@ -2606,12 +2606,16 @@ export default function Home() {
                         </option>
                       ))}
                     </select>
-                    <button type="submit" disabled={addingRounds}>
+                    <button type="submit" disabled={addingRounds || status !== "running"}>
                       <Plus size={14} />
                       {addingRounds ? "Adding…" : "Add"}
                     </button>
                   </div>
-                  <small>Extends this room without losing its transcript.</small>
+                  <small>
+                    {status === "running"
+                      ? "Extends this room without losing its transcript."
+                      : "Available as soon as the room is live."}
+                  </small>
                 </form>
               )}
               {!busy && (

@@ -60,6 +60,10 @@ import {
   probeFailureDiagnostic,
   runBoundedProbe,
 } from "./probe-command.mjs";
+import {
+  DEFAULT_AGENT_TURN_TIMEOUT_MS,
+  managedProcessTimeoutMessage,
+} from "./managed-process-policy.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
@@ -461,7 +465,7 @@ function runManagedProcess(
     environment,
     environmentRole = role,
     livenessState = "process-active",
-    timeoutMs = 10 * 60 * 1000,
+    timeoutMs = DEFAULT_AGENT_TURN_TIMEOUT_MS,
   } = {},
 ) {
   if (session.stopRequested) {
@@ -534,7 +538,7 @@ function runManagedProcess(
         if (handle.reason) {
           const error = new Error(
             handle.reason === "timeout"
-              ? `The process exceeded the ${Math.ceil(timeoutMs / 60_000)}-minute limit.`
+              ? managedProcessTimeoutMessage(timeoutMs)
               : "Discussion stopped.",
           );
           error.code = handle.reason === "timeout" ? "TIMEOUT" : "USER_STOP";
