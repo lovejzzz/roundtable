@@ -9,12 +9,20 @@ import { materializeGitContext } from "./git-context.mjs";
 const GENERATED_DIRECTORIES = new Set([
   ".git",
   ".next",
+  ".pnpm-store",
   ".wrangler",
+  ".yarn",
+  ".venv",
+  "__pycache__",
+  "build",
   ".cache",
   "coverage",
   "dist",
+  "node_modules",
   "playwright-report",
+  "target",
   "test-results",
+  "venv",
   "verification-output",
 ]);
 const SANDBOX_REMOVE_OPTIONS = Object.freeze({
@@ -647,12 +655,6 @@ async function clonePreparedTestSandboxOperation(
   }
   const workspace = join(root, "workspace");
   const startedAt = clock();
-  // Claude and Antigravity inspect source in their own native read-only
-  // sandboxes; all executable checks already cross the separate fresh broker
-  // boundary. Do not clone multi-gigabyte dependency trees into copies that
-  // cannot execute them. Codex retains dependencies for its native checks,
-  // and broker sandboxes are created fresh from the selected project.
-  const omitExecutableDependencies = ["claude", "antigravity"].includes(role);
   try {
     await copy(preparedSource.workspace, workspace, {
       recursive: true,
@@ -660,12 +662,8 @@ async function clonePreparedTestSandboxOperation(
       mode: constants.COPYFILE_FICLONE,
       dereference: false,
       verbatimSymlinks: true,
-      filter: (sourcePath) => {
+      filter: () => {
         enforceCopyControl(session, startedAt, copyTimeoutMs, clock);
-        if (omitExecutableDependencies) {
-          const [topLevel] = relative(preparedSource.workspace, sourcePath).split(sep);
-          if (topLevel === "node_modules") return false;
-        }
         return true;
       },
     });

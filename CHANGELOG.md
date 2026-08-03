@@ -4,6 +4,33 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.44] — 2026-08-03
+
+### Field finding
+
+A real EDUTOOL audit remained in truthful “validating source” state because its
+6 GB working tree included a 3.3 GB untracked `node_modules` directory. The
+disposable source pass traversed that dependency tree before any participant
+could inspect the code, wasting time, CPU, and temporary disk.
+
+### Implementation
+
+- Disposable review copies now omit untracked package-manager, virtual-
+  environment, compiler-target, and bytecode directories alongside existing
+  generated-output exclusions.
+- A dependency or generated directory committed intentionally remains visible
+  through the existing tracked-path exception, preserving unusual source-owned
+  fixtures without copying ordinary local caches.
+- Every participant starts from the same validated, dependency-light source
+  snapshot; role cloning no longer needs a second `node_modules` filter.
+
+### Verification
+
+- Sandbox tests prove `node_modules` is absent from the validated source and
+  every role copy while ordinary project source remains isolated.
+- All 148 bridge tests, the production build, two rendered-HTML tests, and lint
+  pass for v0.0.0.44.
+
 ## [v0.0.0.43] — 2026-08-02
 
 ### Field finding

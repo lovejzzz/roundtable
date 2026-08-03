@@ -273,10 +273,7 @@ test("creates isolated per-agent project copies and removes them after the room 
     assert.equal(reusedCodexWorkspace, codexWorkspace);
     assert.notEqual(claudeWorkspace, codexWorkspace);
     assert.equal(await readFile(join(codexWorkspace, "source.txt"), "utf8"), "original\n");
-    assert.equal(
-      await readFile(join(codexWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
-      "dependency\n",
-    );
+    await assert.rejects(access(join(codexWorkspace, "node_modules")));
     await assert.rejects(access(join(codexWorkspace, ".git")));
     await assert.rejects(access(join(codexWorkspace, ".next")));
     await assert.rejects(access(join(codexWorkspace, ".wrangler")));
@@ -345,10 +342,8 @@ test("validates one preparation source while keeping role and broker freshness c
       await readFile(join(codexWorkspace, ".roundtable-context", "metadata.json"), "utf8"),
       '{"snapshot":"session-start"}\n',
     );
-    assert.equal(
-      await readFile(join(codexWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
-      "dependency\n",
-    );
+    await assert.rejects(access(join(session.testSandboxSource.workspace, "node_modules")));
+    await assert.rejects(access(join(codexWorkspace, "node_modules")));
     await assert.rejects(access(join(claudeWorkspace, "node_modules")));
     await assert.rejects(access(join(antigravityWorkspace, "node_modules")));
 
