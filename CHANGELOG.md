@@ -4,6 +4,30 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.47] — 2026-08-03
+
+### Field finding
+
+During a three-round EDUTOOL audit, Antigravity hit a provider quota. Choosing
+“Continue without Antigravity” advanced only the current turn, so Roundtable
+paused on the same unavailable participant again in every later round.
+
+### Implementation
+
+- Continuing without a failed participant now marks that participant
+  unavailable for the rest of the room.
+- Every later turn for that participant is skipped automatically while the
+  remaining participants continue, matching the button's user-facing promise.
+- The bridge response explicitly records that the skip applies to remaining
+  turns, and the room retains one bounded participant-issue explanation.
+
+### Verification
+
+- A two-round regression proves the failed CLI is invoked only once, receives
+  no fabricated replies, and is skipped automatically on its later turn.
+- All 149 bridge tests, the production build, rendered-HTML checks, and lint
+  pass for v0.0.0.47.
+
 ## [v0.0.0.46] — 2026-08-03
 
 ### Field finding
