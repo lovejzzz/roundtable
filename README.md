@@ -113,7 +113,7 @@ whole-process-tree cleanup.
 ## How a discussion works
 
 1. Choose an absolute project folder and a discussion goal.
-2. Optionally attach up to five prompt files (1 MB each, 3 MB combined).
+2. Optionally attach up to five prompt files (3 MB each, 3 MB combined).
    Roundtable copies them into every disposable agent workspace and lists their
    generated relative paths in the control prompt. File bytes never enter the
    visible transcript or local history. A canonical content manifest identifies

@@ -4,6 +4,30 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.46] — 2026-08-03
+
+### Field finding
+
+EDUTOOL production ZIPs fit beneath the room's 3 MB combined attachment budget
+but exceeded the separate 1 MB per-file ceiling. That forced reviewers to rely
+on an external host path which was intentionally unavailable inside their
+disposable workspace, making otherwise reproducible package evidence appear
+unverifiable.
+
+### Implementation
+
+- A single prompt attachment may now use the room's full 3 MB combined budget.
+- The client and bridge enforce the same 3 MB per-file ceiling, and the visible
+  helper text and validation errors state the exact shared limit.
+- The five-file count limit and 3 MB combined budget remain unchanged.
+
+### Verification
+
+- A regression test passes a 1.3 MB production-sized ZIP through normalization.
+- Oversized and combined-budget rejection coverage remains active.
+- All bridge tests, the production build, rendered-HTML checks, and lint pass
+  for v0.0.0.46.
+
 ## [v0.0.0.45] — 2026-08-03
 
 ### Field finding

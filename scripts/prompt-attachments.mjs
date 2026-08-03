@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname, relative, resolve } from "node:path";
 
 export const MAX_PROMPT_ATTACHMENTS = 5;
-export const MAX_PROMPT_ATTACHMENT_BYTES = 1024 * 1024;
+export const MAX_PROMPT_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 export const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
 export const PROMPT_ATTACHMENTS_DIRECTORY = ".roundtable-attachments";
 
@@ -88,7 +88,7 @@ export function normalizePromptAttachments(value) {
 
     const bytes = decodeBase64(item?.contentBase64);
     if (bytes.length > MAX_PROMPT_ATTACHMENT_BYTES) {
-      throw new Error(`“${name}” is larger than the 1 MB attachment limit.`);
+      throw new Error(`“${name}” is larger than the 3 MB attachment limit.`);
     }
     totalBytes += bytes.length;
     if (totalBytes > MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES) {

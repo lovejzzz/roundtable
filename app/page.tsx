@@ -396,7 +396,7 @@ const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULT_TOPIC =
   "Review this project’s architecture and agree on the highest-leverage next steps.";
 const MAX_PROMPT_ATTACHMENTS = 5;
-const MAX_PROMPT_ATTACHMENT_BYTES = 1024 * 1024;
+const MAX_PROMPT_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
 
 function normalizedLaunchRounds(value: string) {
@@ -1435,7 +1435,7 @@ export default function Home() {
         return;
       }
       if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
-        setAttachmentError(`“${file.name}” is larger than the 1 MB attachment limit.`);
+        setAttachmentError(`“${file.name}” is larger than the 3 MB attachment limit.`);
         return;
       }
       newNames.add(key);
@@ -2281,7 +2281,7 @@ export default function Home() {
                     />
                   </label>
                   <small>
-                    {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 1 MB each · 3 MB total
+                    {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 3 MB each · 3 MB total
                   </small>
                 </div>
               </div>

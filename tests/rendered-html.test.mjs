@@ -48,7 +48,7 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /two independent audits and at most one revision/i);
   assert.match(html, /Add files/i);
   assert.match(html, /aria-label="Add files to the discussion prompt"/i);
-  assert.match(html, /1 MB each · 3 MB total/i);
+  assert.match(html, /3 MB each · 3 MB total/i);
   assert.match(html, /role="status"/i);
   assert.match(html, /aria-live="polite"/i);
   assert.match(html, /aria-atomic="true"/i);
