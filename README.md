@@ -614,7 +614,11 @@ can instead return one bounded `roundtable-test-request` containing an argv
 array. The bridge accepts only exact approved executable names, never uses a
 shell, and runs the command in a newly copied request-scoped workspace with a
 scratch `HOME` and no participant CLI configuration.
-That command can bind and connect to loopback for local test servers, but
+If the selected project already has `node_modules`, the broker creates a
+copy-on-write clone inside that request-scoped workspace so JavaScript checks
+can run offline without copying dependencies into every participant workspace
+or touching the original tree. That command can bind and connect to loopback
+for local test servers, but
 external and private-network destinations, the host home, the original project,
 and every agent workspace remain denied. Test mutations disappear with the
 broker copy and cannot influence the participant's follow-up inspection. A

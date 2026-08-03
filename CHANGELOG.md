@@ -4,6 +4,35 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.45] — 2026-08-03
+
+### Field finding
+
+The final EDUTOOL checkpoint audit correctly excluded a 3.3 GB untracked
+`node_modules` tree from participant workspaces, but a brokered Vitest request
+then found no local runner. Because the broker intentionally blocks external
+package registries, `npx` reported a dependency-resolution 403 instead of
+executing the requested tests.
+
+### Implementation
+
+- Broker-only workspaces now receive a copy-on-write clone of an existing local
+  `node_modules` tree after the dependency-light project copy is prepared.
+- The clone stays inside the disposable broker boundary: tests can modify it,
+  the original dependency tree and project remain denied, and cleanup removes
+  the clone with the request-scoped workspace. A 60-second safety limit keeps
+  pathological dependency trees from stalling the room.
+- Broker follow-up evidence now explains the offline dependency clone without
+  overstating access to the original project.
+
+### Verification
+
+- The macOS sandbox integration test reads and mutates a cloned offline module,
+  proves the original module remains unchanged, and still proves project reads
+  and external networking are denied.
+- All bridge tests, the production build, rendered-HTML checks, and lint pass
+  for v0.0.0.45.
+
 ## [v0.0.0.44] — 2026-08-03
 
 ### Field finding

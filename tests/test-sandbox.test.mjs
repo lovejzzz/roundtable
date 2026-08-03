@@ -32,6 +32,7 @@ import {
   createDisposableTestSandbox,
   ensureTestSandbox,
   isolatedGitEnvironment,
+  cloneBrokerNodeModules,
   prepareTestSandboxes,
   removeDisposableTestSandbox,
   resolveCredentialPathAliases,
@@ -1097,9 +1098,18 @@ test(
     const workspace = join(fixtureRoot, "workspace");
     const protectedProject = join(fixtureRoot, "original-project");
     try {
-      await Promise.all([mkdir(workspace), mkdir(protectedProject)]);
+      await Promise.all([
+        mkdir(workspace),
+        mkdir(join(protectedProject, "node_modules", "offline-fixture"), { recursive: true }),
+      ]);
       const marker = join(protectedProject, "marker");
-      await writeFile(marker, "protected\n");
+      const dependencyMarker = join(protectedProject, "node_modules", "offline-fixture", "index.js");
+      await Promise.all([
+        writeFile(marker, "protected\n"),
+        writeFile(dependencyMarker, "module.exports = 'offline';\n"),
+      ]);
+      const dependencyMount = await cloneBrokerNodeModules(protectedProject, workspace);
+      assert.ok(dependencyMount);
       const args = [
         "sandbox",
         "-P",
@@ -1121,6 +1131,8 @@ let readDenied = false;
 try { fs.readFileSync(process.argv[1]); } catch (error) {
   readDenied = ["EPERM", "EACCES"].includes(error.code);
 }
+const dependencyReadable = require("./node_modules/offline-fixture") === "offline";
+fs.writeFileSync("./node_modules/offline-fixture/index.js", "module.exports = 'isolated';\\n");
 const server = net.createServer((socket) => socket.end("ok"));
 server.once("error", () => process.exit(42));
 server.listen(0, "127.0.0.1", () => {
@@ -1132,11 +1144,11 @@ server.listen(0, "127.0.0.1", () => {
     external.once("connect", () => process.exit(44));
     external.once("error", (error) => {
       const externalDenied = ["EPERM", "EACCES", "ENETUNREACH", "ECONNREFUSED"].includes(error.code);
-      server.close(() => process.exit(readDenied && externalDenied ? 0 : 45));
+      server.close(() => process.exit(readDenied && dependencyReadable && externalDenied ? 0 : 45));
     });
     external.once("timeout", () => {
       external.destroy();
-      server.close(() => process.exit(readDenied ? 0 : 46));
+      server.close(() => process.exit(readDenied && dependencyReadable ? 0 : 46));
     });
   });
 });
@@ -1157,6 +1169,11 @@ server.listen(0, "127.0.0.1", () => {
         throw error;
       }
       assert.equal(await readFile(join(workspace, "generated.txt"), "utf8"), "allowed");
+      assert.equal(await readFile(dependencyMarker, "utf8"), "module.exports = 'offline';\n");
+      assert.equal(
+        await readFile(join(workspace, "node_modules", "offline-fixture", "index.js"), "utf8"),
+        "module.exports = 'isolated';\n",
+      );
     } finally {
       await rm(fixtureRoot, { recursive: true, force: true });
     }

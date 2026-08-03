@@ -516,6 +516,61 @@ export function createDisposableTestSandbox(session, role, options = {}) {
   );
 }
 
+export async function cloneBrokerNodeModules(
+  projectPath,
+  workspace,
+  {
+    resolvePath = realpath,
+    inspect = stat,
+    copy = cp,
+    copyTimeoutMs = 60_000,
+    clock = Date.now,
+    validateSymlinks = validateCopiedSymlinks,
+  } = {},
+) {
+  const projectRoot = await resolvePath(projectPath);
+  const dependencyCandidate = join(projectRoot, "node_modules");
+  let dependencyRoot;
+  try {
+    dependencyRoot = await resolvePath(dependencyCandidate);
+    if (!(await inspect(dependencyRoot)).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const relativeDependency = relative(projectRoot, dependencyRoot);
+  if (
+    relativeDependency === "" ||
+    relativeDependency === ".." ||
+    relativeDependency.startsWith(`..${sep}`) ||
+    isAbsolute(relativeDependency)
+  ) {
+    return null;
+  }
+  const mountPath = join(workspace, "node_modules");
+  try {
+    await lstat(mountPath);
+    return null;
+  } catch {
+    // The ordinary review copy deliberately excludes generated dependencies.
+  }
+  const startedAt = clock();
+  await copy(dependencyRoot, mountPath, {
+    recursive: true,
+    preserveTimestamps: true,
+    mode: constants.COPYFILE_FICLONE,
+    dereference: false,
+    verbatimSymlinks: true,
+    filter: () => {
+      if (clock() - startedAt > copyTimeoutMs) {
+        throw new Error("The offline dependency clone exceeded its 60-second safety limit.");
+      }
+      return true;
+    },
+  });
+  await validateSymlinks(workspace);
+  return { source: dependencyRoot, mount: mountPath };
+}
+
 async function createDisposableTestSandboxOperation(
   session,
   role,

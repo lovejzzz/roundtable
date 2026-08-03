@@ -169,9 +169,10 @@ export function buildBrokerResultPrompt({
 BROKERED CHECK RESULT
 Roundtable executed the requested argv directly, without a shell, in a separate local-only network
 sandbox over a broker-only project copy. Loopback is available for local test servers, while
-external and private-network destinations remain blocked. Host home data, the original project,
-and every agent workspace remained inaccessible. Files created or changed by the command are
-deleted with that broker-only copy and cannot affect your follow-up inspection.
+external and private-network destinations remain blocked. When the project already has a local
+node_modules tree, the broker may make a copy-on-write dependency clone so checks run offline. The
+original project source, host home data, and every agent workspace remain inaccessible. Files
+created or changed by the command are deleted with that broker-only copy and cannot affect your follow-up inspection.
 
 ${details}
 

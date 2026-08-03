@@ -42,6 +42,7 @@ import {
   cleanupTestSandboxes,
   cleanupTestSandboxesSync,
   createDisposableTestSandbox,
+  cloneBrokerNodeModules,
   ensureTestSandbox,
   getTestSandboxInfo,
   prepareTestSandboxes,
@@ -666,6 +667,10 @@ async function runBrokeredCheck(session, requesterRole, argv) {
     );
     const scratchHome = join(brokerSandbox.root, "home");
     await mkdir(scratchHome, { recursive: true });
+    const dependencyMount = await cloneBrokerNodeModules(
+      session.projectPath,
+      brokerSandbox.workspace,
+    );
     const siblingRoots = ["codex", "claude", "antigravity"]
       .map((role) => getTestSandboxInfo(session, role)?.root || "")
       .filter(Boolean);
@@ -703,7 +708,12 @@ async function runBrokeredCheck(session, requesterRole, argv) {
         ...result,
         status: classifyBrokerProcessResult(result),
       },
-      sandboxPaths: [brokerSandbox.root, brokerSandbox.workspace, scratchHome],
+      sandboxPaths: [
+        brokerSandbox.root,
+        brokerSandbox.workspace,
+        scratchHome,
+        dependencyMount?.source,
+      ].filter(Boolean),
       attachmentManifestId,
     };
   } catch (error) {
