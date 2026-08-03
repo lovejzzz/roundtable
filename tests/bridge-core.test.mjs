@@ -158,7 +158,7 @@ test("starts in resilient mode when one participant is unavailable", async () =>
   const unavailableHealth = structuredClone(health);
   unavailableHealth.claude.available = false;
   unavailableHealth.claude.diagnostic =
-    "Claude CLI is not signed in. Run `claude auth login`, then start a new discussion; Roundtable rechecks automatically.";
+    "Claude is unavailable for now. Roundtable will continue with the available participants and recheck Claude automatically before the next discussion.";
   const bridge = await startTestBridge(agentRunner, { health: unavailableHealth });
 
   try {
@@ -182,7 +182,8 @@ test("starts in resilient mode when one participant is unavailable", async () =>
     });
     assert.deepEqual(completed.messages.map((message) => message.role), ["codex", "antigravity"]);
     assert.equal(completed.participantIssues[0].role, "claude");
-    assert.match(completed.participantIssues[0].reason, /claude auth login/);
+    assert.match(completed.participantIssues[0].reason, /recheck Claude automatically/i);
+    assert.doesNotMatch(completed.participantIssues[0].reason, /claude auth login/);
     assert.equal(completed.sealedBatch.roles.claude.status, "skipped");
   } finally {
     await bridge.close();
@@ -193,7 +194,7 @@ test("rechecks unavailable participants before a new discussion without restarti
   const refreshedHealth = structuredClone(health);
   refreshedHealth.claude.available = false;
   refreshedHealth.claude.diagnostic =
-    "Claude CLI is not signed in. Run `claude auth login`, then start a new discussion; Roundtable rechecks automatically.";
+    "Claude is unavailable for now. Roundtable will continue with the available participants and recheck Claude automatically before the next discussion.";
   let refreshCalls = 0;
   const agentRunner = {
     run: async ({ purpose, role }) =>

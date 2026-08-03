@@ -203,35 +203,7 @@ const antigravityConfiguredEffort =
   process.env.ANTIGRAVITY_EFFORT ||
   antigravityModelEffort(antigravityConfiguredModel) ||
   "medium";
-const CLAUDE_LIVE_AUTH_TTL_MS = 20 * 60 * 1000;
-let claudeLiveAuthCheckedAt = 0;
-async function runClaudeLiveAuthProbe() {
-  const result = await runBoundedProbe({
-    command: claudePath,
-    args: buildClaudeInvocationArgs(),
-    environment: agentEnvironment("claude"),
-    input: "Reply exactly ROUNDTABLE_AUTH_OK and nothing else.",
-    timeoutMs: 30_000,
-  });
-  if (result.success) claudeLiveAuthCheckedAt = Date.now();
-  return result;
-}
-async function ensureClaudeLiveAuthFresh() {
-  if (Date.now() - claudeLiveAuthCheckedAt < CLAUDE_LIVE_AUTH_TTL_MS) return;
-  const result = await runClaudeLiveAuthProbe();
-  if (!result.success) {
-    throw new Error(
-      result.output ||
-        "Claude account metadata is present, but a live request could not refresh its OAuth session.",
-    );
-  }
-}
-const claudeLiveAuthResult = claudeAuthResult.success
-  ? await runClaudeLiveAuthProbe()
-  : { output: "", success: false, reason: "" };
-const claudeLiveAuthenticated = Boolean(
-  claudeAuthResult.success && claudeLiveAuthResult.success,
-);
+const claudeAuthenticated = Boolean(claudeAuthResult.success);
 const codexCompatible = Boolean(codexPath && codexHelp.includes("--output-last-message"));
 const claudeCompatible = Boolean(
   claudePath &&
@@ -274,23 +246,24 @@ const codexGuardProbe =
       );
 const codexSafeCompatible = Boolean(codexCompatible && codexGuardProbe.success);
 
-function claudeAvailabilityDiagnostic(claudeAuthenticationResult, claudeLiveResult) {
-  const liveAuthenticated = Boolean(claudeAuthenticationResult.success && claudeLiveResult.success);
-  if (claudeAuthenticationResult.success && !claudeLiveResult.success && !claudeLiveResult.reason) {
-    return "Claude account metadata is present, but a live request could not refresh its OAuth session. Run `claude auth login`, then start a new discussion; Roundtable rechecks automatically.";
-  }
-  return availabilityDiagnostic({
+function claudeAvailabilityDiagnostic(claudeAuthenticationResult) {
+  const infrastructureDiagnostic = firstProbeFailureDiagnostic([
+    ["Claude capability probe", claudeHelpResult],
+    ["Claude authentication metadata probe", claudeAuthenticationResult],
+  ]);
+  if (infrastructureDiagnostic) return infrastructureDiagnostic;
+  const capabilityDiagnostic = availabilityDiagnostic({
     label: "Claude CLI",
     path: claudePath,
-    probeFailure: firstProbeFailureDiagnostic([
-      ["Claude capability probe", claudeHelpResult],
-      ["Claude authentication metadata probe", claudeAuthenticationResult],
-      ["Claude live authentication probe", claudeLiveResult],
-    ]),
+    probeFailure: "",
     compatible: claudeCompatible,
-    authenticated: liveAuthenticated,
-    login: "claude auth login",
+    authenticated: true,
   });
+  if (capabilityDiagnostic) return capabilityDiagnostic;
+  if (!claudeAuthenticationResult.success) {
+    return "Claude is unavailable for now. Roundtable will continue with the available participants and recheck Claude automatically before the next discussion.";
+  }
+  return "";
 }
 
 const startupWarnings = [
@@ -359,9 +332,9 @@ const health = {
     }),
   },
   claude: {
-    available: Boolean(claudeCompatible && claudeLiveAuthenticated),
+    available: Boolean(claudeCompatible && claudeAuthenticated),
     version: claudeVersion,
-    diagnostic: claudeAvailabilityDiagnostic(claudeAuthResult, claudeLiveAuthResult),
+    diagnostic: claudeAvailabilityDiagnostic(claudeAuthResult),
   },
   antigravity: {
     available: Boolean(antigravityCompatible && antigravityModelsResult.success),
@@ -383,11 +356,8 @@ const health = {
 async function refreshUnavailableParticipantHealth(roles = []) {
   if (!roles.includes("claude")) return health;
   const refreshedAuth = await runCliProbe(claudePath, ["auth", "status"], "claude");
-  const refreshedLive = refreshedAuth.success
-    ? await runClaudeLiveAuthProbe()
-    : { output: "", success: false, reason: "" };
-  health.claude.available = Boolean(claudeCompatible && refreshedAuth.success && refreshedLive.success);
-  health.claude.diagnostic = claudeAvailabilityDiagnostic(refreshedAuth, refreshedLive);
+  health.claude.available = Boolean(claudeCompatible && refreshedAuth.success);
+  health.claude.diagnostic = claudeAvailabilityDiagnostic(refreshedAuth);
   return health;
 }
 
@@ -626,10 +596,9 @@ async function runCodex(session, prompt, purpose) {
 }
 
 async function runClaudeModel(session, prompt) {
-  // A bridge can remain open longer than Claude's access token. Refresh the
-  // persisted CLI session outside the project sandbox on a bounded cadence,
-  // then keep the real repository review read-only inside the sandbox below.
-  await ensureClaudeLiveAuthFresh();
+  // The real participant request is the only live authentication check. An
+  // extra prompt probe doubled provider traffic and could churn a healthy
+  // persisted session before the discussion even began.
   const workingDirectory = await prepareParticipantInvocation(session, "claude");
   const args = buildClaudeInvocationArgs({
     model: session.claudeModel,

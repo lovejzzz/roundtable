@@ -4,6 +4,33 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.43] — 2026-08-02
+
+### Field finding
+
+Real EDUTOOL audits showed that Roundtable sent Claude a separate live prompt at
+startup, repeated that probe on a timer, and then sent the actual discussion
+prompt. The duplicate provider traffic did not make a meeting safer and could
+turn ordinary OAuth refresh behavior into repeated login churn.
+
+### Implementation
+
+- Claude readiness now uses the bounded native `claude auth status` check.
+- The actual participant turn is the only live provider request; an
+  authentication failure moves the room into resilient mode without another
+  probe or confirmation.
+- New discussions recheck an unavailable Claude through account status only.
+- Claude diagnostics no longer prescribe `claude auth login`; they explain that
+  Roundtable continues and will recheck automatically.
+
+### Verification
+
+- Static contract tests prove the bridge contains no live authentication prompt,
+  TTL, or pre-turn refresh call.
+- Authentication and resilient-room tests pin the calm automatic recovery text.
+- The full bridge, production-build, rendered-HTML, and lint suites cover the
+  v0.0.0.43 release.
+
 ## [v0.0.0.42] — 2026-08-01
 
 ### Field finding

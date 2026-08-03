@@ -102,13 +102,14 @@ test("classifies authentication failures into persisted-login remediation", () =
   );
   assert.match(
     classifyAgentAuthenticationFailure("claude", "Authentication required"),
-    /claude auth login/,
+    /skip Claude.*continue/i,
   );
   const revoked = classifyAgentAuthenticationFailure(
     "claude",
     "API Error: 401 OAuth access token has been revoked.",
   );
-  assert.match(revoked, /claude auth login/);
+  assert.doesNotMatch(revoked, /claude auth login/);
+  assert.match(revoked, /rechecked automatically/i);
   assert.match(revoked, /local CLI status check can still report logged in/i);
   assert.equal(
     classifyAgentAuthenticationFailure("antigravity", "Provider timed out"),
@@ -130,10 +131,10 @@ test("bridge probes and managed turns share the role-scoped environment contract
   assert.match(source, /buildAgentEnvironment\("broker", \{ HOME: scratchHome \}\)/);
   assert.match(source, /runCliProbe\(codexPath, \["login", "status"\], "codex"\)/);
   assert.match(source, /runCliProbe\(claudePath, \["auth", "status"\], "claude"\)/);
-  assert.match(source, /Reply exactly ROUNDTABLE_AUTH_OK/);
-  assert.match(source, /claudeLiveAuthenticated/);
-  assert.match(source, /CLAUDE_LIVE_AUTH_TTL_MS = 20 \* 60 \* 1000/);
-  assert.match(source, /await ensureClaudeLiveAuthFresh\(\)/);
+  assert.doesNotMatch(source, /Reply exactly ROUNDTABLE_AUTH_OK/);
+  assert.doesNotMatch(source, /claudeLiveAuthenticated/);
+  assert.doesNotMatch(source, /CLAUDE_LIVE_AUTH_TTL_MS/);
+  assert.doesNotMatch(source, /ensureClaudeLiveAuthFresh/);
   assert.match(source, /const codexGuardProbe/);
   assert.match(source, /resolveCredentialPathAliases/);
 });

@@ -91,11 +91,13 @@ export function classifyAgentAuthenticationFailure(role, message) {
   }
   const instructions = {
     codex: "Run `codex login` in a terminal",
-    claude: "Run `claude auth login` in a terminal",
     antigravity: "Open `agy` in a terminal and complete sign-in",
   };
   const statusBoundary = persistedSessionRejected
     ? " The provider rejected the persisted session; a local CLI status check can still report logged in after server-side revocation or expiry."
     : "";
+  if (role === "claude") {
+    return `Claude authentication became unavailable, so Roundtable will skip Claude for the rest of this room and continue with the available participants.${statusBoundary} Claude will be rechecked automatically before the next discussion.`;
+  }
   return `${instructions[role] || "Sign in to the CLI"}, then retry this turn.${statusBoundary} Roundtable requires persisted CLI sign-in and does not pass ambient API credentials to agents.`;
 }
