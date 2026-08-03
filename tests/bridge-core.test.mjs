@@ -1982,13 +1982,17 @@ test("stops cleanly from a failed turn without adding a synthetic error message"
   }
 });
 
-test("skips one failed participant turn and continues the discussion without fabricating a reply", async () => {
+test("skips a failed participant for the rest of the room without fabricating replies", async () => {
+  let claudeInvocations = 0;
   const agentRunner = {
     async run({ role, purpose }) {
       if (purpose === "synthesis") {
         return '{"decision":"Continue","rationale":"Two participants completed the round.","actions":[],"openQuestions":[],"consensus":false}';
       }
-      if (role === "claude") throw new Error("OAuth session expired and could not be refreshed");
+      if (role === "claude") {
+        claudeInvocations += 1;
+        throw new Error("OAuth session expired and could not be refreshed");
+      }
       return `${role} completed reply`;
     },
     stop: async () => {},
@@ -2002,7 +2006,7 @@ test("skips one failed participant turn and continues the discussion without fab
       body: JSON.stringify({
         projectPath: "/test/project",
         topic: "Continue after one provider fails",
-        rounds: 1,
+        rounds: 2,
       }),
     });
     const { id } = await createResponse.json();
@@ -2020,6 +2024,7 @@ test("skips one failed participant turn and continues the discussion without fab
       headers: authHeaders(),
     });
     assert.equal(skipResponse.status, 202);
+    assert.equal((await skipResponse.json()).skipRemainingTurns, true);
 
     const completed = await waitFor(async () => {
       const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
@@ -2030,9 +2035,13 @@ test("skips one failed participant turn and continues the discussion without fab
     });
     assert.deepEqual(
       completed.messages.map((message) => message.role),
-      ["codex", "antigravity"],
+      ["codex", "antigravity", "codex", "antigravity"],
     );
-    assert.equal(completed.completedTurns, 3);
+    assert.equal(completed.completedTurns, 6);
+    assert.equal(claudeInvocations, 1);
+    assert.equal(completed.participantIssues.length, 1);
+    assert.equal(completed.participantIssues[0].role, "claude");
+    assert.match(completed.participantIssues[0].reason, /remaining turns/i);
     assert.equal(completed.sealedBatch.roles.claude.status, "skipped");
     assert.equal(completed.outcome.status, "available");
   } finally {

@@ -1073,11 +1073,18 @@ export function createBridge({
         }
         if (action === "skip") {
           const skippedTurn = session.failedTurn;
+          const issue = {
+            role,
+            status: "unavailable",
+            reason: `${skippedTurn.safeError} The room owner chose to continue without ${AGENT_NAMES[role]} for the remaining turns.`,
+            detectedAt: now().toISOString(),
+          };
+          session.participantIssues[role] = issue;
           if (stage === "sealed") {
             updateSealedRole(session, role, "skipped", {
               attempts,
               inputHash: promptPackage.context.inputHash,
-              safeError: skippedTurn.safeError,
+              safeError: issue.reason,
             });
           }
           session.failedTurn = null;
@@ -1086,7 +1093,7 @@ export function createBridge({
             turn: session.completedTurns,
             failedTurn: null,
             stage,
-            note: `${AGENT_NAMES[role]} turn ${turn + 1} was skipped; the discussion is continuing with the remaining participants.`,
+            note: `${AGENT_NAMES[role]} was skipped for the rest of this room; the remaining participants are continuing automatically.`,
           });
           return true;
         }
@@ -2206,6 +2213,7 @@ export function createBridge({
             ok: true,
             skippedRole: session.failedTurn.role,
             skippedTurn: session.failedTurn.turn,
+            skipRemainingTurns: true,
           });
           return;
         }
