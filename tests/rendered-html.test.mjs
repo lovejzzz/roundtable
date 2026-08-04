@@ -45,7 +45,10 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /Model and effort are sent as separate CLI settings/i);
   assert.match(html, /Model and reasoning choices lock when the room starts/i);
   assert.match(html, /Round one is sealed and independent/i);
-  assert.match(html, /two independent audits and at most one revision/i);
+  assert.match(html, /Fable 5 final audit/i);
+  assert.match(html, /Appears only after the last round/i);
+  assert.match(html, /Final-round auditor/i);
+  assert.match(html, /Claude Fable 5 · High reasoning/i);
   assert.match(html, /Add files/i);
   assert.match(html, /aria-label="Add files to the discussion prompt"/i);
   assert.match(html, /3 MB each · 3 MB total/i);
@@ -54,10 +57,10 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /aria-atomic="true"/i);
   assert.match(html, /TEST CAPABILITY/i);
   assert.match(html, /separate disposable project copies/i);
-  assert.match(html, /Claude and Antigravity can each request one approved argv command/i);
+  assert.match(html, /Claude and Antigravity\s+can each request one approved argv command/i);
   assert.match(html, /Claude(?:&apos;|&#x27;|')s model process remains read-only/i);
   assert.match(html, /Bridge and ambient API credentials are never passed to agent processes/i);
-  assert.doesNotMatch(html, /COMPLETION BRIEF/i);
+  assert.doesNotMatch(html, />COMPLETION BRIEF</i);
   assert.doesNotMatch(html, /A completion brief will appear here after the agents finish/i);
   assert.match(html, /property="og:image"/i);
   assert.match(html, /\/og\.png/i);
@@ -95,7 +98,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /separate local-only network sandbox/i);
   assert.match(page, /Claude has no shell access/i);
   assert.match(page, /Claude(?:&apos;|')s model process remains read-only/i);
-  assert.match(page, /Claude and Antigravity can each request one approved argv command/i);
+  assert.match(page, /Claude and Antigravity\s+can each request one approved argv command/i);
+  assert.match(page, /fableFinalAudit/);
+  assert.match(page, /boss-audit/);
   assert.match(page, /showCompletionBrief/);
   assert.match(page, /promptAttachments/);
   assert.match(page, /attachmentManifestId/);
@@ -121,7 +126,7 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /const roomMode:/);
   assert.match(page, /function resetToSetup\(\)/);
   assert.match(page, /shouldAutoScrollRef/);
-  assert.match(page, /role-specific runtime and configuration settings/i);
+  assert.match(page, /role-specific runtime and\s+configuration settings/i);
   assert.match(page, /scrollHeight - feed\.scrollTop - feed\.clientHeight <= 72/);
   assert.match(page, /liveStatusText/);
   assert.match(page, /message\.role !== "human"/);
@@ -142,8 +147,8 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /scheduleRecovery\(id, streamToken, streamBridge, generation, 0\)/);
   assert.doesNotMatch(page, /sessionStorage\.removeItem\("roundtable\.sessionId"\);\s*setStatus\("error"\)/);
   assert.match(page, /async function responseError\(response: Response, fallback: string\)/);
-  assert.match(page, /await responseError\(response, "The archived discussion could not be deleted\."/);
-  assert.match(page, /await responseError\(response, "Local history could not be cleared\."/);
+  assert.match(page, /await responseError\(\s*response,\s*"The archived discussion could not be deleted\."/);
+  assert.match(page, /await responseError\(\s*response,\s*"Local history could not be cleared\."/);
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /\.message-feed:focus-visible/);
   assert.match(styles, /\.visually-hidden/);

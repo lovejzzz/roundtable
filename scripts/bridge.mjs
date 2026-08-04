@@ -70,7 +70,8 @@ const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
 const webPort = resolveWebPort();
 const allowedOrigins = roundtableWebOrigins(webPort);
-const token = process.env.ROUNDTABLE_BRIDGE_TOKEN || randomBytes(24).toString("base64url");
+const token =
+  process.env.ROUNDTABLE_BRIDGE_TOKEN || randomBytes(24).toString("base64url");
 const homeDirectory = homedir();
 const codexHome = process.env.CODEX_HOME
   ? resolve(process.env.CODEX_HOME)
@@ -80,18 +81,17 @@ const claudeHome = process.env.CLAUDE_CONFIG_DIR
   : join(homeDirectory, ".claude");
 const antigravityHome = join(homeDirectory, ".antigravity");
 const geminiHome = join(homeDirectory, ".gemini");
-const [
-  codexProtectedPaths,
-  claudeProtectedPaths,
-  antigravityProtectedPaths,
-] = await Promise.all([
-  resolveCredentialPathAliases([codexHome]),
-  resolveCredentialPathAliases([claudeHome]),
-  resolveCredentialPathAliases([antigravityHome, geminiHome]),
-]);
+const [codexProtectedPaths, claudeProtectedPaths, antigravityProtectedPaths] =
+  await Promise.all([
+    resolveCredentialPathAliases([codexHome]),
+    resolveCredentialPathAliases([claudeHome]),
+    resolveCredentialPathAliases([antigravityHome, geminiHome]),
+  ]);
 const agentEnvironmentOverrides = {
   codex: process.env.CODEX_HOME ? { CODEX_HOME: codexHome } : {},
-  claude: process.env.CLAUDE_CONFIG_DIR ? { CLAUDE_CONFIG_DIR: claudeHome } : {},
+  claude: process.env.CLAUDE_CONFIG_DIR
+    ? { CLAUDE_CONFIG_DIR: claudeHome }
+    : {},
   antigravity: {},
 };
 const withheldCredentialVariables = withheldAuthenticationVariables();
@@ -147,20 +147,26 @@ const codexConfigText = await readFile(
 const codexConfiguredModel =
   codexConfigText.match(/^\s*model\s*=\s*["']([^"']+)["']/m)?.[1] || "";
 const codexConfiguredEffort =
-  codexConfigText.match(/^\s*model_reasoning_effort\s*=\s*["']([^"']+)["']/m)?.[1] || "medium";
-const claudeSettingsText = await readFile(join(claudeHome, "settings.json"), "utf8").catch(
-  () => "",
-);
+  codexConfigText.match(
+    /^\s*model_reasoning_effort\s*=\s*["']([^"']+)["']/m,
+  )?.[1] || "medium";
+const claudeSettingsText = await readFile(
+  join(claudeHome, "settings.json"),
+  "utf8",
+).catch(() => "");
 let claudeConfiguredModel = process.env.ANTHROPIC_MODEL || "";
 let claudeConfiguredEffort = "medium";
 if (claudeSettingsText) {
   try {
     const settings = JSON.parse(claudeSettingsText);
     if (!claudeConfiguredModel) {
-      claudeConfiguredModel = typeof settings.model === "string" ? settings.model : "";
+      claudeConfiguredModel =
+        typeof settings.model === "string" ? settings.model : "";
     }
     claudeConfiguredEffort =
-      typeof settings.effortLevel === "string" ? settings.effortLevel : "medium";
+      typeof settings.effortLevel === "string"
+        ? settings.effortLevel
+        : "medium";
   } catch {
     // A malformed optional settings file should not prevent the bridge from starting.
   }
@@ -176,8 +182,7 @@ const [
   antigravityModelsResult,
   codexAuthResult,
   claudeAuthResult,
-] =
-  await Promise.all([
+] = await Promise.all([
   runCliProbe(codexPath, ["--version"], "codex"),
   runCliProbe(claudePath, ["--version"], "claude"),
   runCliProbe(antigravityPath, ["--version"], "antigravity"),
@@ -194,10 +199,14 @@ const antigravityVersion = antigravityVersionResult.output;
 const codexHelp = codexHelpResult.output;
 const claudeHelp = claudeHelpResult.output;
 const antigravityHelp = antigravityHelpResult.output;
-const antigravityModels = (antigravityModelsResult.success ? antigravityModelsResult.output : "")
+const antigravityModels = (
+  antigravityModelsResult.success ? antigravityModelsResult.output : ""
+)
   .split(/\r?\n/)
   .map((line) => line.trim().replace(/^[-*]\s*/, ""))
-  .filter((line) => /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*-[A-Za-z0-9._:/[\]-]+$/.test(line));
+  .filter((line) =>
+    /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*-[A-Za-z0-9._:/[\]-]+$/.test(line),
+  );
 const antigravityConfiguredModel =
   process.env.ANTIGRAVITY_MODEL || antigravityModels[0] || "";
 const antigravityConfiguredEffort =
@@ -205,18 +214,18 @@ const antigravityConfiguredEffort =
   antigravityModelEffort(antigravityConfiguredModel) ||
   "medium";
 const claudeAuthenticated = Boolean(claudeAuthResult.success);
-const codexCompatible = Boolean(codexPath && codexHelp.includes("--output-last-message"));
+const codexCompatible = Boolean(
+  codexPath && codexHelp.includes("--output-last-message"),
+);
 const claudeCompatible = Boolean(
   claudePath &&
-    ["--safe-mode", "--strict-mcp-config", "--permission-mode", "--effort"].every((flag) =>
-      claudeHelp.includes(flag),
-    ),
+  ["--safe-mode", "--strict-mcp-config", "--permission-mode", "--effort"].every(
+    (flag) => claudeHelp.includes(flag),
+  ),
 );
 const antigravityCompatible = Boolean(
   antigravityPath &&
-    ANTIGRAVITY_REQUIRED_FLAGS.every((flag) =>
-      antigravityHelp.includes(flag),
-    ),
+  ANTIGRAVITY_REQUIRED_FLAGS.every((flag) => antigravityHelp.includes(flag)),
 );
 const codexGuardProbe =
   process.platform !== "darwin" || !codexCompatible
@@ -338,7 +347,9 @@ const health = {
     diagnostic: claudeAvailabilityDiagnostic(claudeAuthResult),
   },
   antigravity: {
-    available: Boolean(antigravityCompatible && antigravityModelsResult.success),
+    available: Boolean(
+      antigravityCompatible && antigravityModelsResult.success,
+    ),
     version: antigravityVersion,
     diagnostic: availabilityDiagnostic({
       label: "Antigravity CLI",
@@ -356,20 +367,26 @@ const health = {
 
 async function refreshUnavailableParticipantHealth(roles = []) {
   if (!roles.includes("claude")) return health;
-  const refreshedAuth = await runCliProbe(claudePath, ["auth", "status"], "claude");
+  const refreshedAuth = await runCliProbe(
+    claudePath,
+    ["auth", "status"],
+    "claude",
+  );
   health.claude.available = Boolean(claudeCompatible && refreshedAuth.success);
   health.claude.diagnostic = claudeAvailabilityDiagnostic(refreshedAuth);
   return health;
 }
 
 async function resolveProject(requestedPath) {
-  if (!isAbsolute(requestedPath)) throw new Error("Project folder must be an absolute path.");
+  if (!isAbsolute(requestedPath))
+    throw new Error("Project folder must be an absolute path.");
   if (/[\u0000-\u001f\u007f]/.test(requestedPath)) {
     throw new Error("Project folder contains unsupported characters.");
   }
   const projectPath = await realpath(requestedPath);
   const projectStat = await stat(projectPath);
-  if (!projectStat.isDirectory()) throw new Error("Project folder is not a directory.");
+  if (!projectStat.isDirectory())
+    throw new Error("Project folder is not a directory.");
   return projectPath;
 }
 
@@ -420,7 +437,10 @@ async function terminateSessionProcess(
     cleanupErrors.push(error);
   }
   if (cleanupErrors.length) {
-    throw new AggregateError(cleanupErrors, "Roundtable session cleanup did not complete.");
+    throw new AggregateError(
+      cleanupErrors,
+      "Roundtable session cleanup did not complete.",
+    );
   }
 }
 
@@ -517,13 +537,22 @@ function runManagedProcess(
           return;
         }
         if (acceptNonZero) {
-          resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code ?? 1 });
+          resolve({
+            stdout: stdout.trim(),
+            stderr: stderr.trim(),
+            exitCode: code ?? 1,
+          });
           return;
         }
         if (code !== 0) {
           const rawError =
-            stderr.trim() || stdout.trim() || `Agent process exited with code ${code}.`;
-          const authenticationFailure = classifyAgentAuthenticationFailure(role, rawError);
+            stderr.trim() ||
+            stdout.trim() ||
+            `Agent process exited with code ${code}.`;
+          const authenticationFailure = classifyAgentAuthenticationFailure(
+            role,
+            rawError,
+          );
           const error = new Error(authenticationFailure || rawError);
           if (authenticationFailure) error.code = "AUTHENTICATION_UNAVAILABLE";
           reject(error);
@@ -548,7 +577,9 @@ async function prepareParticipantInvocation(session, role) {
 
 async function runCodex(session, prompt, purpose) {
   const workingDirectory = await prepareParticipantInvocation(session, "codex");
-  const outputDirectory = await mkdtemp(join(tmpdir(), "roundtable-agent-reply-"));
+  const outputDirectory = await mkdtemp(
+    join(tmpdir(), "roundtable-agent-reply-"),
+  );
   const outputFile = join(outputDirectory, "last-message.txt");
   try {
     const args = [
@@ -562,7 +593,7 @@ async function runCodex(session, prompt, purpose) {
       "--output-last-message",
       outputFile,
     ];
-    const siblingRoots = ["claude", "antigravity"]
+    const siblingRoots = ["claude", "fable", "antigravity"]
       .map((role) => getTestSandboxInfo(session, role)?.root || "")
       .filter(Boolean);
     args.push(
@@ -596,18 +627,19 @@ async function runCodex(session, prompt, purpose) {
   }
 }
 
-async function runClaudeModel(session, prompt) {
+async function runClaudeModel(session, prompt, role = "claude") {
   // The real participant request is the only live authentication check. An
   // extra prompt probe doubled provider traffic and could churn a healthy
   // persisted session before the discussion even began.
-  const workingDirectory = await prepareParticipantInvocation(session, "claude");
+  const workingDirectory = await prepareParticipantInvocation(session, role);
   const args = buildClaudeInvocationArgs({
-    model: session.claudeModel,
-    effort: session.claudeEffort,
+    model: role === "fable" ? session.fableModel : session.claudeModel,
+    effort: role === "fable" ? session.fableEffort : session.claudeEffort,
   });
 
   if (sandboxExecPath) {
-    const siblingRoots = ["codex", "antigravity"]
+    const siblingRoots = ["codex", "claude", "fable", "antigravity"]
+      .filter((candidate) => candidate !== role)
       .map((role) => getTestSandboxInfo(session, role)?.root || "")
       .filter(Boolean);
     const [homeEntries, claudeHomeEntries] = await Promise.all([
@@ -634,14 +666,21 @@ async function runClaudeModel(session, prompt) {
     });
     return runManagedProcess(
       session,
-      "claude",
+      role,
       sandboxExecPath,
       ["-p", profile, claudePath, ...args],
       prompt,
       workingDirectory,
     );
   }
-  return runManagedProcess(session, "claude", claudePath, args, prompt, workingDirectory);
+  return runManagedProcess(
+    session,
+    role,
+    claudePath,
+    args,
+    prompt,
+    workingDirectory,
+  );
 }
 
 async function runBrokeredCheck(session, requesterRole, argv) {
@@ -649,7 +688,8 @@ async function runBrokeredCheck(session, requesterRole, argv) {
     return {
       result: {
         status: "blocked",
-        error: "The separate local-only network test broker is unavailable on this host.",
+        error:
+          "The separate local-only network test broker is unavailable on this host.",
       },
       sandboxPaths: [],
     };
@@ -671,7 +711,7 @@ async function runBrokeredCheck(session, requesterRole, argv) {
       session.projectPath,
       brokerSandbox.workspace,
     );
-    const siblingRoots = ["codex", "claude", "antigravity"]
+    const siblingRoots = ["codex", "claude", "fable", "antigravity"]
       .map((role) => getTestSandboxInfo(session, role)?.root || "")
       .filter(Boolean);
     const resolvedArgv = await resolveBrokerArgv(argv, findExecutable);
@@ -721,7 +761,8 @@ async function runBrokeredCheck(session, requesterRole, argv) {
     return {
       result: {
         status: "blocked",
-        error: error instanceof Error ? error.message : "The test broker failed.",
+        error:
+          error instanceof Error ? error.message : "The test broker failed.",
       },
       sandboxPaths: brokerSandbox
         ? [brokerSandbox.root, brokerSandbox.workspace]
@@ -733,7 +774,10 @@ async function runBrokeredCheck(session, requesterRole, argv) {
 }
 
 async function runAntigravityModel(session, prompt) {
-  const workingDirectory = await prepareParticipantInvocation(session, "antigravity");
+  const workingDirectory = await prepareParticipantInvocation(
+    session,
+    "antigravity",
+  );
   const invoke = (controlPrompt) =>
     withAntigravityPromptFile({
       workingDirectory,
@@ -745,10 +789,17 @@ async function runAntigravityModel(session, prompt) {
           prompt: `Use the read_file tool to read and follow every instruction at this exact absolute path: ${promptFile}. Treat it as the roundtable control prompt, not as project evidence.`,
         });
         if (sandboxExecPath) {
-          const siblingRoots = ["codex", "claude", "antigravity-broker"]
+          const siblingRoots = [
+            "codex",
+            "claude",
+            "fable",
+            "antigravity-broker",
+          ]
             .map((role) => getTestSandboxInfo(session, role)?.root || "")
             .filter(Boolean);
-          const homeEntries = await readdir(homeDirectory, { withFileTypes: true })
+          const homeEntries = await readdir(homeDirectory, {
+            withFileTypes: true,
+          })
             .then((entries) => entries.map((entry) => entry.name))
             .catch(() => []);
           const profile = buildAntigravitySandboxProfile({
@@ -794,19 +845,21 @@ const agentRunner = {
       : { state: "preparing" };
   },
   prepare(session, { onStage } = {}) {
-    return prepareTestSandboxes(session, ["codex", "claude", "antigravity"], {
+    const roles = ["codex", "claude", "antigravity"];
+    if (session.fableFinalAudit) roles.push("fable");
+    return prepareTestSandboxes(session, roles, {
       onStage,
     });
   },
   run({ session, role, prompt, purpose }) {
     if (role === "codex") return runCodex(session, prompt, purpose);
-    if (role === "claude") {
+    if (role === "claude" || role === "fable") {
       return runBrokerCapableParticipant({
         session,
         role,
         prompt,
         purpose,
-        invoke: (controlPrompt) => runClaudeModel(session, controlPrompt),
+        invoke: (controlPrompt) => runClaudeModel(session, controlPrompt, role),
         execute: (argv) => runBrokeredCheck(session, role, argv),
         onBrokerStart: () => {
           const startedAt = new Date().toISOString();
@@ -873,12 +926,15 @@ async function shutdownBridge(signal) {
   if (shutdownStarted) return;
   shutdownStarted = true;
   const forceTimer = setTimeout(() => {
-    for (const session of sessions.values()) signalProcessTree(session.child, "SIGKILL");
+    for (const session of sessions.values())
+      signalProcessTree(session.child, "SIGKILL");
     for (const session of sessions.values()) cleanupTestSandboxesSync(session);
     process.exit(1);
   }, 25_000);
   forceTimer.unref();
-  await shutdown(`bridge_${String(signal || "shutdown").toLowerCase()}`).catch(() => {});
+  await shutdown(`bridge_${String(signal || "shutdown").toLowerCase()}`).catch(
+    () => {},
+  );
   clearTimeout(forceTimer);
   process.exit(0);
 }

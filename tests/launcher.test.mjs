@@ -22,13 +22,20 @@ import {
 
 test("launcher startup patience defaults to three minutes and supports a bounded override", () => {
   assert.equal(resolveLauncherStartupTimeout({}), 180_000);
-  assert.equal(resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "240000" }), 240_000);
+  assert.equal(
+    resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "240000" }),
+    240_000,
+  );
   assert.throws(
-    () => resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "999" }),
+    () =>
+      resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "999" }),
     /integer from 1000 through 900000/,
   );
   assert.throws(
-    () => resolveLauncherStartupTimeout({ ROUNDTABLE_STARTUP_TIMEOUT_MS: "forever" }),
+    () =>
+      resolveLauncherStartupTimeout({
+        ROUNDTABLE_STARTUP_TIMEOUT_MS: "forever",
+      }),
     /integer from 1000 through 900000/,
   );
 });
@@ -61,7 +68,10 @@ test("talk launch options reject missing, unknown, and unsafe values", () => {
   assert.throws(() => parseTalkArguments(["--project"]), /requires a value/);
   assert.throws(() => parseTalkArguments(["--topic", "  "]), /non-empty text/);
   assert.throws(() => parseTalkArguments(["--rounds", "6"]), /1 through 5/);
-  assert.throws(() => parseTalkArguments(["--autostart"]), /Unknown Roundtable option/);
+  assert.throws(
+    () => parseTalkArguments(["--autostart"]),
+    /Unknown Roundtable option/,
+  );
 });
 
 test("connected room URL carries encoded launch context", () => {
@@ -79,7 +89,10 @@ test("connected room URL carries encoded launch context", () => {
   assert.equal(url.origin, "http://localhost:3000");
   assert.equal(url.searchParams.get("bridge"), "http://127.0.0.1:4317");
   assert.equal(url.searchParams.get("token"), "private-token");
-  assert.equal(url.searchParams.get("project"), "/Users/example/Project & Notes");
+  assert.equal(
+    url.searchParams.get("project"),
+    "/Users/example/Project & Notes",
+  );
   assert.equal(url.searchParams.get("topic"), "Review auth & release?");
   assert.equal(url.searchParams.get("rounds"), "2");
   assert.equal(url.searchParams.get("session"), "session-123");
@@ -132,6 +145,7 @@ test("auto-start uses the requested launch context and configured CLI defaults",
     codexEffort: "high",
     claudeEffort: "high",
     antigravityEffort: "high",
+    fableFinalAudit: true,
     keepHistory: false,
     reviewDissent: false,
   });
@@ -154,7 +168,10 @@ test("auto-start uses the requested launch context and configured CLI defaults",
   assert.equal(sessionId, "session-123");
   assert.equal(request.url, "http://127.0.0.1:4317/sessions");
   assert.equal(request.init.headers.Authorization, "Bearer private-token");
-  assert.deepEqual(JSON.parse(request.init.body), buildAutostartPayload(options, health));
+  assert.deepEqual(
+    JSON.parse(request.init.body),
+    buildAutostartPayload(options, health),
+  );
 });
 
 test("launcher bridge port follows the configured environment", () => {
@@ -164,14 +181,23 @@ test("launcher bridge port follows the configured environment", () => {
     () => resolveBridgePort({ ROUNDTABLE_BRIDGE_PORT: "not-a-port" }),
     /must be an integer/,
   );
-  assert.throws(() => resolveBridgePort({ ROUNDTABLE_BRIDGE_PORT: "65536" }), /must be an integer/);
+  assert.throws(
+    () => resolveBridgePort({ ROUNDTABLE_BRIDGE_PORT: "65536" }),
+    /must be an integer/,
+  );
 });
 
 test("launcher web port follows the configured environment", () => {
   assert.equal(resolveWebPort({}), 3000);
   assert.equal(resolveWebPort({ ROUNDTABLE_WEB_PORT: "3100" }), 3100);
-  assert.throws(() => resolveWebPort({ ROUNDTABLE_WEB_PORT: "not-a-port" }), /must be an integer/);
-  assert.throws(() => resolveWebPort({ ROUNDTABLE_WEB_PORT: "65536" }), /must be an integer/);
+  assert.throws(
+    () => resolveWebPort({ ROUNDTABLE_WEB_PORT: "not-a-port" }),
+    /must be an integer/,
+  );
+  assert.throws(
+    () => resolveWebPort({ ROUNDTABLE_WEB_PORT: "65536" }),
+    /must be an integer/,
+  );
 });
 
 test("authenticated bridge health retries transient connection failures", async () => {
@@ -315,7 +341,10 @@ test("launcher readiness attributes a living unbound web process without hiding 
       componentState,
     }),
     (error) => {
-      assert.match(error.message, /bridge=ready; web process=alive; web port=unbound/);
+      assert.match(
+        error.message,
+        /bridge=ready; web process=alive; web port=unbound/,
+      );
       assert.match(error.message, /synced or cloud-backed folder/i);
       return true;
     },

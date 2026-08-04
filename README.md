@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.41**
+Current release: **v0.0.0.48**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -140,7 +140,12 @@ whole-process-tree cleanup.
    or archived room are labeled never delivered.
 8. If an agent call fails, Roundtable pauses that exact turn without changing the
    transcript. Retry the same agent and context, or end the discussion cleanly.
-9. Only after the final agent turn, Roundtable asks Codex for a structured
+9. When **Fable 5 final audit** is enabled, Fable appears exactly once after
+   the scheduled Codex, Claude, and Antigravity rounds. It receives the complete
+   labeled discussion and repository diff as a read-only final-round auditor,
+   then records a strict fix-or-ship judgment before synthesis. Adding rounds
+   extends the regular discussion without duplicating this final audit.
+10. Only after the final agent turn, Roundtable asks Codex for a structured
    Completion Brief and falls back to Claude, then Antigravity, if a participant
    fails or returns invalid structure. The two non-synthesizing participants
    independently audit the draft against labeled transcript evidence. Material
@@ -148,14 +153,14 @@ whole-process-tree cleanup.
    the original draft, audits, attempts, and final brief. The persisted audit
    state closes as complete or stopped rather than retaining a stale running
    marker after the room ends.
-10. Optionally enable **Dissent check**. After the audited brief is frozen,
+11. Optionally enable **Dissent check**. After the audited brief is frozen,
     each agent gets one separate review pass and can identify labeled positions
     the brief missed or flattened. Mark each item **Represented** or **Missed**;
     those judgments are saved locally.
-11. If you opt in, open **History** to revisit recent discussions after a bridge
+12. If you opt in, open **History** to revisit recent discussions after a bridge
     restart. Archived discussions are read-only and keep undelivered steering
     notes visibly separate from the transcript.
-12. Stop the discussion whenever you want.
+13. Stop the discussion whenever you want.
 
 Ordinary turn context has a strict 48,000-character ceiling. Roundtable keeps
 the newest useful context, shortens an individually oversized newest message,

@@ -1,4 +1,10 @@
-const AGENT_ROLES = new Set(["codex", "claude", "antigravity", "broker"]);
+const AGENT_ROLES = new Set([
+  "codex",
+  "claude",
+  "fable",
+  "antigravity",
+  "broker",
+]);
 
 export const AGENT_COMMON_ENVIRONMENT_KEYS = Object.freeze([
   "HOME",
@@ -29,6 +35,7 @@ export const AGENT_COMMON_ENVIRONMENT_KEYS = Object.freeze([
 export const AGENT_ROLE_ENVIRONMENT_KEYS = Object.freeze({
   codex: Object.freeze(["CODEX_HOME"]),
   claude: Object.freeze(["CLAUDE_CONFIG_DIR"]),
+  fable: Object.freeze(["CLAUDE_CONFIG_DIR"]),
   antigravity: Object.freeze([]),
   broker: Object.freeze([]),
 });
@@ -48,7 +55,9 @@ export function withheldAuthenticationVariables(
   inheritedEnvironment = process.env,
 ) {
   return AGENT_AUTHENTICATION_ENVIRONMENT_KEYS.filter(
-    (key) => typeof inheritedEnvironment[key] === "string" && inheritedEnvironment[key].length > 0,
+    (key) =>
+      typeof inheritedEnvironment[key] === "string" &&
+      inheritedEnvironment[key].length > 0,
   );
 }
 
@@ -79,8 +88,12 @@ export function buildAgentEnvironment(
 export function classifyAgentAuthenticationFailure(role, message) {
   const raw = String(message || "");
   const persistedSessionRejected =
-    /\b(?:oauth\s+)?(?:access\s+)?token\b.{0,80}\b(?:revoked|expired|invalid)\b/i.test(raw) ||
-    /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth\s+)?(?:access\s+)?token\b/i.test(raw);
+    /\b(?:oauth\s+)?(?:access\s+)?token\b.{0,80}\b(?:revoked|expired|invalid)\b/i.test(
+      raw,
+    ) ||
+    /\b(?:revoked|expired|invalid)\b.{0,80}\b(?:oauth\s+)?(?:access\s+)?token\b/i.test(
+      raw,
+    );
   if (
     !persistedSessionRejected &&
     !/(?:not logged in|not authenticated|authentication (?:failed|required)|unauthorized|login required|please (?:run|use).{0,30}login|api key.{0,30}(?:missing|required|invalid)|invalid api key)/i.test(
@@ -96,8 +109,9 @@ export function classifyAgentAuthenticationFailure(role, message) {
   const statusBoundary = persistedSessionRejected
     ? " The provider rejected the persisted session; a local CLI status check can still report logged in after server-side revocation or expiry."
     : "";
-  if (role === "claude") {
-    return `Claude authentication became unavailable, so Roundtable will skip Claude for the rest of this room and continue with the available participants.${statusBoundary} Claude will be rechecked automatically before the next discussion.`;
+  if (role === "claude" || role === "fable") {
+    const participant = role === "fable" ? "Fable 5" : "Claude";
+    return `${participant} authentication became unavailable, so Roundtable will skip ${participant} for the rest of this room and continue with the available participants.${statusBoundary} Claude will be rechecked automatically before the next discussion.`;
   }
   return `${instructions[role] || "Sign in to the CLI"}, then retry this turn.${statusBoundary} Roundtable requires persisted CLI sign-in and does not pass ambient API credentials to agents.`;
 }

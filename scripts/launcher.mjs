@@ -50,7 +50,9 @@ export function parseTalkArguments(argv = [], cwd = process.cwd()) {
       const value = requiredArgumentValue(argv, index, option).trim();
       if (!value) throw new Error("--topic requires non-empty text.");
       if (value.length > LAUNCHER_TOPIC_MAX_CHARACTERS) {
-        throw new Error(`--topic must be at most ${LAUNCHER_TOPIC_MAX_CHARACTERS} characters.`);
+        throw new Error(
+          `--topic must be at most ${LAUNCHER_TOPIC_MAX_CHARACTERS} characters.`,
+        );
       }
       options.topic = value;
       index += 1;
@@ -103,6 +105,7 @@ export function buildAutostartPayload(options, health) {
     codexEffort: health.models.codex.effort,
     claudeEffort: health.models.claude.effort,
     antigravityEffort: health.models.antigravity.effort,
+    fableFinalAudit: true,
     keepHistory: false,
     reviewDissent: false,
   };
@@ -127,10 +130,14 @@ export async function startRoundtableSession({
   try {
     data = await response.json();
   } catch {
-    throw new Error("Roundtable auto-start returned an invalid bridge response.");
+    throw new Error(
+      "Roundtable auto-start returned an invalid bridge response.",
+    );
   }
   if (!response.ok || !data?.id) {
-    throw new Error(data?.error || "Roundtable could not auto-start the discussion.");
+    throw new Error(
+      data?.error || "Roundtable could not auto-start the discussion.",
+    );
   }
   return data.id;
 }
@@ -163,7 +170,11 @@ export function resolveLauncherStartupTimeout(environment = process.env) {
     return LAUNCHER_STARTUP_TIMEOUT_MS;
   }
   const timeoutMs = Number(rawTimeout);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > LAUNCHER_STARTUP_TIMEOUT_MAX_MS) {
+  if (
+    !Number.isInteger(timeoutMs) ||
+    timeoutMs < 1_000 ||
+    timeoutMs > LAUNCHER_STARTUP_TIMEOUT_MAX_MS
+  ) {
     throw new Error(
       `ROUNDTABLE_STARTUP_TIMEOUT_MS must be an integer from 1000 through ${LAUNCHER_STARTUP_TIMEOUT_MAX_MS}; received “${rawTimeout}”.`,
     );
@@ -287,7 +298,10 @@ export async function waitForWebHealth({
     }
 
     if (Date.now() - startedAt >= timeoutMs) break;
-    await delay(Math.min(retryMs, timeoutMs - (Date.now() - startedAt)), signal);
+    await delay(
+      Math.min(retryMs, timeoutMs - (Date.now() - startedAt)),
+      signal,
+    );
   }
 
   const error = new Error(
@@ -325,7 +339,10 @@ export async function waitForBridgeHealth({
     } catch {
       if (signal?.aborted) throw abortError(signal);
       if (Date.now() - startedAt >= timeoutMs) break;
-      await delay(Math.min(retryMs, timeoutMs - (Date.now() - startedAt)), signal);
+      await delay(
+        Math.min(retryMs, timeoutMs - (Date.now() - startedAt)),
+        signal,
+      );
       continue;
     }
 
@@ -414,12 +431,14 @@ export async function waitForLauncherReadiness({
     ]);
     onReady();
   } catch (cause) {
-    const error = cause instanceof Error ? cause : new Error("Roundtable startup failed.");
+    const error =
+      cause instanceof Error ? cause : new Error("Roundtable startup failed.");
     const bridgeSummary = `bridge=${componentState.bridge.readiness}`;
     const webProcess = `web process=${componentState.web.process}`;
     const webPort = `web port=${componentState.web.port}`;
     const stalledCompilerHint =
-      componentState.web.process === "alive" && componentState.web.port === "unbound"
+      componentState.web.process === "alive" &&
+      componentState.web.port === "unbound"
         ? " The web compiler is alive but has not opened its port. If this checkout is on a synced or cloud-backed folder, use a local checkout and relaunch."
         : "";
     const diagnosed = new Error(
@@ -436,7 +455,9 @@ export async function waitForLauncherReadiness({
 export function unexpectedChildExitError(label, code, signal, ready) {
   const stage = ready ? "after startup" : "during startup";
   const result =
-    signal != null ? `from signal ${signal}` : `with exit code ${code == null ? "unknown" : code}`;
+    signal != null
+      ? `from signal ${signal}`
+      : `with exit code ${code == null ? "unknown" : code}`;
   return new Error(`${label} exited unexpectedly ${stage} ${result}.`);
 }
 
@@ -456,7 +477,12 @@ export function signalStartedProcessTree(
   if (!child?.pid || processHasExited(child)) return false;
   try {
     if (platform === "win32") {
-      runTaskkill(["/PID", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])]);
+      runTaskkill([
+        "/PID",
+        String(child.pid),
+        "/T",
+        ...(signal === "SIGKILL" ? ["/F"] : []),
+      ]);
     } else {
       killGroup(-child.pid, signal);
     }
@@ -475,7 +501,9 @@ export async function stopStartedProcesses(
     signalTree = signalStartedProcessTree,
   } = {},
 ) {
-  const active = [...children].filter((child) => child?.pid && !processHasExited(child));
+  const active = [...children].filter(
+    (child) => child?.pid && !processHasExited(child),
+  );
   const closed = new Set();
   const closePromises = active.map(
     (child) =>

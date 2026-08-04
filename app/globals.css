@@ -10,6 +10,7 @@
   --muted: #92949d;
   --codex: #ff7354;
   --claude: #ad92ff;
+  --fable: #ffb86b;
   --antigravity: #52d7c5;
   --human: #c7ef57;
 }
@@ -762,7 +763,9 @@ button {
   font-size: 11px;
   font-weight: 750;
   letter-spacing: 0.02em;
-  transition: background 160ms ease, transform 160ms ease;
+  transition:
+    background 160ms ease,
+    transform 160ms ease;
 }
 
 .primary svg:last-child {
@@ -825,6 +828,10 @@ button {
 
 .antigravity-glyph {
   color: var(--antigravity);
+}
+
+.fable-glyph {
+  color: var(--fable);
 }
 
 .human-glyph {
@@ -927,6 +934,10 @@ button {
 
 .antigravity-agent .effort-picker {
   color: var(--antigravity);
+}
+
+.fable-agent .model-picker {
+  color: var(--fable);
 }
 
 .effort-picker input[type="range"]::-webkit-slider-runnable-track {
@@ -1289,6 +1300,10 @@ button {
   color: var(--antigravity);
 }
 
+.message.fable {
+  color: var(--fable);
+}
+
 .message.human {
   color: var(--human);
   background: rgba(199, 239, 87, 0.025);
@@ -1498,8 +1513,7 @@ button {
   margin: 18px 0;
   border: 1px solid #68443a;
   background:
-    linear-gradient(135deg, rgba(218, 122, 94, 0.08), transparent 58%),
-    #181312;
+    linear-gradient(135deg, rgba(218, 122, 94, 0.08), transparent 58%), #181312;
   padding: 18px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1545,8 +1559,7 @@ button {
   margin: 18px 0;
   border: 1px solid #486656;
   background:
-    linear-gradient(135deg, rgba(113, 176, 139, 0.08), transparent 58%),
-    #111714;
+    linear-gradient(135deg, rgba(113, 176, 139, 0.08), transparent 58%), #111714;
   padding: 18px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
@@ -1760,8 +1773,7 @@ button {
   padding: 18px;
   border: 1px solid #3b402c;
   background:
-    linear-gradient(135deg, rgba(199, 239, 87, 0.06), transparent 58%),
-    #12140f;
+    linear-gradient(135deg, rgba(199, 239, 87, 0.06), transparent 58%), #12140f;
 }
 
 .feed-outcome {
@@ -2298,7 +2310,6 @@ button {
   .context-panel {
     display: none;
   }
-
 }
 
 @media (max-width: 760px) {

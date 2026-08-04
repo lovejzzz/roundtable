@@ -44,7 +44,7 @@ import {
   recoveryFailureKind,
 } from "../lib/stream-recovery.mjs";
 
-type AgentRole = "codex" | "claude" | "antigravity";
+type AgentRole = "codex" | "claude" | "fable" | "antigravity";
 type Speaker = AgentRole | "human";
 
 type PromptAttachment = {
@@ -76,9 +76,9 @@ type Message = {
   model?: string;
   effort?: string;
   checks?: ReportedCheck[];
-  stage?: "sealed" | "cross-examination";
+  stage?: "sealed" | "cross-examination" | "boss-audit";
   context?: {
-    stage: "sealed" | "cross-examination";
+    stage: "sealed" | "cross-examination" | "boss-audit";
     inputHash: string;
     coverage: OutcomeCoverage;
   };
@@ -149,7 +149,10 @@ type Outcome =
       status: "available";
       decision: string;
       rationale: string;
-      actions: { owner: "You" | "Codex" | "Claude" | "Antigravity" | "Unassigned"; text: string }[];
+      actions: {
+        owner: "You" | "Codex" | "Claude" | "Antigravity" | "Unassigned";
+        text: string;
+      }[];
       openQuestions: string[];
       consensus: boolean;
       coverage: OutcomeCoverage;
@@ -161,7 +164,10 @@ type Outcome =
         status: "available";
         decision: string;
         rationale: string;
-        actions: { owner: "You" | "Codex" | "Claude" | "Antigravity" | "Unassigned"; text: string }[];
+        actions: {
+          owner: "You" | "Codex" | "Claude" | "Antigravity" | "Unassigned";
+          text: string;
+        }[];
         openQuestions: string[];
         consensus: boolean;
       };
@@ -191,9 +197,24 @@ type BridgeHealth = {
   defaultProject: string;
   projectWriteGuard: boolean;
   models: {
-    codex: { configured: string; effort: string; efforts: string[]; available?: string[] };
-    claude: { configured: string; effort: string; efforts: string[]; available?: string[] };
-    antigravity: { configured: string; effort: string; efforts: string[]; available?: string[] };
+    codex: {
+      configured: string;
+      effort: string;
+      efforts: string[];
+      available?: string[];
+    };
+    claude: {
+      configured: string;
+      effort: string;
+      efforts: string[];
+      available?: string[];
+    };
+    antigravity: {
+      configured: string;
+      effort: string;
+      efforts: string[];
+      available?: string[];
+    };
   };
   codex: { available: boolean; version: string; diagnostic?: string };
   claude: { available: boolean; version: string; diagnostic?: string };
@@ -234,7 +255,12 @@ type SessionLiveness = {
   role: AgentRole;
   turn: number;
   stage: string;
-  state: "preparing" | "request-active" | "process-active" | "process-exited" | "broker-active";
+  state:
+    | "preparing"
+    | "request-active"
+    | "process-active"
+    | "process-exited"
+    | "broker-active";
   startedAt: string;
   observedAt: string;
   processStartedAt?: string;
@@ -301,6 +327,8 @@ type SessionSnapshot = {
   codexEffort: string;
   claudeEffort: string;
   antigravityEffort: string;
+  fableFinalAudit?: boolean;
+  discussionTurns?: number;
   totalTurns: number;
   completedTurns: number;
   messages: Message[];
@@ -411,11 +439,13 @@ const AGENT_ROLES = ["codex", "claude", "antigravity"] as const;
 const AGENT_LABELS: Record<AgentRole, string> = {
   codex: "Codex",
   claude: "Claude",
+  fable: "Fable 5",
   antigravity: "Antigravity",
 };
 const AGENT_GLYPHS: Record<AgentRole, string> = {
   codex: "C",
   claude: "A",
+  fable: "F",
   antigravity: "G",
 };
 
@@ -432,13 +462,17 @@ function unavailableReviewCopy(author: string, message?: string) {
 function friendlyModelName(role: AgentRole, model: string) {
   if (!model) return "CLI default";
   const normalized = model.toLowerCase();
-  if (role === "claude") {
+  if (role === "claude" || role === "fable") {
     if (normalized.includes("opus")) {
-      const version = normalized.match(/opus-(\d+(?:-\d+)*)/)?.[1]?.replaceAll("-", ".") || "5";
+      const version =
+        normalized.match(/opus-(\d+(?:-\d+)*)/)?.[1]?.replaceAll("-", ".") ||
+        "5";
       return `Claude Opus ${version}${normalized.includes("[1m]") ? " · 1M" : ""}`;
     }
     if (normalized.includes("sonnet")) {
-      const version = normalized.match(/sonnet-(\d+(?:-\d+)*)/)?.[1]?.replaceAll("-", ".") || "5";
+      const version =
+        normalized.match(/sonnet-(\d+(?:-\d+)*)/)?.[1]?.replaceAll("-", ".") ||
+        "5";
       return `Claude Sonnet ${version}`;
     }
     if (normalized.includes("fable")) return "Claude Fable 5";
@@ -446,7 +480,11 @@ function friendlyModelName(role: AgentRole, model: string) {
   if (normalized.startsWith("gpt-")) {
     return normalized
       .split("-")
-      .map((part, index) => (index === 0 ? part.toUpperCase() : part[0]?.toUpperCase() + part.slice(1)))
+      .map((part, index) =>
+        index === 0
+          ? part.toUpperCase()
+          : part[0]?.toUpperCase() + part.slice(1),
+      )
       .join(" ");
   }
   if (role === "antigravity" && normalized.startsWith("gemini-")) {
@@ -454,7 +492,13 @@ function friendlyModelName(role: AgentRole, model: string) {
       .replace(/-(low|medium|high)$/, "")
       .split("-")
       .map((part, index) =>
-        index === 0 ? "Gemini" : part === "pro" ? "Pro" : part === "flash" ? "Flash" : part[0]?.toUpperCase() + part.slice(1),
+        index === 0
+          ? "Gemini"
+          : part === "pro"
+            ? "Pro"
+            : part === "flash"
+              ? "Flash"
+              : part[0]?.toUpperCase() + part.slice(1),
       )
       .join(" ");
   }
@@ -515,11 +559,17 @@ function effortIndex(effort: string, levels: string[]) {
 
 function effortStyle(effort: string, levels: string[]) {
   const index = effortIndex(effort, levels);
-  return { "--effort-progress": `${(index / Math.max(1, levels.length - 1)) * 100}%` } as CSSProperties;
+  return {
+    "--effort-progress": `${(index / Math.max(1, levels.length - 1)) * 100}%`,
+  } as CSSProperties;
 }
 
 function shortVersion(version?: string) {
-  return version?.replace(/^codex-cli\s*/i, "").replace(/\s*\(Claude Code\)$/i, "") || "—";
+  return (
+    version
+      ?.replace(/^codex-cli\s*/i, "")
+      .replace(/\s*\(Claude Code\)$/i, "") || "—"
+  );
 }
 
 function displayTime(value?: string) {
@@ -562,7 +612,10 @@ function ReportedChecks({ message }: { message: Message }) {
       </p>
       <ul>
         {message.checks.map((check, index) => (
-          <li className={`check-${check.status}`} key={`${check.command}-${index}`}>
+          <li
+            className={`check-${check.status}`}
+            key={`${check.command}-${index}`}
+          >
             <div>
               <strong>{check.status}</strong>
               <span>
@@ -571,7 +624,9 @@ function ReportedChecks({ message }: { message: Message }) {
                   : "Agent-reported"}
               </span>
               {check.round && <span>Round {check.round}</span>}
-              {Number.isInteger(check.exitCode) && <span>Exit {check.exitCode}</span>}
+              {Number.isInteger(check.exitCode) && (
+                <span>Exit {check.exitCode}</span>
+              )}
               {check.attachmentManifestId && (
                 <span title={check.attachmentManifestId}>
                   Attachments {check.attachmentManifestId.slice(0, 18)}…
@@ -612,12 +667,18 @@ function OutcomeCard({
       <div className="outcome-heading">
         <div>
           <span className="context-label">COMPLETION BRIEF</span>
-          <h2 id={compact ? "outcome-title-compact" : "outcome-title"}>Outcome</h2>
+          <h2 id={compact ? "outcome-title-compact" : "outcome-title"}>
+            Outcome
+          </h2>
         </div>
         {outcome?.status === "available" && (
           <div className="outcome-badges">
-            {outcome.provisional && <span className="audit-badge">Draft under audit</span>}
-            <span className={`consensus-badge ${outcome.consensus ? "" : "split"}`}>
+            {outcome.provisional && (
+              <span className="audit-badge">Draft under audit</span>
+            )}
+            <span
+              className={`consensus-badge ${outcome.consensus ? "" : "split"}`}
+            >
               {outcome.consensus ? "Consensus" : "No consensus"}
             </span>
           </div>
@@ -631,8 +692,8 @@ function OutcomeCard({
             <span />
             <span />
           </span>
-          A participant is drafting or revising the brief; another participant will take over if
-          this synthesis fails.
+          A participant is drafting or revising the brief; another participant
+          will take over if this synthesis fails.
         </div>
       )}
 
@@ -643,28 +704,33 @@ function OutcomeCard({
             <span />
             <span />
           </span>
-          The agents are independently auditing the draft against labeled transcript evidence.
+          The agents are independently auditing the draft against labeled
+          transcript evidence.
         </div>
       )}
 
       {!outcome && status === "failed" && (
         <p className="outcome-empty">
-          The transcript is safe. Retry, continue without this participant, or end the paused turn.
+          The transcript is safe. Retry, continue without this participant, or
+          end the paused turn.
         </p>
       )}
 
       {!outcome && status === "retrying" && (
         <p className="outcome-empty">
-          The failed agent turn is being retried with the same discussion context.
+          The failed agent turn is being retried with the same discussion
+          context.
         </p>
       )}
 
       {!outcome &&
         !TERMINAL_STATUSES.has(status) &&
-        !["failed", "retrying", "reviewing", "synthesizing"].includes(status) && (
-        <p className="outcome-empty">
-          A completion brief will appear here after the agents finish.
-        </p>
+        !["failed", "retrying", "reviewing", "synthesizing"].includes(
+          status,
+        ) && (
+          <p className="outcome-empty">
+            A completion brief will appear here after the agents finish.
+          </p>
         )}
 
       {!outcome && TERMINAL_STATUSES.has(status) && (
@@ -674,7 +740,9 @@ function OutcomeCard({
       )}
 
       {outcome?.status === "unavailable" && (
-        <p className="outcome-unavailable" role="status">{outcome.message}</p>
+        <p className="outcome-unavailable" role="status">
+          {outcome.message}
+        </p>
       )}
 
       {outcome?.status === "available" && (
@@ -731,11 +799,14 @@ function OutcomeCard({
                     <strong>{review.author}</strong>
                     <small>{review.status}</small>
                     {review.status === "unavailable" && (
-                      <p>{unavailableReviewCopy(review.author, review.message)}</p>
+                      <p>
+                        {unavailableReviewCopy(review.author, review.message)}
+                      </p>
                     )}
-                    {review.status === "completed" && review.concerns.length === 0 && (
-                      <p>No material correction requested.</p>
-                    )}
+                    {review.status === "completed" &&
+                      review.concerns.length === 0 && (
+                        <p>No material correction requested.</p>
+                      )}
                     {review.concerns.map((concern, index) => (
                       <article key={`${review.role}-${index}`}>
                         <p>{concern.summary}</p>
@@ -763,7 +834,8 @@ function OutcomeCard({
 
       {outcome?.coverage.truncated && (
         <p className="coverage-note">
-          Partial brief: every turn is represented, but long messages were shortened for synthesis.
+          Partial brief: every turn is represented, but long messages were
+          shortened for synthesis.
         </p>
       )}
 
@@ -774,7 +846,8 @@ function OutcomeCard({
             <small>Summaries · not independently verified</small>
           </div>
           <p className="dissent-intro">
-            Mark whether each concern is represented in the completion brief above.
+            Mark whether each concern is represented in the completion brief
+            above.
           </p>
           {AGENT_ROLES.map((role) => {
             const review = dissentReviews[role];
@@ -793,7 +866,9 @@ function OutcomeCard({
                   </p>
                 )}
                 {review.status === "completed" && agentItems.length === 0 && (
-                  <p className="dissent-review-message">Review completed. No concerns reported.</p>
+                  <p className="dissent-review-message">
+                    Review completed. No concerns reported.
+                  </p>
                 )}
                 {agentItems.length > 0 && (
                   <ol>
@@ -808,18 +883,29 @@ function OutcomeCard({
                           </div>
                           <p>{item.summary}</p>
                           <small>{item.reason}</small>
-                          <div className="dissent-actions" aria-label={`Judge ${item.id}`}>
-                            {(["represented", "missed"] as const).map((verdict) => (
-                              <button
-                                type="button"
-                                key={verdict}
-                                className={judgment?.verdict === verdict ? "selected" : ""}
-                                onClick={() => onJudge?.(item.id, verdict)}
-                                disabled={!onJudge}
-                              >
-                                {verdict === "represented" ? "Represented" : "Missed"}
-                              </button>
-                            ))}
+                          <div
+                            className="dissent-actions"
+                            aria-label={`Judge ${item.id}`}
+                          >
+                            {(["represented", "missed"] as const).map(
+                              (verdict) => (
+                                <button
+                                  type="button"
+                                  key={verdict}
+                                  className={
+                                    judgment?.verdict === verdict
+                                      ? "selected"
+                                      : ""
+                                  }
+                                  onClick={() => onJudge?.(item.id, verdict)}
+                                  disabled={!onJudge}
+                                >
+                                  {verdict === "represented"
+                                    ? "Represented"
+                                    : "Missed"}
+                                </button>
+                              ),
+                            )}
                           </div>
                         </li>
                       );
@@ -838,8 +924,14 @@ function OutcomeCard({
 export default function Home() {
   const [bridgeUrl, setBridgeUrl] = useState(() => {
     if (typeof window === "undefined") return DEFAULT_BRIDGE;
-    const queryBridge = new URLSearchParams(window.location.search).get("bridge");
-    return queryBridge || sessionStorage.getItem("roundtable.bridge") || DEFAULT_BRIDGE;
+    const queryBridge = new URLSearchParams(window.location.search).get(
+      "bridge",
+    );
+    return (
+      queryBridge ||
+      sessionStorage.getItem("roundtable.bridge") ||
+      DEFAULT_BRIDGE
+    );
   });
   const [token, setToken] = useState(() => {
     if (typeof window === "undefined") return "";
@@ -854,11 +946,18 @@ export default function Home() {
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [pendingSteering, setPendingSteering] = useState<Message[]>([]);
   const [reviewDissent, setReviewDissent] = useState(false);
+  const [fableFinalAudit, setFableFinalAudit] = useState(true);
   const [dissent, setDissent] = useState<DissentItem[]>([]);
-  const [dissentReviews, setDissentReviews] = useState<Record<string, DissentReview>>({});
-  const [dissentJudgments, setDissentJudgments] = useState<Record<string, DissentJudgment>>({});
+  const [dissentReviews, setDissentReviews] = useState<
+    Record<string, DissentReview>
+  >({});
+  const [dissentJudgments, setDissentJudgments] = useState<
+    Record<string, DissentJudgment>
+  >({});
   const [failedTurn, setFailedTurn] = useState<FailedTurn | null>(null);
-  const [participantIssues, setParticipantIssues] = useState<ParticipantIssue[]>([]);
+  const [participantIssues, setParticipantIssues] = useState<
+    ParticipantIssue[]
+  >([]);
   const [liveness, setLiveness] = useState<SessionLiveness | null>(null);
   const [statusStage, setStatusStage] = useState("");
   const [statusNote, setStatusNote] = useState("");
@@ -867,7 +966,9 @@ export default function Home() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [viewingHistory, setViewingHistory] = useState(false);
-  const [historyPreference, setHistoryPreference] = useState<"unset" | "on" | "off">(() => {
+  const [historyPreference, setHistoryPreference] = useState<
+    "unset" | "on" | "off"
+  >(() => {
     if (typeof window === "undefined") return "unset";
     const saved = localStorage.getItem("roundtable.history");
     return saved === "on" || saved === "off" ? saved : "unset";
@@ -875,10 +976,12 @@ export default function Home() {
   const [isPreview, setIsPreview] = useState(true);
   const [speaker, setSpeaker] = useState<AgentRole | null>(null);
   const [turn, setTurn] = useState(0);
-  const [totalTurns, setTotalTurns] = useState(9);
+  const [totalTurns, setTotalTurns] = useState(10);
   const [projectPath, setProjectPath] = useState("");
   const [topic, setTopic] = useState(DEFAULT_TOPIC);
-  const [promptAttachments, setPromptAttachments] = useState<PromptAttachment[]>([]);
+  const [promptAttachments, setPromptAttachments] = useState<
+    PromptAttachment[]
+  >([]);
   const [attachmentManifestId, setAttachmentManifestId] = useState("");
   const [attachmentError, setAttachmentError] = useState("");
   const [rounds, setRounds] = useState("3");
@@ -918,13 +1021,19 @@ export default function Home() {
       status === "retrying" ||
       status === "reviewing");
   const busy = active || status === "synthesizing";
-  const canSteer = !viewingHistory && status === "running" && turn < totalTurns - 1;
+  const canSteer =
+    !viewingHistory && status === "running" && turn < totalTurns - 1;
   const showCompletionBrief =
     roomMode !== "setup" &&
     (Boolean(outcome) ||
-      ["synthesizing", "reviewing", "complete", "stopped", "error", "interrupted"].includes(
-        status,
-      ));
+      [
+        "synthesizing",
+        "reviewing",
+        "complete",
+        "stopped",
+        "error",
+        "interrupted",
+      ].includes(status));
   const codexEfforts = health?.models.codex.efforts?.length
     ? health.models.codex.efforts
     : DEFAULT_EFFORT_LEVELS;
@@ -944,13 +1053,21 @@ export default function Home() {
   const lastAgentReplyAuthor =
     messages.filter((message) => message.role !== "human").at(-1)?.author || "";
   const elapsedLivenessSeconds = liveness
-    ? Math.max(0, (Date.parse(liveness.observedAt) - Date.parse(liveness.startedAt)) / 1_000)
+    ? Math.max(
+        0,
+        (Date.parse(liveness.observedAt) - Date.parse(liveness.startedAt)) /
+          1_000,
+      )
     : 0;
   const quietLivenessSeconds = liveness
     ? Math.max(
         0,
         (Date.parse(liveness.observedAt) -
-          Date.parse(liveness.lastActivityAt || liveness.processStartedAt || liveness.startedAt)) /
+          Date.parse(
+            liveness.lastActivityAt ||
+              liveness.processStartedAt ||
+              liveness.startedAt,
+          )) /
           1_000,
       )
     : 0;
@@ -1037,14 +1154,20 @@ export default function Home() {
       sessionStorage.setItem("roundtable.bridge", normalizedBridge);
       sessionStorage.setItem("roundtable.token", normalizedToken);
       if (!requestedProjectPath) setProjectPath(data.defaultProject);
-      setCodexModel((current) => current || data.models?.codex.configured || "");
-      setClaudeModel((current) => current || data.models?.claude.configured || "");
-      const defaultAntigravityModel = data.models?.antigravity.configured || "";
-      setAntigravityModel(
-        (current) => current || defaultAntigravityModel,
+      setCodexModel(
+        (current) => current || data.models?.codex.configured || "",
       );
-      setCodexEffort((current) => current || data.models?.codex.effort || "medium");
-      setClaudeEffort((current) => current || data.models?.claude.effort || "medium");
+      setClaudeModel(
+        (current) => current || data.models?.claude.configured || "",
+      );
+      const defaultAntigravityModel = data.models?.antigravity.configured || "";
+      setAntigravityModel((current) => current || defaultAntigravityModel);
+      setCodexEffort(
+        (current) => current || data.models?.codex.effort || "medium",
+      );
+      setClaudeEffort(
+        (current) => current || data.models?.claude.effort || "medium",
+      );
       setAntigravityEffort(
         (current) =>
           encodedModelEffort(antigravityModel || defaultAntigravityModel) ||
@@ -1070,7 +1193,9 @@ export default function Home() {
     } catch (error) {
       setHealth(null);
       setStatus("idle");
-      setConnectionError(error instanceof Error ? error.message : "Could not reach the bridge.");
+      setConnectionError(
+        error instanceof Error ? error.message : "Could not reach the bridge.",
+      );
       setConnectOpen(true);
     }
   }
@@ -1118,7 +1243,10 @@ export default function Home() {
     });
   }, [messages, speaker, outcome, status]);
 
-  function applySnapshot(snapshot: SessionSnapshot, archived = Boolean(snapshot.archived)) {
+  function applySnapshot(
+    snapshot: SessionSnapshot,
+    archived = Boolean(snapshot.archived),
+  ) {
     setConnectionError("");
     setSessionId(snapshot.id);
     setProjectPath(snapshot.projectPath);
@@ -1148,11 +1276,16 @@ export default function Home() {
     setOutcome(snapshot.outcome);
     setPendingSteering(snapshot.pendingSteering || []);
     setReviewDissent(Boolean(snapshot.reviewDissent));
+    setFableFinalAudit(Boolean(snapshot.fableFinalAudit));
     setDissent(snapshot.dissent || []);
     setDissentReviews(snapshot.dissentReviews || {});
     setDissentJudgments(snapshot.dissentJudgments || {});
-    setFailedTurn(snapshot.failedTurn || snapshot.lastStatus.failedTurn || null);
-    setParticipantIssues(snapshot.participantIssues || snapshot.lastStatus.participantIssues || []);
+    setFailedTurn(
+      snapshot.failedTurn || snapshot.lastStatus.failedTurn || null,
+    );
+    setParticipantIssues(
+      snapshot.participantIssues || snapshot.lastStatus.participantIssues || [],
+    );
     setLiveness(snapshot.liveness || null);
     setStatusStage(snapshot.lastStatus.stage || "");
     setStatusNote(snapshot.lastStatus.note || "");
@@ -1160,7 +1293,11 @@ export default function Home() {
     setViewingHistory(archived);
     setIsPreview(false);
     setTotalTurns(snapshot.totalTurns);
-    setRounds(String(Math.max(1, Math.ceil(snapshot.totalTurns / 3))));
+    setRounds(
+      String(
+        Math.max(1, (snapshot.discussionTurns || snapshot.totalTurns) / 3),
+      ),
+    );
     setTurn(snapshot.lastStatus.turn ?? snapshot.completedTurns);
     setSpeaker(snapshot.lastStatus.speaker || null);
     setStatus(snapshot.lastStatus.status);
@@ -1280,13 +1417,7 @@ export default function Home() {
         handleAuthorizationFailure();
         return;
       }
-      scheduleRecovery(
-        id,
-        recoveryToken,
-        recoveryBridge,
-        generation,
-        attempt,
-      );
+      scheduleRecovery(id, recoveryToken, recoveryBridge, generation, attempt);
     }
   }
 
@@ -1298,10 +1429,13 @@ export default function Home() {
   ) {
     if (!stillOwnsSession(id, generation)) return;
     closeCurrentStream();
-    const ticketResponse = await fetch(`${streamBridge}/sessions/${id}/ticket`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${streamToken}` },
-    });
+    const ticketResponse = await fetch(
+      `${streamBridge}/sessions/${id}/ticket`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${streamToken}` },
+      },
+    );
     if (!stillOwnsSession(id, generation)) return;
     const failureKind = recoveryFailureKind(ticketResponse.status);
     if (failureKind === "authorization") {
@@ -1327,10 +1461,7 @@ export default function Home() {
     }
     streamRef.current = stream;
     stream.onmessage = (event) => {
-      if (
-        streamRef.current !== stream ||
-        !stillOwnsSession(id, generation)
-      ) {
+      if (streamRef.current !== stream || !stillOwnsSession(id, generation)) {
         stream.close();
         return;
       }
@@ -1352,10 +1483,14 @@ export default function Home() {
       if (update.type === "session.dissent") {
         setDissent((current) => {
           const known = new Set(current.map((item) => item.id));
-          return [...current, ...update.items.filter((item) => !known.has(item.id))];
+          return [
+            ...current,
+            ...update.items.filter((item) => !known.has(item.id)),
+          ];
         });
         setDissentReviews((current) => {
-          const reviews = update.reviews || (update.review ? [update.review] : []);
+          const reviews =
+            update.reviews || (update.review ? [update.review] : []);
           return Object.fromEntries([
             ...Object.entries(current),
             ...reviews.map((review) => [review.role, review]),
@@ -1390,9 +1525,11 @@ export default function Home() {
       setStatusStage(update.stage || "");
       setStatusNote(update.note || "");
       if ("failedTurn" in update) setFailedTurn(update.failedTurn || null);
-      if ("participantIssues" in update) setParticipantIssues(update.participantIssues || []);
+      if ("participantIssues" in update)
+        setParticipantIssues(update.participantIssues || []);
       if (typeof update.turn === "number") setTurn(update.turn);
-      if (typeof update.totalTurns === "number") setTotalTurns(update.totalTurns);
+      if (typeof update.totalTurns === "number")
+        setTotalTurns(update.totalTurns);
       if (TERMINAL_STATUSES.has(update.status)) {
         setSpeaker(null);
         stream.close();
@@ -1402,10 +1539,7 @@ export default function Home() {
       }
     };
     stream.onerror = () => {
-      if (
-        streamRef.current !== stream ||
-        !stillOwnsSession(id, generation)
-      ) {
+      if (streamRef.current !== stream || !stillOwnsSession(id, generation)) {
         stream.close();
         return;
       }
@@ -1426,7 +1560,9 @@ export default function Home() {
       setAttachmentError(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files.`);
       return;
     }
-    const existingNames = new Set(promptAttachments.map((item) => item.name.toLowerCase()));
+    const existingNames = new Set(
+      promptAttachments.map((item) => item.name.toLowerCase()),
+    );
     const newNames = new Set<string>();
     for (const file of files) {
       const key = file.name.toLowerCase();
@@ -1435,7 +1571,9 @@ export default function Home() {
         return;
       }
       if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
-        setAttachmentError(`“${file.name}” is larger than the 3 MB attachment limit.`);
+        setAttachmentError(
+          `“${file.name}” is larger than the 3 MB attachment limit.`,
+        );
         return;
       }
       newNames.add(key);
@@ -1461,12 +1599,16 @@ export default function Home() {
       );
       setPromptAttachments((current) => [...current, ...encoded]);
     } catch (error) {
-      setAttachmentError(error instanceof Error ? error.message : "The files could not be read.");
+      setAttachmentError(
+        error instanceof Error ? error.message : "The files could not be read.",
+      );
     }
   }
 
   function removePromptAttachment(id: string) {
-    setPromptAttachments((current) => current.filter((attachment) => attachment.id !== id));
+    setPromptAttachments((current) =>
+      current.filter((attachment) => attachment.id !== id),
+    );
     setAttachmentError("");
   }
 
@@ -1500,6 +1642,7 @@ export default function Home() {
         antigravityEffort,
         keepHistory: historyPreference === "on",
         reviewDissent,
+        fableFinalAudit,
       }),
     });
     const data = (await response.json()) as {
@@ -1543,7 +1686,7 @@ export default function Home() {
     setStatus("preparing");
     setLiveness(null);
     setTurn(0);
-    setTotalTurns(Number(rounds) * 3);
+    setTotalTurns(Number(rounds) * 3 + (fableFinalAudit ? 1 : 0));
     shouldAutoScrollRef.current = true;
     void recoverSession(data.id, token, bridgeUrl, generation);
   }
@@ -1562,7 +1705,11 @@ export default function Home() {
       };
       setHistoryRecords(data.records);
     } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : "Could not load local history.");
+      setConnectionError(
+        error instanceof Error
+          ? error.message
+          : "Could not load local history.",
+      );
     } finally {
       setHistoryLoading(false);
     }
@@ -1582,6 +1729,7 @@ export default function Home() {
     setOutcome(null);
     setPendingSteering([]);
     setReviewDissent(false);
+    setFableFinalAudit(true);
     setDissent([]);
     setDissentReviews({});
     setDissentJudgments({});
@@ -1595,7 +1743,7 @@ export default function Home() {
     setIsPreview(true);
     setSpeaker(null);
     setTurn(0);
-    setTotalTurns(9);
+    setTotalTurns(10);
     setStatus("idle");
     setProjectPath(health?.defaultProject || "");
     setTopic(DEFAULT_TOPIC);
@@ -1624,13 +1772,16 @@ export default function Home() {
       const response = await fetch(`${bridgeUrl}/history/${id}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
-      if (!response.ok) throw new Error("That archived discussion is unavailable.");
+      if (!response.ok)
+        throw new Error("That archived discussion is unavailable.");
       const snapshot = (await response.json()) as SessionSnapshot;
       beginSessionOwnership(id);
       applySnapshot(snapshot, true);
       setHistoryOpen(false);
     } catch (error) {
-      setConnectionError(error instanceof Error ? error.message : "Could not open history.");
+      setConnectionError(
+        error instanceof Error ? error.message : "Could not open history.",
+      );
     } finally {
       setHistoryLoading(false);
     }
@@ -1645,7 +1796,10 @@ export default function Home() {
       });
       if (!response.ok) {
         setConnectionError(
-          await responseError(response, "The archived discussion could not be deleted."),
+          await responseError(
+            response,
+            "The archived discussion could not be deleted.",
+          ),
         );
         return;
       }
@@ -1659,7 +1813,8 @@ export default function Home() {
   }
 
   async function clearHistory() {
-    if (!window.confirm("Clear every locally archived Roundtable discussion?")) return;
+    if (!window.confirm("Clear every locally archived Roundtable discussion?"))
+      return;
     try {
       const response = await fetch(`${bridgeUrl}/history`, {
         method: "DELETE",
@@ -1670,7 +1825,9 @@ export default function Home() {
         body: JSON.stringify({ confirm: "clear" }),
       });
       if (!response.ok) {
-        setConnectionError(await responseError(response, "Local history could not be cleared."));
+        setConnectionError(
+          await responseError(response, "Local history could not be cleared."),
+        );
         return;
       }
       setHistoryRecords([]);
@@ -1697,34 +1854,43 @@ export default function Home() {
     });
     if (!response.ok) {
       const data = (await response.json()) as { error?: string };
-      setConnectionError(data.error || "Your steering note could not be queued.");
+      setConnectionError(
+        data.error || "Your steering note could not be queued.",
+      );
     }
   }
 
   async function addDiscussionRounds(event: FormEvent) {
     event.preventDefault();
-    if (!sessionId || status !== "running" || viewingHistory || addingRounds) return;
+    if (!sessionId || status !== "running" || viewingHistory || addingRounds)
+      return;
     setAddingRounds(true);
     setConnectionError("");
     try {
-      const response = await fetch(`${bridgeUrl}/sessions/${sessionId}/extend`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
+      const response = await fetch(
+        `${bridgeUrl}/sessions/${sessionId}/extend`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ rounds: Number(roundsToAdd) }),
         },
-        body: JSON.stringify({ rounds: Number(roundsToAdd) }),
-      });
+      );
       const data = (await response.json()) as {
         error?: string;
         totalTurns?: number;
+        rounds?: number;
       };
       if (!response.ok || typeof data.totalTurns !== "number") {
-        setConnectionError(data.error || "Additional rounds could not be added.");
+        setConnectionError(
+          data.error || "Additional rounds could not be added.",
+        );
         return;
       }
       setTotalTurns(data.totalTurns);
-      setRounds(String(data.totalTurns / 3));
+      setRounds(String(data.rounds || Number(rounds) + Number(roundsToAdd)));
     } catch {
       setConnectionError("Additional rounds could not be added.");
     } finally {
@@ -1785,7 +1951,9 @@ export default function Home() {
       judgment?: DissentJudgment;
     };
     if (!response.ok || !data.judgment) {
-      setConnectionError(data.error || "The dissent judgment could not be saved.");
+      setConnectionError(
+        data.error || "The dissent judgment could not be saved.",
+      );
       return;
     }
     setDissentJudgments((current) => ({
@@ -1803,7 +1971,10 @@ export default function Home() {
       ...(promptAttachments.length
         ? [
             `**Attachments:** ${promptAttachments
-              .map((attachment) => `${attachment.name} (${attachmentSize(attachment.size)})`)
+              .map(
+                (attachment) =>
+                  `${attachment.name} (${attachmentSize(attachment.size)})`,
+              )
               .join(", ")}`,
             ...(attachmentManifestId
               ? [`**Attachment manifest:** \`${attachmentManifestId}\``]
@@ -1845,7 +2016,9 @@ export default function Home() {
       }
       lines.push("", "## Open questions", "");
       if (outcome.openQuestions.length) {
-        outcome.openQuestions.forEach((question) => lines.push(`- ${question}`));
+        outcome.openQuestions.forEach((question) =>
+          lines.push(`- ${question}`),
+        );
       } else {
         lines.push("None.");
       }
@@ -1895,7 +2068,9 @@ export default function Home() {
         lines.push(
           `## ${review.author} review — ${review.status}`,
           "",
-          review.coverage.truncated ? "Input coverage: partial excerpts." : "Input coverage: complete.",
+          review.coverage.truncated
+            ? "Input coverage: partial excerpts."
+            : "Input coverage: complete.",
           "",
         );
         if (review.status === "unavailable") {
@@ -1923,12 +2098,15 @@ export default function Home() {
     }
     for (const [index, message] of messages.entries()) {
       lines.push(
-        `## [M${index + 1}] ${message.author}${message.round ? ` — Round ${message.round}` : ""}${message.stage === "sealed" ? " · Sealed opening" : message.stage === "cross-examination" ? " · Cross-examination" : ""}`,
+        `## [M${index + 1}] ${message.author}${message.round ? ` — Round ${message.round}` : ""}${message.stage === "sealed" ? " · Sealed opening" : message.stage === "cross-examination" ? " · Cross-examination" : message.stage === "boss-audit" ? " · Final boss audit" : ""}`,
         "",
         [
           displayTime(message.at),
           message.model
-            ? friendlyModelName(message.role === "human" ? "codex" : message.role, message.model)
+            ? friendlyModelName(
+                message.role === "human" ? "codex" : message.role,
+                message.model,
+              )
             : "",
           message.effort ? friendlyEffort(message.effort) : "",
         ]
@@ -1965,11 +2143,15 @@ export default function Home() {
                 ? "Roundtable broker"
                 : "Agent-reported"
             } · \`${check.command}\`${
-              Number.isInteger(check.exitCode) ? ` (exit ${check.exitCode})` : ""
+              Number.isInteger(check.exitCode)
+                ? ` (exit ${check.exitCode})`
+                : ""
             }${check.round ? ` · Round ${check.round}` : ""} — ${check.summary}`,
           );
           if (check.attachmentManifestId) {
-            lines.push(`  - Attachment manifest: \`${check.attachmentManifestId}\``);
+            lines.push(
+              `  - Attachment manifest: \`${check.attachmentManifestId}\``,
+            );
           }
         });
         lines.push("");
@@ -1995,7 +2177,9 @@ export default function Home() {
   }
 
   function downloadTranscript() {
-    const blob = new Blob([transcriptMarkdown()], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([transcriptMarkdown()], {
+      type: "text/markdown;charset=utf-8",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -2021,17 +2205,17 @@ export default function Home() {
             ? "SYNTHESIZING OUTCOME"
             : status === "reviewing"
               ? `${speaker ? AGENT_LABELS[speaker].toUpperCase() : "AGENT"} REVIEWING DISSENT`
-            : status === "preparing"
-              ? "PREPARING ISOLATED WORKSPACES"
-            : status === "failed"
-              ? `TURN ${(failedTurn?.turn ?? turn) + 1} PAUSED`
-              : status === "retrying"
-                ? `RETRYING ${failedTurn ? AGENT_LABELS[failedTurn.role].toUpperCase() : "AGENT"}`
-            : active
-              ? `LIVE · TURN ${turn + 1}`
-              : isPreview
-                ? "PRODUCT PREVIEW"
-                : status.toUpperCase()}
+              : status === "preparing"
+                ? "PREPARING ISOLATED WORKSPACES"
+                : status === "failed"
+                  ? `TURN ${(failedTurn?.turn ?? turn) + 1} PAUSED`
+                  : status === "retrying"
+                    ? `RETRYING ${failedTurn ? AGENT_LABELS[failedTurn.role].toUpperCase() : "AGENT"}`
+                    : active
+                      ? `LIVE · TURN ${turn + 1}`
+                      : isPreview
+                        ? "PRODUCT PREVIEW"
+                        : status.toUpperCase()}
         </div>
         <div className="topbar-actions">
           <button
@@ -2061,29 +2245,39 @@ export default function Home() {
         !sessionId &&
         health?.history?.available &&
         historyPreference === "unset" && (
-        <section className="history-consent" aria-label="Local discussion history">
-          <div>
-            <strong>Keep discussions locally?</strong>
-            <p>
-              Save transcripts and Outcomes on this Mac so they survive restarts. Nothing is stored
-              in the project or cloud, and bridge credentials are never written.
-            </p>
-          </div>
-          <button type="button" onClick={() => chooseHistoryPreference("on")}>
-            Keep locally
-          </button>
-          <button type="button" onClick={() => chooseHistoryPreference("off")}>
-            Not now
-          </button>
-        </section>
-      )}
+          <section
+            className="history-consent"
+            aria-label="Local discussion history"
+          >
+            <div>
+              <strong>Keep discussions locally?</strong>
+              <p>
+                Save transcripts and Outcomes on this Mac so they survive
+                restarts. Nothing is stored in the project or cloud, and bridge
+                credentials are never written.
+              </p>
+            </div>
+            <button type="button" onClick={() => chooseHistoryPreference("on")}>
+              Keep locally
+            </button>
+            <button
+              type="button"
+              onClick={() => chooseHistoryPreference("off")}
+            >
+              Not now
+            </button>
+          </section>
+        )}
 
       {connectOpen && (
         <section className="connection-drawer" aria-label="Bridge connection">
           <div>
             <p className="eyebrow">LOCAL BRIDGE</p>
             <h2>Connect this room to your CLIs.</h2>
-            <p>The key stays in this browser and unlocks only the bridge on your Mac.</p>
+            <p>
+              The key stays in this browser and unlocks only the bridge on your
+              Mac.
+            </p>
           </div>
           <label>
             <span>Bridge address</span>
@@ -2102,7 +2296,11 @@ export default function Home() {
               placeholder="Paste key from the terminal"
             />
           </label>
-          <button className="primary compact" type="button" onClick={() => void connect()}>
+          <button
+            className="primary compact"
+            type="button"
+            onClick={() => void connect()}
+          >
             <KeyRound size={16} />
             Connect
           </button>
@@ -2126,9 +2324,9 @@ export default function Home() {
             </button>
           </div>
           <p className="history-privacy">
-            Stored only in your user data folder with owner-only permissions. Retained for up to{" "}
-            {health?.history?.retention.maxDays || 30} days or{" "}
-            {health?.history?.retention.maxRecords || 50} discussions.
+            Stored only in your user data folder with owner-only permissions.
+            Retained for up to {health?.history?.retention.maxDays || 30} days
+            or {health?.history?.retention.maxRecords || 50} discussions.
           </p>
           {health?.history?.available ? (
             <div className="history-preference">
@@ -2149,11 +2347,15 @@ export default function Home() {
               </button>
             </div>
           ) : (
-            <p className="history-disabled">Local history is disabled by the bridge administrator.</p>
+            <p className="history-disabled">
+              Local history is disabled by the bridge administrator.
+            </p>
           )}
 
           <div className="history-list">
-            {historyLoading && <p className="history-empty">Loading local history…</p>}
+            {historyLoading && (
+              <p className="history-empty">Loading local history…</p>
+            )}
             {!historyLoading && historyRecords.length === 0 && (
               <p className="history-empty">No archived discussions yet.</p>
             )}
@@ -2164,10 +2366,13 @@ export default function Home() {
                   type="button"
                   onClick={() => void openHistoryRecord(record.id)}
                 >
-                  <span className={`history-status ${record.status}`}>{record.status}</span>
+                  <span className={`history-status ${record.status}`}>
+                    {record.status}
+                  </span>
                   <strong>{record.topic}</strong>
                   <small>
-                    {record.projectName} · {new Date(record.updatedAt).toLocaleDateString()} ·{" "}
+                    {record.projectName} ·{" "}
+                    {new Date(record.updatedAt).toLocaleDateString()} ·{" "}
                     {record.messageCount} messages
                   </small>
                   {record.historyWarning && <em>History incomplete</em>}
@@ -2219,332 +2424,435 @@ export default function Home() {
         <aside className="setup-panel">
           {roomMode === "setup" ? (
             <>
-          <div className="panel-heading">
-            <p className="eyebrow">NEW DISCUSSION</p>
-            <span className="step-count">01</span>
-          </div>
-          <form onSubmit={startDiscussion}>
-            <label className="field">
-              <span>Project folder</span>
-              <div className="input-with-icon">
-                <FolderOpen size={16} />
-                <input
-                  value={projectPath}
-                  onChange={(event) => setProjectPath(event.target.value)}
-                  placeholder="/path/to/your/project"
-                  spellCheck={false}
-                  required
-                />
+              <div className="panel-heading">
+                <p className="eyebrow">NEW DISCUSSION</p>
+                <span className="step-count">01</span>
               </div>
-            </label>
-
-            <div className="field">
-              <label htmlFor="discussion-topic">What should they discuss?</label>
-              <div className="prompt-window">
-                <textarea
-                  id="discussion-topic"
-                  value={topic}
-                  onChange={(event) => setTopic(event.target.value)}
-                  rows={6}
-                  required
-                />
-                {promptAttachments.length > 0 && (
-                  <ul className="prompt-attachment-list" aria-label="Prompt attachments">
-                    {promptAttachments.map((attachment) => (
-                      <li key={attachment.id}>
-                        <FileText size={13} />
-                        <span>
-                          <strong>{attachment.name}</strong>
-                          <small>{attachmentSize(attachment.size)}</small>
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removePromptAttachment(attachment.id)}
-                          aria-label={`Remove ${attachment.name}`}
-                        >
-                          <X size={13} />
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <div className="prompt-toolbar">
-                  <label className="attachment-button">
-                    <Paperclip size={14} />
-                    Add files
+              <form onSubmit={startDiscussion}>
+                <label className="field">
+                  <span>Project folder</span>
+                  <div className="input-with-icon">
+                    <FolderOpen size={16} />
                     <input
-                      type="file"
-                      multiple
-                      disabled={busy || promptAttachments.length >= MAX_PROMPT_ATTACHMENTS}
-                      onChange={(event) => void addPromptAttachments(event)}
-                      aria-label="Add files to the discussion prompt"
+                      value={projectPath}
+                      onChange={(event) => setProjectPath(event.target.value)}
+                      placeholder="/path/to/your/project"
+                      spellCheck={false}
+                      required
                     />
+                  </div>
+                </label>
+
+                <div className="field">
+                  <label htmlFor="discussion-topic">
+                    What should they discuss?
                   </label>
-                  <small>
-                    {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 3 MB each · 3 MB total
-                  </small>
+                  <div className="prompt-window">
+                    <textarea
+                      id="discussion-topic"
+                      value={topic}
+                      onChange={(event) => setTopic(event.target.value)}
+                      rows={6}
+                      required
+                    />
+                    {promptAttachments.length > 0 && (
+                      <ul
+                        className="prompt-attachment-list"
+                        aria-label="Prompt attachments"
+                      >
+                        {promptAttachments.map((attachment) => (
+                          <li key={attachment.id}>
+                            <FileText size={13} />
+                            <span>
+                              <strong>{attachment.name}</strong>
+                              <small>{attachmentSize(attachment.size)}</small>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                removePromptAttachment(attachment.id)
+                              }
+                              aria-label={`Remove ${attachment.name}`}
+                            >
+                              <X size={13} />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    <div className="prompt-toolbar">
+                      <label className="attachment-button">
+                        <Paperclip size={14} />
+                        Add files
+                        <input
+                          type="file"
+                          multiple
+                          disabled={
+                            busy ||
+                            promptAttachments.length >= MAX_PROMPT_ATTACHMENTS
+                          }
+                          onChange={(event) => void addPromptAttachments(event)}
+                          aria-label="Add files to the discussion prompt"
+                        />
+                      </label>
+                      <small>
+                        {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 3
+                        MB each · 3 MB total
+                      </small>
+                    </div>
+                  </div>
+                  {attachmentError && (
+                    <p className="attachment-error" role="alert">
+                      {attachmentError}
+                    </p>
+                  )}
                 </div>
-              </div>
-              {attachmentError && (
-                <p className="attachment-error" role="alert">
-                  {attachmentError}
+
+                <div className="field-row">
+                  <label className="field">
+                    <span>Rounds</span>
+                    <select
+                      value={rounds}
+                      onChange={(event) => setRounds(event.target.value)}
+                    >
+                      <option value="1">1 round</option>
+                      <option value="2">2 rounds</option>
+                      <option value="3">3 rounds</option>
+                      <option value="4">4 rounds</option>
+                      <option value="5">5 rounds</option>
+                    </select>
+                  </label>
+                  <div className="field mode-field">
+                    <span>Access</span>
+                    <div className="mode-lock">
+                      <span className="safe-dot" />
+                      Discuss only
+                    </div>
+                  </div>
+                </div>
+                <p className="model-hint">
+                  Round one is sealed and independent. Later rounds
+                  cross-examine the revealed positions. Fable 5 can inspect the
+                  complete final round before the completion brief.
                 </p>
-              )}
-            </div>
 
-            <div className="field-row">
-              <label className="field">
-                <span>Rounds</span>
-                <select value={rounds} onChange={(event) => setRounds(event.target.value)}>
-                  <option value="1">1 round</option>
-                  <option value="2">2 rounds</option>
-                  <option value="3">3 rounds</option>
-                  <option value="4">4 rounds</option>
-                  <option value="5">5 rounds</option>
-                </select>
-              </label>
-              <div className="field mode-field">
-                <span>Access</span>
-                <div className="mode-lock">
-                  <span className="safe-dot" />
-                  Discuss only
-                </div>
-              </div>
-            </div>
-            <p className="model-hint">
-              Round one is sealed and independent. Later rounds cross-examine the revealed
-              positions; every completion draft receives two independent audits and at most one
-              revision.
-            </p>
-
-            <label className={`dissent-toggle${reviewDissent ? " selected" : ""}`}>
-              <input
-                type="checkbox"
-                checked={reviewDissent}
-                disabled={busy || !health?.history?.available}
-                onChange={(event) => {
-                  const enabled = event.target.checked;
-                  setReviewDissent(enabled);
-                  if (enabled) chooseHistoryPreference("on");
-                }}
-              />
-              <span>
-                <strong>Dissent check</strong>
-                <small>
-                  Adds one review pass per agent and saves your represented/missed judgments locally.
-                </small>
-              </span>
-            </label>
-
-            <button
-              className="primary"
-              type="submit"
-              disabled={busy}
-            >
-              {busy ? <Radio size={17} /> : <Sparkles size={17} />}
-              {status === "synthesizing"
-                ? "Building outcome"
-                : status === "reviewing"
-                  ? "Auditing outcome"
-                : status === "preparing"
-                  ? "Preparing workspaces"
-                : status === "failed"
-                  ? "Turn paused"
-                  : status === "retrying"
-                    ? "Retrying turn"
-                : active
-                  ? "Discussion running"
-                  : connected
-                    ? "Start the roundtable"
-                    : "Connect bridge to start"}
-              {!busy && <ArrowRight size={17} />}
-            </button>
-          </form>
-
-          <div className="agent-stack">
-            <p className="eyebrow">PARTICIPANTS</p>
-            <div className="agent-row codex-agent">
-              <span className="agent-glyph codex-glyph">C</span>
-              <div className="agent-copy">
-                <strong>Codex CLI</strong>
-                <small>
-                  {connected
-                    ? health?.codex.available
-                      ? shortVersion(health.codex.version)
-                      : health?.codex.diagnostic || "Unavailable"
-                    : "Waiting for bridge"}
-                </small>
-                <label className="model-picker">
-                  <span>MODEL</span>
-                  <div className="model-input-stack">
-                    <output>{friendlyModelName("codex", codexModel)}</output>
-                    <input
-                      list="codex-model-options"
-                      value={codexModel}
-                      onChange={(event) => setCodexModel(event.target.value)}
-                      placeholder="CLI default"
-                      disabled={busy}
-                      aria-label="Codex model"
-                    />
-                  </div>
-                </label>
-                <label className="effort-picker">
-                  <span className="effort-heading">
-                    <span>REASONING</span>
-                    <output>{friendlyEffort(codexEffort || "medium")}</output>
-                  </span>
+                <label
+                  className={`dissent-toggle${fableFinalAudit ? " selected" : ""}`}
+                >
                   <input
-                    type="range"
-                    min="0"
-                    max={codexEfforts.length - 1}
-                    step="1"
-                    value={effortIndex(codexEffort, codexEfforts)}
-                    onChange={(event) => setCodexEffort(codexEfforts[Number(event.target.value)])}
+                    type="checkbox"
+                    checked={fableFinalAudit}
                     disabled={busy}
-                    aria-label="Codex reasoning effort"
-                    style={effortStyle(codexEffort, codexEfforts)}
-                  />
-                </label>
-              </div>
-              <span className={`presence ${health?.codex.available ? "online" : ""}`} />
-            </div>
-            <div className="agent-row claude-agent">
-              <span className="agent-glyph claude-glyph">A</span>
-              <div className="agent-copy">
-                <strong>Claude CLI</strong>
-                <small>
-                  {connected
-                    ? health?.claude.available
-                      ? shortVersion(health.claude.version)
-                      : health?.claude.diagnostic || "Unavailable"
-                    : "Waiting for bridge"}
-                </small>
-                <label className="model-picker">
-                  <span>MODEL</span>
-                  <div className="model-input-stack">
-                    <output>{friendlyModelName("claude", claudeModel)}</output>
-                    <input
-                      list="claude-model-options"
-                      value={claudeModel}
-                      onChange={(event) => setClaudeModel(event.target.value)}
-                      placeholder="CLI default"
-                      disabled={busy}
-                      aria-label="Claude model"
-                    />
-                  </div>
-                </label>
-                <label className="effort-picker">
-                  <span className="effort-heading">
-                    <span>REASONING</span>
-                    <output>{friendlyEffort(claudeEffort || "medium")}</output>
-                  </span>
-                  <input
-                    type="range"
-                    min="0"
-                    max={claudeEfforts.length - 1}
-                    step="1"
-                    value={effortIndex(claudeEffort, claudeEfforts)}
-                    onChange={(event) => setClaudeEffort(claudeEfforts[Number(event.target.value)])}
-                    disabled={busy}
-                    aria-label="Claude reasoning effort"
-                    style={effortStyle(claudeEffort, claudeEfforts)}
-                  />
-                </label>
-              </div>
-              <span className={`presence ${health?.claude.available ? "online" : ""}`} />
-            </div>
-            <div className="agent-row antigravity-agent">
-              <span className="agent-glyph antigravity-glyph">G</span>
-              <div className="agent-copy">
-                <strong>Antigravity CLI</strong>
-                <small>
-                  {connected
-                    ? health?.antigravity.available
-                      ? shortVersion(health.antigravity.version)
-                      : health?.antigravity.diagnostic || "Unavailable"
-                    : "Waiting for bridge"}
-                </small>
-                <label className="model-picker">
-                  <span>MODEL</span>
-                  <div className="model-input-stack">
-                    <output>{friendlyModelName("antigravity", antigravityModel)}</output>
-                    <input
-                      list="antigravity-model-options"
-                      value={antigravityModel}
-                      onChange={(event) => {
-                        const model = event.target.value;
-                        setAntigravityModel(model);
-                        const requiredEffort = encodedModelEffort(model);
-                        if (requiredEffort) setAntigravityEffort(requiredEffort);
-                      }}
-                      placeholder="CLI default"
-                      disabled={busy}
-                      aria-label="Antigravity model"
-                    />
-                  </div>
-                </label>
-                <label className="effort-picker">
-                  <span className="effort-heading">
-                    <span>REASONING</span>
-                    <output>{friendlyEffort(antigravityEffort || "medium")}</output>
-                  </span>
-                  <input
-                    type="range"
-                    min="0"
-                    max={antigravityEfforts.length - 1}
-                    step="1"
-                    value={effortIndex(antigravityEffort, antigravityEfforts)}
                     onChange={(event) =>
-                      setAntigravityEffort(antigravityEfforts[Number(event.target.value)])
+                      setFableFinalAudit(event.target.checked)
                     }
-                    disabled={busy || Boolean(requiredAntigravityEffort)}
-                    aria-label="Antigravity reasoning effort"
-                    style={effortStyle(antigravityEffort, antigravityEfforts)}
                   />
+                  <span>
+                    <strong>Fable 5 final audit</strong>
+                    <small>
+                      Appears only after the last round, audits everything
+                      before it, then hands the room to Codex and you.
+                    </small>
+                  </span>
                 </label>
-                <p className="routing-disclosure">
-                  {requiredAntigravityEffort
-                    ? `This model requires ${friendlyEffort(requiredAntigravityEffort)} effort; the slider follows it.`
-                    : "Model and effort are sent as separate CLI settings."}
+
+                <label
+                  className={`dissent-toggle${reviewDissent ? " selected" : ""}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={reviewDissent}
+                    disabled={busy || !health?.history?.available}
+                    onChange={(event) => {
+                      const enabled = event.target.checked;
+                      setReviewDissent(enabled);
+                      if (enabled) chooseHistoryPreference("on");
+                    }}
+                  />
+                  <span>
+                    <strong>Dissent check</strong>
+                    <small>
+                      Adds one review pass per agent and saves your
+                      represented/missed judgments locally.
+                    </small>
+                  </span>
+                </label>
+
+                <button className="primary" type="submit" disabled={busy}>
+                  {busy ? <Radio size={17} /> : <Sparkles size={17} />}
+                  {status === "synthesizing"
+                    ? "Building outcome"
+                    : status === "reviewing"
+                      ? "Auditing outcome"
+                      : status === "preparing"
+                        ? "Preparing workspaces"
+                        : status === "failed"
+                          ? "Turn paused"
+                          : status === "retrying"
+                            ? "Retrying turn"
+                            : active
+                              ? "Discussion running"
+                              : connected
+                                ? "Start the roundtable"
+                                : "Connect bridge to start"}
+                  {!busy && <ArrowRight size={17} />}
+                </button>
+              </form>
+
+              <div className="agent-stack">
+                <p className="eyebrow">PARTICIPANTS</p>
+                <div className="agent-row codex-agent">
+                  <span className="agent-glyph codex-glyph">C</span>
+                  <div className="agent-copy">
+                    <strong>Codex CLI</strong>
+                    <small>
+                      {connected
+                        ? health?.codex.available
+                          ? shortVersion(health.codex.version)
+                          : health?.codex.diagnostic || "Unavailable"
+                        : "Waiting for bridge"}
+                    </small>
+                    <label className="model-picker">
+                      <span>MODEL</span>
+                      <div className="model-input-stack">
+                        <output>
+                          {friendlyModelName("codex", codexModel)}
+                        </output>
+                        <input
+                          list="codex-model-options"
+                          value={codexModel}
+                          onChange={(event) =>
+                            setCodexModel(event.target.value)
+                          }
+                          placeholder="CLI default"
+                          disabled={busy}
+                          aria-label="Codex model"
+                        />
+                      </div>
+                    </label>
+                    <label className="effort-picker">
+                      <span className="effort-heading">
+                        <span>REASONING</span>
+                        <output>
+                          {friendlyEffort(codexEffort || "medium")}
+                        </output>
+                      </span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={codexEfforts.length - 1}
+                        step="1"
+                        value={effortIndex(codexEffort, codexEfforts)}
+                        onChange={(event) =>
+                          setCodexEffort(
+                            codexEfforts[Number(event.target.value)],
+                          )
+                        }
+                        disabled={busy}
+                        aria-label="Codex reasoning effort"
+                        style={effortStyle(codexEffort, codexEfforts)}
+                      />
+                    </label>
+                  </div>
+                  <span
+                    className={`presence ${health?.codex.available ? "online" : ""}`}
+                  />
+                </div>
+                <div className="agent-row claude-agent">
+                  <span className="agent-glyph claude-glyph">A</span>
+                  <div className="agent-copy">
+                    <strong>Claude CLI</strong>
+                    <small>
+                      {connected
+                        ? health?.claude.available
+                          ? shortVersion(health.claude.version)
+                          : health?.claude.diagnostic || "Unavailable"
+                        : "Waiting for bridge"}
+                    </small>
+                    <label className="model-picker">
+                      <span>MODEL</span>
+                      <div className="model-input-stack">
+                        <output>
+                          {friendlyModelName("claude", claudeModel)}
+                        </output>
+                        <input
+                          list="claude-model-options"
+                          value={claudeModel}
+                          onChange={(event) =>
+                            setClaudeModel(event.target.value)
+                          }
+                          placeholder="CLI default"
+                          disabled={busy}
+                          aria-label="Claude model"
+                        />
+                      </div>
+                    </label>
+                    <label className="effort-picker">
+                      <span className="effort-heading">
+                        <span>REASONING</span>
+                        <output>
+                          {friendlyEffort(claudeEffort || "medium")}
+                        </output>
+                      </span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={claudeEfforts.length - 1}
+                        step="1"
+                        value={effortIndex(claudeEffort, claudeEfforts)}
+                        onChange={(event) =>
+                          setClaudeEffort(
+                            claudeEfforts[Number(event.target.value)],
+                          )
+                        }
+                        disabled={busy}
+                        aria-label="Claude reasoning effort"
+                        style={effortStyle(claudeEffort, claudeEfforts)}
+                      />
+                    </label>
+                  </div>
+                  <span
+                    className={`presence ${health?.claude.available ? "online" : ""}`}
+                  />
+                </div>
+                <div className="agent-row antigravity-agent">
+                  <span className="agent-glyph antigravity-glyph">G</span>
+                  <div className="agent-copy">
+                    <strong>Antigravity CLI</strong>
+                    <small>
+                      {connected
+                        ? health?.antigravity.available
+                          ? shortVersion(health.antigravity.version)
+                          : health?.antigravity.diagnostic || "Unavailable"
+                        : "Waiting for bridge"}
+                    </small>
+                    <label className="model-picker">
+                      <span>MODEL</span>
+                      <div className="model-input-stack">
+                        <output>
+                          {friendlyModelName("antigravity", antigravityModel)}
+                        </output>
+                        <input
+                          list="antigravity-model-options"
+                          value={antigravityModel}
+                          onChange={(event) => {
+                            const model = event.target.value;
+                            setAntigravityModel(model);
+                            const requiredEffort = encodedModelEffort(model);
+                            if (requiredEffort)
+                              setAntigravityEffort(requiredEffort);
+                          }}
+                          placeholder="CLI default"
+                          disabled={busy}
+                          aria-label="Antigravity model"
+                        />
+                      </div>
+                    </label>
+                    <label className="effort-picker">
+                      <span className="effort-heading">
+                        <span>REASONING</span>
+                        <output>
+                          {friendlyEffort(antigravityEffort || "medium")}
+                        </output>
+                      </span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={antigravityEfforts.length - 1}
+                        step="1"
+                        value={effortIndex(
+                          antigravityEffort,
+                          antigravityEfforts,
+                        )}
+                        onChange={(event) =>
+                          setAntigravityEffort(
+                            antigravityEfforts[Number(event.target.value)],
+                          )
+                        }
+                        disabled={busy || Boolean(requiredAntigravityEffort)}
+                        aria-label="Antigravity reasoning effort"
+                        style={effortStyle(
+                          antigravityEffort,
+                          antigravityEfforts,
+                        )}
+                      />
+                    </label>
+                    <p className="routing-disclosure">
+                      {requiredAntigravityEffort
+                        ? `This model requires ${friendlyEffort(requiredAntigravityEffort)} effort; the slider follows it.`
+                        : "Model and effort are sent as separate CLI settings."}
+                    </p>
+                  </div>
+                  <span
+                    className={`presence ${health?.antigravity.available ? "online" : ""}`}
+                  />
+                </div>
+                <div className="agent-row fable-agent">
+                  <span className="agent-glyph fable-glyph">F</span>
+                  <div className="agent-copy">
+                    <strong>Fable 5</strong>
+                    <small>
+                      {fableFinalAudit
+                        ? health?.claude.available
+                          ? "Final-round auditor · ready"
+                          : "Final-round auditor · Claude sign-in unavailable"
+                        : "Final audit disabled"}
+                    </small>
+                    <div className="model-picker">
+                      <span>MODEL</span>
+                      <output>Claude Fable 5 · High reasoning</output>
+                    </div>
+                  </div>
+                  <span
+                    className={`presence ${fableFinalAudit && health?.claude.available ? "online" : ""}`}
+                  />
+                </div>
+                <datalist id="codex-model-options">
+                  {health?.models.codex.configured && (
+                    <option value={health.models.codex.configured}>
+                      Configured default
+                    </option>
+                  )}
+                </datalist>
+                <datalist id="claude-model-options">
+                  {health?.models.claude.configured && (
+                    <option value={health.models.claude.configured}>
+                      Configured default
+                    </option>
+                  )}
+                  <option value="claude-opus-5">Claude Opus 5</option>
+                  <option value="claude-sonnet-5">Claude Sonnet 5</option>
+                  <option value="claude-fable-5">Claude Fable 5</option>
+                </datalist>
+                <datalist id="antigravity-model-options">
+                  {health?.models.antigravity.available?.map((model) => (
+                    <option value={model} key={model}>
+                      {friendlyModelName("antigravity", model)}
+                    </option>
+                  ))}
+                </datalist>
+                <p className="model-hint">
+                  Model and reasoning choices lock when the room starts.
                 </p>
-              </div>
-              <span className={`presence ${health?.antigravity.available ? "online" : ""}`} />
-            </div>
-            <datalist id="codex-model-options">
-              {health?.models.codex.configured && (
-                <option value={health.models.codex.configured}>Configured default</option>
-              )}
-            </datalist>
-            <datalist id="claude-model-options">
-              {health?.models.claude.configured && (
-                <option value={health.models.claude.configured}>Configured default</option>
-              )}
-              <option value="claude-opus-5">Claude Opus 5</option>
-              <option value="claude-sonnet-5">Claude Sonnet 5</option>
-              <option value="claude-fable-5">Claude Fable 5</option>
-            </datalist>
-            <datalist id="antigravity-model-options">
-              {health?.models.antigravity.available?.map((model) => (
-                <option value={model} key={model}>
-                  {friendlyModelName("antigravity", model)}
-                </option>
-              ))}
-            </datalist>
-            <p className="model-hint">
-              Model and reasoning choices lock when the room starts.
-            </p>
-            {health?.environmentPolicy?.mode === "role-scoped-allowlist" && (
-              <p className="environment-policy">
-                Agent processes receive only role-specific runtime and configuration settings.
-                {health.environmentPolicy.withheldAuthenticationVariables.length > 0 && (
-                  <>
-                    {" "}Withheld ambient credentials:{" "}
-                    {health.environmentPolicy.withheldAuthenticationVariables.join(", ")}.
-                  </>
+                {health?.environmentPolicy?.mode ===
+                  "role-scoped-allowlist" && (
+                  <p className="environment-policy">
+                    Agent processes receive only role-specific runtime and
+                    configuration settings.
+                    {health.environmentPolicy.withheldAuthenticationVariables
+                      .length > 0 && (
+                      <>
+                        {" "}
+                        Withheld ambient credentials:{" "}
+                        {health.environmentPolicy.withheldAuthenticationVariables.join(
+                          ", ",
+                        )}
+                        .
+                      </>
+                    )}
+                  </p>
                 )}
-              </p>
-            )}
-          </div>
+              </div>
             </>
           ) : (
             <div className="session-summary">
@@ -2552,7 +2860,9 @@ export default function Home() {
                 <p className="eyebrow">
                   {roomMode === "archive" ? "ARCHIVED ROOM" : "LIVE ROOM"}
                 </p>
-                <span className="step-count">{roomMode === "archive" ? "READ ONLY" : "LOCKED"}</span>
+                <span className="step-count">
+                  {roomMode === "archive" ? "READ ONLY" : "LOCKED"}
+                </span>
               </div>
               <p className="session-summary-topic">{topic}</p>
               {promptAttachments.length > 0 && (
@@ -2580,7 +2890,10 @@ export default function Home() {
               <dl>
                 <div>
                   <dt>Project</dt>
-                  <dd>{projectPath.split("/").filter(Boolean).pop() || projectPath}</dd>
+                  <dd>
+                    {projectPath.split("/").filter(Boolean).pop() ||
+                      projectPath}
+                  </dd>
                 </div>
                 <div>
                   <dt>Turns</dt>
@@ -2589,13 +2902,21 @@ export default function Home() {
                 <div>
                   <dt>Codex</dt>
                   <dd>
-                    <ModelRoute role="codex" model={codexModel} effort={codexEffort} />
+                    <ModelRoute
+                      role="codex"
+                      model={codexModel}
+                      effort={codexEffort}
+                    />
                   </dd>
                 </div>
                 <div>
                   <dt>Claude</dt>
                   <dd>
-                    <ModelRoute role="claude" model={claudeModel} effort={claudeEffort} />
+                    <ModelRoute
+                      role="claude"
+                      model={claudeModel}
+                      effort={claudeEffort}
+                    />
                   </dd>
                 </div>
                 <div>
@@ -2611,36 +2932,46 @@ export default function Home() {
               </dl>
               {roomMode === "session" &&
                 (status === "preparing" || status === "running") && (
-                <form className="add-rounds-control" onSubmit={addDiscussionRounds}>
-                  <label htmlFor="rounds-to-add">Add rounds</label>
-                  <div>
-                    <select
-                      id="rounds-to-add"
-                      value={roundsToAdd}
-                      onChange={(event) => setRoundsToAdd(event.target.value)}
-                      disabled={addingRounds || status !== "running"}
-                      aria-label="Rounds to add"
-                    >
-                      {[1, 2, 3, 4, 5].map((value) => (
-                        <option value={value} key={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </select>
-                    <button type="submit" disabled={addingRounds || status !== "running"}>
-                      <Plus size={14} />
-                      {addingRounds ? "Adding…" : "Add"}
-                    </button>
-                  </div>
-                  <small>
-                    {status === "running"
-                      ? "Extends this room without losing its transcript."
-                      : "Available as soon as the room is live."}
-                  </small>
-                </form>
-              )}
+                  <form
+                    className="add-rounds-control"
+                    onSubmit={addDiscussionRounds}
+                  >
+                    <label htmlFor="rounds-to-add">Add rounds</label>
+                    <div>
+                      <select
+                        id="rounds-to-add"
+                        value={roundsToAdd}
+                        onChange={(event) => setRoundsToAdd(event.target.value)}
+                        disabled={addingRounds || status !== "running"}
+                        aria-label="Rounds to add"
+                      >
+                        {[1, 2, 3, 4, 5].map((value) => (
+                          <option value={value} key={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        type="submit"
+                        disabled={addingRounds || status !== "running"}
+                      >
+                        <Plus size={14} />
+                        {addingRounds ? "Adding…" : "Add"}
+                      </button>
+                    </div>
+                    <small>
+                      {status === "running"
+                        ? "Extends this room without losing its transcript."
+                        : "Available as soon as the room is live."}
+                    </small>
+                  </form>
+                )}
               {!busy && (
-                <button className="new-discussion-button" type="button" onClick={resetToSetup}>
+                <button
+                  className="new-discussion-button"
+                  type="button"
+                  onClick={resetToSetup}
+                >
                   <Sparkles size={15} />
                   New discussion
                 </button>
@@ -2664,29 +2995,49 @@ export default function Home() {
                     ? "ARCHIVED DISCUSSION"
                     : "PROJECT ROOM"}
               </p>
-              <h1>Three agents. One project.<br />You set the direction.</h1>
+              <h1>
+                Three agents. One project.
+                <br />
+                You set the direction.
+              </h1>
             </div>
             <div className="conversation-actions">
               {roomMode !== "setup" && !busy && (
-                <button className="utility-button" type="button" onClick={resetToSetup}>
+                <button
+                  className="utility-button"
+                  type="button"
+                  onClick={resetToSetup}
+                >
                   <Sparkles size={15} />
                   New
                 </button>
               )}
               {!isPreview && messages.length > 0 && (
                 <>
-                  <button className="utility-button" type="button" onClick={copyTranscript}>
+                  <button
+                    className="utility-button"
+                    type="button"
+                    onClick={copyTranscript}
+                  >
                     {copied ? <Check size={15} /> : <Copy size={15} />}
                     {copied ? "Copied" : "Copy"}
                   </button>
-                  <button className="utility-button" type="button" onClick={downloadTranscript}>
+                  <button
+                    className="utility-button"
+                    type="button"
+                    onClick={downloadTranscript}
+                  >
                     <Download size={15} />
                     Export
                   </button>
                 </>
               )}
               {busy && (
-                <button className="stop-button" type="button" onClick={stopDiscussion}>
+                <button
+                  className="stop-button"
+                  type="button"
+                  onClick={stopDiscussion}
+                >
                   <CircleStop size={16} />
                   {status === "synthesizing"
                     ? "Skip brief"
@@ -2734,22 +3085,30 @@ export default function Home() {
               <article className={`message ${message.role}`} key={message.id}>
                 <div className="message-meta">
                   <span className={`agent-glyph ${message.role}-glyph`}>
-                    {message.role === "human" ? "Y" : AGENT_GLYPHS[message.role]}
+                    {message.role === "human"
+                      ? "Y"
+                      : AGENT_GLYPHS[message.role]}
                   </span>
                   <div>
-                    <strong>[M{index + 1}] {message.author}</strong>
+                    <strong>
+                      [M{index + 1}] {message.author}
+                    </strong>
                     <small>
                       {message.round ? `ROUND ${message.round} · ` : ""}
                       {message.stage === "sealed"
                         ? "SEALED OPENING · "
                         : message.stage === "cross-examination"
                           ? "CROSS-EXAMINATION · "
-                          : ""}
+                          : message.stage === "boss-audit"
+                            ? "FINAL BOSS AUDIT · "
+                            : ""}
                       {displayTime(message.at)}
                       {message.model
                         ? ` · ${friendlyModelName(message.role === "human" ? "codex" : message.role, message.model)}`
                         : ""}
-                      {message.effort ? ` · ${friendlyEffort(message.effort)}` : ""}
+                      {message.effort
+                        ? ` · ${friendlyEffort(message.effort)}`
+                        : ""}
                     </small>
                   </div>
                 </div>
@@ -2758,7 +3117,8 @@ export default function Home() {
                   {message.context?.coverage.truncated && (
                     <p className="message-context-warning">
                       Partial input · omitted{" "}
-                      {message.context.coverage.omittedLabels?.join(", ") || "earlier context"}
+                      {message.context.coverage.omittedLabels?.join(", ") ||
+                        "earlier context"}
                     </p>
                   )}
                   <ReportedChecks message={message} />
@@ -2766,10 +3126,15 @@ export default function Home() {
               </article>
             ))}
             {pendingSteering.length > 0 && (
-              <section className="undelivered-steering" aria-labelledby="pending-steering-title">
+              <section
+                className="undelivered-steering"
+                aria-labelledby="pending-steering-title"
+              >
                 <span className="human-pulse" />
                 <div>
-                  <h2 id="pending-steering-title">{pendingSteeringCopy.title}</h2>
+                  <h2 id="pending-steering-title">
+                    {pendingSteeringCopy.title}
+                  </h2>
                   <p>{pendingSteeringCopy.description}</p>
                   <ul>
                     {pendingSteering.map((message) => (
@@ -2780,7 +3145,11 @@ export default function Home() {
               </section>
             )}
             {failedTurn && (status === "failed" || status === "retrying") && (
-              <section className="failed-turn-card" role="alert" aria-labelledby="failed-turn-title">
+              <section
+                className="failed-turn-card"
+                role="alert"
+                aria-labelledby="failed-turn-title"
+              >
                 <div className="failed-turn-icon">
                   {AGENT_GLYPHS[failedTurn.role]}
                 </div>
@@ -2801,7 +3170,8 @@ export default function Home() {
                       {failedTurn.attempts === 1
                         ? "First attempt failed"
                         : `${failedTurn.attempts} attempts failed`}
-                      {" · "}Retry available until {displayTime(failedTurn.expiresAt)}
+                      {" · "}Retry available until{" "}
+                      {displayTime(failedTurn.expiresAt)}
                     </small>
                   )}
                   {viewingHistory ? (
@@ -2827,7 +3197,10 @@ export default function Home() {
                       >
                         Continue without {AGENT_LABELS[failedTurn.role]}
                       </button>
-                      <button type="button" onClick={() => void stopDiscussion()}>
+                      <button
+                        type="button"
+                        onClick={() => void stopDiscussion()}
+                      >
                         <CircleStop size={14} />
                         End discussion
                       </button>
@@ -2836,33 +3209,42 @@ export default function Home() {
                 </div>
               </section>
             )}
-            {participantIssues.length > 0 && status !== "failed" && status !== "retrying" && (
-              <section
-                className="participant-issue-card"
-                role="status"
-                aria-labelledby="participant-issue-title"
-              >
-                <div className="participant-issue-icon">↗</div>
-                <div>
-                  <span className="context-label">RESILIENT MODE</span>
-                  <h2 id="participant-issue-title">Roundtable kept the discussion moving</h2>
-                  {participantIssues.map((issue) => (
-                    <p key={issue.role}>
-                      <strong>{AGENT_LABELS[issue.role]}</strong> is unavailable for this room. Its
-                      remaining turns are skipped automatically; the available participants continue
-                      without a login interruption.
-                    </p>
-                  ))}
-                </div>
-              </section>
-            )}
+            {participantIssues.length > 0 &&
+              status !== "failed" &&
+              status !== "retrying" && (
+                <section
+                  className="participant-issue-card"
+                  role="status"
+                  aria-labelledby="participant-issue-title"
+                >
+                  <div className="participant-issue-icon">↗</div>
+                  <div>
+                    <span className="context-label">RESILIENT MODE</span>
+                    <h2 id="participant-issue-title">
+                      Roundtable kept the discussion moving
+                    </h2>
+                    {participantIssues.map((issue) => (
+                      <p key={issue.role}>
+                        <strong>{AGENT_LABELS[issue.role]}</strong> is
+                        unavailable for this room. Its remaining turns are
+                        skipped automatically; the available participants
+                        continue without a login interruption.
+                      </p>
+                    ))}
+                  </div>
+                </section>
+              )}
             {status === "preparing" && (
               <article className="message thinking preparation">
                 <div className="message-meta">
                   <span className="agent-glyph preparation-glyph">P</span>
                   <div>
                     <strong>Preparing isolated workspaces</strong>
-                    <small>{statusStage ? statusStage.replaceAll("-", " ").toUpperCase() : "STARTING"}</small>
+                    <small>
+                      {statusStage
+                        ? statusStage.replaceAll("-", " ").toUpperCase()
+                        : "STARTING"}
+                    </small>
                   </div>
                 </div>
                 <div className="thinking-state">
@@ -2872,7 +3254,8 @@ export default function Home() {
                     <span />
                   </div>
                   <p className="process-liveness is-active">
-                    {statusNote || "Preparing one validated source for the role workspaces."}
+                    {statusNote ||
+                      "Preparing one validated source for the role workspaces."}
                   </p>
                 </div>
               </article>
@@ -2919,7 +3302,11 @@ export default function Home() {
                   dissent={dissent}
                   dissentReviews={dissentReviews}
                   dissentJudgments={dissentJudgments}
-                  onJudge={sessionId && outcome && !historyWarning ? judgeDissent : undefined}
+                  onJudge={
+                    sessionId && outcome && !historyWarning
+                      ? judgeDissent
+                      : undefined
+                  }
                 />
               </div>
             )}
@@ -2942,22 +3329,29 @@ export default function Home() {
                         ? "Retry, skip, or end this turn before adding another note…"
                         : status === "preparing"
                           ? "Preparing isolated workspaces before the first turn…"
-                        : status === "synthesizing"
-                          ? "The discussion is complete while Codex builds the brief…"
-                          : active
-                            ? "Final turn—there is no next agent to steer…"
-                            : "Start a live discussion to add your voice…"
+                          : status === "synthesizing"
+                            ? "The discussion is complete while Codex builds the brief…"
+                            : active
+                              ? "Final turn—there is no next agent to steer…"
+                              : "Start a live discussion to add your voice…"
                   }
                   rows={2}
                   disabled={!canSteer}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    if (
+                      event.key === "Enter" &&
+                      (event.metaKey || event.ctrlKey)
+                    ) {
                       event.preventDefault();
                       event.currentTarget.form?.requestSubmit();
                     }
                   }}
                 />
-                <button type="submit" disabled={!canSteer || !steering.trim()} aria-label="Send steering note">
+                <button
+                  type="submit"
+                  disabled={!canSteer || !steering.trim()}
+                  aria-label="Send steering note"
+                >
                   <Send size={18} />
                 </button>
               </div>
@@ -3012,13 +3406,21 @@ export default function Home() {
               <div>
                 <dt>Codex</dt>
                 <dd>
-                  <ModelRoute role="codex" model={codexModel} effort={codexEffort} />
+                  <ModelRoute
+                    role="codex"
+                    model={codexModel}
+                    effort={codexEffort}
+                  />
                 </dd>
               </div>
               <div>
                 <dt>Claude</dt>
                 <dd>
-                  <ModelRoute role="claude" model={claudeModel} effort={claudeEffort} />
+                  <ModelRoute
+                    role="claude"
+                    model={claudeModel}
+                    effort={claudeEffort}
+                  />
                 </dd>
               </div>
               <div>
@@ -3039,14 +3441,15 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Agents work from separate disposable copies, never the selected project. Codex can
-                write generated artifacts only inside its native sandbox; Antigravity&apos;s model
-                process stays behind its native and outer guards.
+                Agents work from separate disposable copies, never the selected
+                project. Codex can write generated artifacts only inside its
+                native sandbox; Antigravity&apos;s model process stays behind
+                its native and outer guards.
                 {health?.projectWriteGuard
                   ? " Native permissions plus outer macOS guards read-deny common host credential paths and isolate every workspace. Claude has no shell access; it remains on Read, Glob, and Grep while optional checks run beyond the model-client boundary through Roundtable."
-                  : " Without a supported OS guard, Claude stays read-only."}
-                {" "}Bridge and ambient API credentials are never passed to agent processes;
-                each CLI uses its own persisted sign-in.
+                  : " Without a supported OS guard, Claude stays read-only."}{" "}
+                Bridge and ambient API credentials are never passed to agent
+                processes; each CLI uses its own persisted sign-in.
               </p>
             </div>
           </section>
@@ -3056,11 +3459,13 @@ export default function Home() {
             <div className="safety-note">
               <span className="safe-dot" />
               <p>
-                Focused checks in separate disposable project copies are optional. Codex can run
-                them natively. Claude and Antigravity can each request one approved argv command; Roundtable runs
-                it without a shell in a fresh broker-only project copy with loopback-only network
-                access and returns the result. External and private-network destinations stay
-                blocked, and test mutations are discarded before the participant&apos;s follow-up.
+                Focused checks in separate disposable project copies are
+                optional. Codex can run them natively. Claude and Antigravity
+                can each request one approved argv command; Roundtable runs it
+                without a shell in a fresh broker-only project copy with
+                loopback-only network access and returns the result. External
+                and private-network destinations stay blocked, and test
+                mutations are discarded before the participant&apos;s follow-up.
                 Claude&apos;s model process remains read-only.{" "}
                 {health?.testSandbox?.claudeReason}
               </p>
@@ -3080,7 +3485,9 @@ export default function Home() {
 
           <div className="room-quote">
             <span>“</span>
-            <p>Good collaboration is visible, interruptible, and accountable.</p>
+            <p>
+              Good collaboration is visible, interruptible, and accountable.
+            </p>
           </div>
         </aside>
       </div>

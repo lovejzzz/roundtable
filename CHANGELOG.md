@@ -4,6 +4,35 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.48] — 2026-08-03
+
+### Direction
+
+The user asked for Fable 5 to act as a small final boss: it should stay out of
+the normal Roundtable exchange, inspect everything the team discussed, and
+audit the work immediately before the completion brief.
+
+### Implementation
+
+- Fable 5 is an optional, default-on final-round auditor with a fixed
+  `claude-fable-5` route and high reasoning effort.
+- Codex, Claude, and Antigravity still receive every scheduled discussion round.
+  Fable runs exactly once afterward with the full labeled transcript and current
+  repository diff, then records a strict fix-or-ship audit in the room.
+- Added rounds extend only the regular discussion. The interface, progress
+  count, transcript export, liveness state, unavailable-participant handling,
+  disposable workspace, and read-only Claude boundary all understand the new
+  final-auditor role.
+
+### Verification
+
+- A bridge regression proves Fable runs once, last, with all three participant
+  positions in context and the fixed model and effort contract.
+- Launcher coverage proves plugin-started rooms enable the final audit by
+  default; production rendering makes the role and its timing explicit.
+- All bridge tests, the production build, rendered-HTML checks, and lint pass
+  for v0.0.0.48.
+
 ## [v0.0.0.47] — 2026-08-03
 
 ### Field finding
