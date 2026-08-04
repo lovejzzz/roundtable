@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.48**
+Current release: **v0.0.0.49**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -34,6 +34,13 @@ open cannot block a new meeting. Direct launcher users may set
 to three minutes by default so a healthy first compile is not mistaken for a
 dead launch; set `ROUNDTABLE_STARTUP_TIMEOUT_MS` from 1000 through 900000 to
 override that deadline.
+
+Each participant message is witnessed by the bridge with an ephemeral Ed25519
+signature. The authenticated health response publishes that launch's public
+key and fingerprint so a consuming project can freeze the trust root before a
+review. The signature binds the session, message, role, body, time, round,
+model, effort, and sealed/cross-examination stage; it proves bridge provenance,
+not that the review is correct.
 
 The web dev server binds the selected port strictly. Startup supervision tracks
 bridge readiness, web readiness, and child-process state separately, so a

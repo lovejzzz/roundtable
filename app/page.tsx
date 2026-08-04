@@ -1046,6 +1046,8 @@ export default function Home() {
   const requiredAntigravityEffort = encodedModelEffort(antigravityModel);
 
   const completedTurnCount = Math.min(Math.max(turn, 0), totalTurns);
+  const canAddDiscussionRounds =
+    status === "running" && turn < Number(rounds) * 3;
   const progress = useMemo(() => {
     if (!totalTurns) return 0;
     return Math.min(100, Math.round((completedTurnCount / totalTurns) * 100));
@@ -1862,7 +1864,7 @@ export default function Home() {
 
   async function addDiscussionRounds(event: FormEvent) {
     event.preventDefault();
-    if (!sessionId || status !== "running" || viewingHistory || addingRounds)
+    if (!sessionId || !canAddDiscussionRounds || viewingHistory || addingRounds)
       return;
     setAddingRounds(true);
     setConnectionError("");
@@ -2942,7 +2944,7 @@ export default function Home() {
                         id="rounds-to-add"
                         value={roundsToAdd}
                         onChange={(event) => setRoundsToAdd(event.target.value)}
-                        disabled={addingRounds || status !== "running"}
+                        disabled={addingRounds || !canAddDiscussionRounds}
                         aria-label="Rounds to add"
                       >
                         {[1, 2, 3, 4, 5].map((value) => (
@@ -2953,15 +2955,17 @@ export default function Home() {
                       </select>
                       <button
                         type="submit"
-                        disabled={addingRounds || status !== "running"}
+                        disabled={addingRounds || !canAddDiscussionRounds}
                       >
                         <Plus size={14} />
                         {addingRounds ? "Adding…" : "Add"}
                       </button>
                     </div>
                     <small>
-                      {status === "running"
+                      {canAddDiscussionRounds
                         ? "Extends this room without losing its transcript."
+                        : status === "running"
+                          ? "The final audit has begun. Start a new discussion for more rounds."
                         : "Available as soon as the room is live."}
                     </small>
                   </form>
@@ -2979,7 +2983,7 @@ export default function Home() {
               <p className="session-summary-note">
                 {roomMode === "archive"
                   ? "Archived rooms cannot steer, retry, or stop agent work."
-                  : "Models and project stay locked. You can add rounds while the room is live."}
+                  : "Models and project stay locked for this room."}
               </p>
             </div>
           )}

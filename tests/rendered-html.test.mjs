@@ -82,7 +82,9 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /async function addDiscussionRounds/);
   assert.match(page, /sessions\/\$\{sessionId\}\/extend/);
   assert.match(page, /Extends this room without losing its transcript/i);
-  assert.match(page, /disabled=\{addingRounds \|\| status !== "running"\}/);
+  assert.match(page, /const canAddDiscussionRounds =/);
+  assert.match(page, /disabled=\{addingRounds \|\| !canAddDiscussionRounds\}/);
+  assert.match(page, /The final audit has begun/i);
   assert.match(page, /Available as soon as the room is live/i);
   assert.match(page, /SEALED OPENING/);
   assert.match(page, /CROSS-EXAMINATION/);

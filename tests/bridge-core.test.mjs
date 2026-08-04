@@ -10,6 +10,7 @@ import {
   extractDissentJson,
   extractOutcomeJson,
   extractReportedChecks,
+  verifyRoundtableMessageAttestation,
 } from "../scripts/bridge-core.mjs";
 
 const token = "test-bridge-token";
@@ -205,6 +206,20 @@ test("starts in resilient mode when one participant is unavailable", async () =>
       /claude auth login/,
     );
     assert.equal(completed.sealedBatch.roles.claude.status, "skipped");
+    assert.equal(
+      completed.messages.every(verifyRoundtableMessageAttestation),
+      true,
+    );
+    const tampered = structuredClone(completed.messages[0]);
+    tampered.body += " changed";
+    assert.equal(verifyRoundtableMessageAttestation(tampered), false);
+    const substitutedFingerprint = structuredClone(completed.messages[0]);
+    substitutedFingerprint.bridgeAttestation.publicKeyFingerprintSha256 =
+      "0".repeat(64);
+    assert.equal(
+      verifyRoundtableMessageAttestation(substitutedFingerprint),
+      false,
+    );
   } finally {
     await bridge.close();
   }
@@ -1100,6 +1115,80 @@ test("runs Fable 5 exactly once after the final discussion round", async () => {
     assert.match(fableCalls[0].prompt, /CODEX:/);
     assert.match(fableCalls[0].prompt, /CLAUDE:/);
     assert.match(fableCalls[0].prompt, /ANTIGRAVITY:/);
+  } finally {
+    await bridge.close();
+  }
+});
+
+test("rejects phantom round extensions after the final participant turn", async () => {
+  let releaseFable;
+  const agentRunner = {
+    async run({ role, purpose }) {
+      if (role === "fable") {
+        return new Promise((resolve) => {
+          releaseFable = () => resolve("Fable audited the completed participant rounds.");
+        });
+      }
+      if (purpose === "synthesis") {
+        return JSON.stringify({
+          decision: "Done",
+          rationale: "The room completed without phantom turns.",
+          actions: [],
+          openQuestions: [],
+          consensus: true,
+        });
+      }
+      if (purpose === "brief-audit") {
+        return '```roundtable-brief-audit\n{"version":1,"revise":false,"concerns":[]}\n```';
+      }
+      return `${role} completed the participant discussion.`;
+    },
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const createResponse = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Do not create phantom rounds",
+        rounds: 1,
+        fableFinalAudit: true,
+      }),
+    });
+    const { id } = await createResponse.json();
+    await waitFor(() => releaseFable);
+
+    const extendResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/extend`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ rounds: 1 }),
+    });
+    assert.equal(extendResponse.status, 409);
+    assert.match((await extendResponse.json()).error, /final audit or completion brief/i);
+
+    const liveResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+      headers: authHeaders(),
+    });
+    const live = await liveResponse.json();
+    assert.equal(live.discussionTurns, 3);
+    assert.equal(live.totalTurns, 4);
+
+    releaseFable();
+    const completed = await waitFor(async () => {
+      const response = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await response.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+    assert.equal(completed.messages.length, 4);
+    assert.deepEqual(
+      completed.messages.map((message) => message.role),
+      ["codex", "claude", "antigravity", "fable"],
+    );
   } finally {
     await bridge.close();
   }

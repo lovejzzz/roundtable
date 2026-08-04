@@ -1,5 +1,12 @@
 import { createServer } from "node:http";
-import { createHash, randomUUID } from "node:crypto";
+import {
+  createHash,
+  createPublicKey,
+  generateKeyPairSync,
+  randomUUID,
+  sign as signBytes,
+  verify as verifyBytes,
+} from "node:crypto";
 import { antigravityModelEffort } from "./antigravity-invocation.mjs";
 import {
   normalizePromptAttachments,
@@ -34,6 +41,71 @@ const DISSENT_POSITIONS = new Set(["accept", "reject", "uncertain"]);
 const DISSENT_FENCE = /```roundtable-dissent\s*\n([\s\S]*?)\n```/;
 const BRIEF_AUDIT_FENCE = /```roundtable-brief-audit\s*\n([\s\S]*?)\n```/;
 const TRANSCRIPT_MAX_CHARACTERS = 48_000;
+export const ROUNDTABLE_MESSAGE_ATTESTATION_PROTOCOL =
+  "roundtable-message-attestation-v1";
+
+function sha256Hex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+export function roundtableMessageAttestationPayload(message, sessionId) {
+  return {
+    protocol: ROUNDTABLE_MESSAGE_ATTESTATION_PROTOCOL,
+    sessionId,
+    messageId: message.id,
+    author: message.author,
+    role: message.role,
+    body: message.body,
+    at: message.at,
+    round: message.round ?? null,
+    model: message.model ?? null,
+    effort: message.effort ?? null,
+    stage: message.stage ?? null,
+  };
+}
+
+export function verifyRoundtableMessageAttestation(message) {
+  const attestation = message?.bridgeAttestation;
+  if (
+    attestation?.protocol !== ROUNDTABLE_MESSAGE_ATTESTATION_PROTOCOL ||
+    attestation?.algorithm !== "Ed25519" ||
+    !attestation.sessionId ||
+    !attestation.publicKeySpkiBase64 ||
+    !attestation.signatureBase64
+  ) {
+    return false;
+  }
+  const payload = roundtableMessageAttestationPayload(
+    message,
+    attestation.sessionId,
+  );
+  const material = JSON.stringify(payload);
+  if (attestation.payloadSha256 !== sha256Hex(material)) return false;
+  try {
+    const publicKeyBytes = Buffer.from(
+      attestation.publicKeySpkiBase64,
+      "base64",
+    );
+    if (
+      attestation.publicKeyFingerprintSha256 !== sha256Hex(publicKeyBytes)
+    ) {
+      return false;
+    }
+    const publicKey = createPublicKey({
+      key: publicKeyBytes,
+      format: "der",
+      type: "spki",
+    });
+    return verifyBytes(
+      null,
+      Buffer.from(material),
+      publicKey,
+      Buffer.from(attestation.signatureBase64, "base64"),
+    );
+  } catch {
+    return false;
+  }
+}
 
 function reportedChecksText(message) {
   if (!message.checks?.length) return "";
@@ -784,6 +856,34 @@ export function createBridge({
 }) {
   const sessions = new Map();
   const tickets = new Map();
+  const messageAttestationKeys = generateKeyPairSync("ed25519");
+  const messageAttestationPublicKey = messageAttestationKeys.publicKey.export({
+    format: "der",
+    type: "spki",
+  });
+
+  function attestAgentMessage(session, message) {
+    const payload = roundtableMessageAttestationPayload(message, session.id);
+    const material = JSON.stringify(payload);
+    return {
+      ...message,
+      bridgeAttestation: {
+        protocol: ROUNDTABLE_MESSAGE_ATTESTATION_PROTOCOL,
+        algorithm: "Ed25519",
+        sessionId: session.id,
+        publicKeySpkiBase64: messageAttestationPublicKey.toString("base64"),
+        publicKeyFingerprintSha256: sha256Hex(messageAttestationPublicKey),
+        payloadSha256: sha256Hex(material),
+        signatureBase64: signBytes(
+          null,
+          Buffer.from(material),
+          messageAttestationKeys.privateKey,
+        ).toString("base64"),
+        claimBoundary:
+          "The bridge witnessed this participant output. The signature does not establish the output's factual correctness.",
+      },
+    };
+  }
 
   function corsHeaders(request) {
     const origin = request.headers.origin;
@@ -1262,10 +1362,13 @@ export function createBridge({
     );
     const body = sanitizeVisibleValue(rawBody, 48_000, sandboxPaths);
     const checks = [...bridgeChecks, ...reportedChecks].slice(0, 6);
-    const message = makeMessage(now, role, body, round, model, effort, checks, {
-      stage,
-      context: promptPackage.context,
-    });
+    const message = attestAgentMessage(
+      session,
+      makeMessage(now, role, body, round, model, effort, checks, {
+        stage,
+        context: promptPackage.context,
+      }),
+    );
     emit(session, { type: "message", message });
     if (stage === "sealed") {
       updateSealedRole(session, role, "completed", {
@@ -1908,6 +2011,16 @@ export function createBridge({
         sendJson(request, response, 200, {
           ok: true,
           defaultProject,
+          messageAttestation: {
+            protocol: ROUNDTABLE_MESSAGE_ATTESTATION_PROTOCOL,
+            algorithm: "Ed25519",
+            publicKeySpkiBase64: messageAttestationPublicKey.toString("base64"),
+            publicKeyFingerprintSha256: sha256Hex(
+              messageAttestationPublicKey,
+            ),
+            claimBoundary:
+              "Pre-register this bridge fingerprint before a review if its signed messages will control an external admission gate.",
+          },
           history: {
             available: Boolean(historyStore.enabled),
             retention: historyStore.retention || {
@@ -2364,6 +2477,20 @@ export function createBridge({
             sendJson(request, response, 409, {
               error:
                 "Rounds can only be added while the discussion is still live.",
+            });
+            return;
+          }
+          // Once every participant turn has been consumed, the loop has
+          // already handed control to Fable or brief synthesis. Mutating the
+          // turn count here cannot restart that loop and previously produced
+          // phantom turns plus steering notes that could never be delivered.
+          if (
+            session.currentTurn >= session.discussionTurns ||
+            session.completedTurns >= session.discussionTurns
+          ) {
+            sendJson(request, response, 409, {
+              error:
+                "The final audit or completion brief has begun. Start a new discussion to add more participant rounds.",
             });
             return;
           }

@@ -4,6 +4,38 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.49] — 2026-08-04
+
+### Field finding
+
+EDUTOOL needed independent Roundtable verdicts to control a source-admission
+gate. Transcript text and caller-supplied reviewer hashes could not prove which
+bridge session produced a review, while a late round extension could create
+turns after the participant loop had already handed control to final audit.
+
+### Implementation
+
+- The bridge now generates an ephemeral Ed25519 key for each launch and signs
+  every participant message over its session, identity, body, timestamp,
+  round, model, effort, and stage. Authenticated health exposes the public key
+  fingerprint for preregistration; verification rejects payload, body, key, or
+  fingerprint substitution. Signatures prove bridge provenance, not truth.
+- Round extensions are accepted only while another participant turn can
+  consume them. Once final audit or completion synthesis begins, both bridge
+  and UI reject the request instead of showing phantom work.
+- The validated disposable source now receives the local dependency clone once
+  before role copies, keeping participant and broker checks dependency-capable
+  without granting access to the host project tree.
+
+### Verification
+
+- Bridge regressions cover signed messages, body and fingerprint tampering,
+  pre-final extensions, and final-audit extension rejection.
+- Sandbox coverage proves one dependency clone is inherited by every isolated
+  role while later host-project mutations remain unavailable.
+- The full bridge suite, production build, rendered-HTML checks, and lint pass
+  for v0.0.0.49.
+
 ## [v0.0.0.48] — 2026-08-03
 
 ### Direction

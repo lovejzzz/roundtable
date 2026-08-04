@@ -334,19 +334,26 @@ test("validates one preparation source while keeping role and broker freshness c
         },
       });
 
-    assert.equal(copyCalls.length, 4);
+    assert.equal(copyCalls.length, 5);
     assert.equal(copyCalls[0][0], projectPath);
-    assert.ok(copyCalls.slice(1).every(([source]) => source === session.testSandboxSource.workspace));
-    assert.equal(validationCalls, 1);
+    assert.equal(copyCalls[1][0], await realpath(join(projectPath, "node_modules")));
+    assert.ok(copyCalls.slice(2).every(([source]) => source === session.testSandboxSource.workspace));
+    assert.equal(validationCalls, 2);
     assert.equal(materializationCalls, 1);
     assert.equal(
       await readFile(join(codexWorkspace, ".roundtable-context", "metadata.json"), "utf8"),
       '{"snapshot":"session-start"}\n',
     );
-    await assert.rejects(access(join(session.testSandboxSource.workspace, "node_modules")));
-    await assert.rejects(access(join(codexWorkspace, "node_modules")));
-    await assert.rejects(access(join(claudeWorkspace, "node_modules")));
-    await assert.rejects(access(join(antigravityWorkspace, "node_modules")));
+    assert.equal(
+      await readFile(join(session.testSandboxSource.workspace, "node_modules", "fixture", "index.js"), "utf8"),
+      "dependency\n",
+    );
+    assert.equal(await readFile(join(codexWorkspace, "node_modules", "fixture", "index.js"), "utf8"), "dependency\n");
+    assert.equal(await readFile(join(claudeWorkspace, "node_modules", "fixture", "index.js"), "utf8"), "dependency\n");
+    assert.equal(
+      await readFile(join(antigravityWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
+      "dependency\n",
+    );
 
     await writeFile(join(projectPath, "source.txt"), "host changed\n");
     const broker = await createDisposableTestSandbox(session, "claude-broker", {

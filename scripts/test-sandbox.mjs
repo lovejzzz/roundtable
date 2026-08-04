@@ -748,6 +748,7 @@ export async function ensurePreparedTestSandboxSource(
     materializeContext = materializeGitContext,
     materializeSnapshot = materializeSyntheticGitSnapshot,
     validateSymlinks = validateCopiedSymlinks,
+    cloneDependencies = cloneBrokerNodeModules,
     onStage = () => {},
   } = {},
 ) {
@@ -770,6 +771,11 @@ export async function ensurePreparedTestSandboxSource(
           error.code = "USER_STOP";
           throw error;
         }
+        onStage({ stage: "cloning-dependencies" });
+        await cloneDependencies(session.projectPath, source.workspace, {
+          copy,
+          validateSymlinks,
+        });
         session.testSandboxSource = source;
         onStage({ stage: "source-ready" });
         return source;
