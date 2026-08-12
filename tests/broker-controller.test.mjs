@@ -1,11 +1,41 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { runBrokerCapableParticipant } from "../scripts/broker-controller.mjs";
+import {
+  isApprovalSeekingPlanOnlyReply,
+  runBrokerCapableParticipant,
+} from "../scripts/broker-controller.mjs";
 
 const draftWithRequest = `A focused check should settle this.
 \`\`\`roundtable-test-request
 {"version":1,"argv":["npm","test"]}
 \`\`\``;
+
+test("re-prompts Antigravity when it asks for plan approval instead of completing the turn", async () => {
+  const session = { completedTurns: 2 };
+  const prompts = [];
+  const reply = await runBrokerCapableParticipant({
+    session,
+    role: "antigravity",
+    prompt: "Audit the implementation against the repository.",
+    invoke: async (prompt) => {
+      prompts.push(prompt);
+      return prompts.length === 1
+        ? "I wrote implementation_plan.md. Please review the implementation plan and let me know if you approve."
+        : "The verifier accepts a package-wide hash where an exact entry hash is required; fix that before promotion.";
+    },
+    execute: async () => {
+      throw new Error("not expected");
+    },
+  });
+
+  assert.equal(isApprovalSeekingPlanOnlyReply("Please review the plan and approve it."), true);
+  assert.equal(
+    reply,
+    "The verifier accepts a package-wide hash where an exact entry hash is required; fix that before promotion.",
+  );
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[1], /TURN COMPLETION CORRECTION/);
+});
 
 test("retries a failed follow-up from the saved broker result without re-executing", async () => {
   const attachmentManifestId = `sha256:${"a".repeat(64)}`;

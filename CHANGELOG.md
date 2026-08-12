@@ -4,6 +4,40 @@ Every Roundtable release represents one complete iteration: a visible agent
 discussion or explicit user-directed capability, its implementation, and
 verification of the resulting app. Versions advance in `v0.0.0.1` increments.
 
+## [v0.0.0.51] — 2026-08-11
+
+### Field finding
+
+Large EDUTOOL release audits exposed two operational ambiguities: copying a
+multi-gigabyte dependency tree into every reviewer workspace made startup look
+dead, and short launcher timers could disappear before slow reasoning or web
+compilation completed. A room also needed a signed, no-replace record of its
+exact models, attachments, and bridge identity before its first turn.
+
+### Implementation
+
+- Reviewer workspaces now receive the source snapshot without `node_modules`;
+  only the isolated test broker receives dependencies when a reviewer asks it
+  to run a permitted command. This removes redundant multi-gigabyte copies
+  while preserving read-only code inspection and controlled verification.
+- Launcher readiness delays and global startup bounds remain referenced until
+  they settle, so slow compilation and high-effort reasoning are observed as
+  active work instead of being mistaken for an exited process.
+- A `--preregister-output` launch option writes a signed, fail-closed record of
+  bridge identity, participant availability, exact model/effort choices,
+  attachments, and room configuration before session creation.
+- Credential-aware disposable workspaces retain the minimum provider state
+  needed for authenticated CLI turns while explicitly denying sibling model
+  workspaces and the host project, reducing repeated Claude sign-in failures
+  without widening repository access.
+
+### Verification
+
+- Focused launcher, sandbox, attachment, attestation, and bridge regressions
+  pass, including no-dependency reviewer copies and broker-only dependencies.
+- The full bridge suite, production build, rendered-HTML checks, and lint pass
+  for v0.0.0.51.
+
 ## [v0.0.0.49] — 2026-08-04
 
 ### Field finding

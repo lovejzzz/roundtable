@@ -29,7 +29,10 @@ test("server-renders the Roundtable room", async () => {
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
 
   const html = await response.text();
-  assert.match(html, /<title>Roundtable — Codex, Claude, and Antigravity<\/title>/i);
+  assert.match(
+    html,
+    /<title>Roundtable — Codex, Claude, and Antigravity<\/title>/i,
+  );
   assert.match(html, /ROUNDTABLE/);
   assert.match(html, /Three agents\. One project\./);
   assert.match(html, /Connect bridge to start/);
@@ -51,17 +54,29 @@ test("server-renders the Roundtable room", async () => {
   assert.match(html, /Claude Fable 5 · High reasoning/i);
   assert.match(html, /Add files/i);
   assert.match(html, /aria-label="Add files to the discussion prompt"/i);
-  assert.match(html, /3 MB each · 3 MB total/i);
+  assert.match(html, /8 MB each · 16 MB total/i);
   assert.match(html, /role="status"/i);
   assert.match(html, /aria-live="polite"/i);
   assert.match(html, /aria-atomic="true"/i);
   assert.match(html, /TEST CAPABILITY/i);
   assert.match(html, /separate disposable project copies/i);
-  assert.match(html, /Claude and Antigravity\s+can each request one approved argv command/i);
-  assert.match(html, /Claude(?:&apos;|&#x27;|')s model process remains read-only/i);
-  assert.match(html, /Bridge and ambient API credentials are never passed to agent processes/i);
+  assert.match(
+    html,
+    /Claude and Antigravity\s+can each request one approved argv command/i,
+  );
+  assert.match(
+    html,
+    /Claude(?:&apos;|&#x27;|')s model process remains read-only/i,
+  );
+  assert.match(
+    html,
+    /Bridge and ambient API credentials are never passed to agent processes/i,
+  );
   assert.doesNotMatch(html, />COMPLETION BRIEF</i);
-  assert.doesNotMatch(html, /A completion brief will appear here after the agents finish/i);
+  assert.doesNotMatch(
+    html,
+    /A completion brief will appear here after the agents finish/i,
+  );
   assert.match(html, /property="og:image"/i);
   assert.match(html, /\/og\.png/i);
 });
@@ -74,11 +89,20 @@ test("keeps the room implementation production-owned and state-driven", async ()
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
   ]);
 
-  assert.doesNotMatch(page, /SkeletonPreview|codex-preview|react-loading-skeleton/);
+  assert.doesNotMatch(
+    page,
+    /SkeletonPreview|codex-preview|react-loading-skeleton/,
+  );
   assert.doesNotMatch(layout, /Starter Project|codex-preview|_sites-preview/);
-  assert.doesNotMatch(packageJson, /site-creator-vinext-starter|react-loading-skeleton/);
+  assert.doesNotMatch(
+    packageJson,
+    /site-creator-vinext-starter|react-loading-skeleton/,
+  );
   assert.match(page, /Retry failed turn|Retry .* turn|failed-turn-card/i);
-  assert.match(page, /Retry, skip, or end this turn before adding another note/i);
+  assert.match(
+    page,
+    /Retry, skip, or end this turn before adding another note/i,
+  );
   assert.match(page, /async function addDiscussionRounds/);
   assert.match(page, /sessions\/\$\{sessionId\}\/extend/);
   assert.match(page, /Extends this room without losing its transcript/i);
@@ -100,7 +124,10 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /separate local-only network sandbox/i);
   assert.match(page, /Claude has no shell access/i);
   assert.match(page, /Claude(?:&apos;|')s model process remains read-only/i);
-  assert.match(page, /Claude and Antigravity\s+can each request one approved argv command/i);
+  assert.match(
+    page,
+    /Claude and Antigravity\s+can each request one approved argv command/i,
+  );
   assert.match(page, /fableFinalAudit/);
   assert.match(page, /boss-audit/);
   assert.match(page, /showCompletionBrief/);
@@ -121,7 +148,10 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /Agent-stated summaries; not independently verified/i);
   assert.match(page, /function unavailableReviewCopy/);
   assert.match(page, /Roundtable continued with the available participants/);
-  assert.match(page, /unavailableReviewCopy\(review\.author, review\.message\)/);
+  assert.match(
+    page,
+    /unavailableReviewCopy\(review\.author, review\.message\)/,
+  );
   assert.match(page, /No concerns reported/i);
   assert.match(page, /represented/);
   assert.match(page, /missed/);
@@ -129,12 +159,18 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /function resetToSetup\(\)/);
   assert.match(page, /shouldAutoScrollRef/);
   assert.match(page, /role-specific runtime and\s+configuration settings/i);
-  assert.match(page, /scrollHeight - feed\.scrollTop - feed\.clientHeight <= 72/);
+  assert.match(
+    page,
+    /scrollHeight - feed\.scrollTop - feed\.clientHeight <= 72/,
+  );
   assert.match(page, /liveStatusText/);
   assert.match(page, /message\.role !== "human"/);
   assert.match(page, /role="progressbar"/);
   assert.match(page, /aria-valuenow=\{completedTurnCount\}/);
-  assert.match(page, /aria-valuetext=\{`\$\{completedTurnCount\} of \$\{totalTurns\} turns complete`\}/);
+  assert.match(
+    page,
+    /aria-valuetext=\{`\$\{completedTurnCount\} of \$\{totalTurns\} turns complete`\}/,
+  );
   assert.match(page, /role="log"/);
   assert.match(page, /aria-label="Discussion transcript"/);
   assert.match(page, /aria-live="off"/);
@@ -143,14 +179,32 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(page, /sessionGenerationRef/);
   assert.match(page, /recoveryTimerRef/);
   assert.match(page, /beginSessionOwnership\(data\.id\)/);
-  assert.match(page, /beginSessionOwnership\(id\);\s*applySnapshot\(snapshot, true\)/);
+  assert.match(
+    page,
+    /beginSessionOwnership\(id\);\s*applySnapshot\(snapshot, true\)/,
+  );
   assert.match(page, /stillOwnsSession\(id, generation\)/);
   assert.match(page, /streamRef\.current = null/);
-  assert.match(page, /scheduleRecovery\(id, streamToken, streamBridge, generation, 0\)/);
-  assert.doesNotMatch(page, /sessionStorage\.removeItem\("roundtable\.sessionId"\);\s*setStatus\("error"\)/);
-  assert.match(page, /async function responseError\(response: Response, fallback: string\)/);
-  assert.match(page, /await responseError\(\s*response,\s*"The archived discussion could not be deleted\."/);
-  assert.match(page, /await responseError\(\s*response,\s*"Local history could not be cleared\."/);
+  assert.match(
+    page,
+    /scheduleRecovery\(id, streamToken, streamBridge, generation, 0\)/,
+  );
+  assert.doesNotMatch(
+    page,
+    /sessionStorage\.removeItem\("roundtable\.sessionId"\);\s*setStatus\("error"\)/,
+  );
+  assert.match(
+    page,
+    /async function responseError\(response: Response, fallback: string\)/,
+  );
+  assert.match(
+    page,
+    /await responseError\(\s*response,\s*"The archived discussion could not be deleted\."/,
+  );
+  assert.match(
+    page,
+    /await responseError\(\s*response,\s*"Local history could not be cleared\."/,
+  );
   assert.match(styles, /:focus-visible/);
   assert.match(styles, /\.message-feed:focus-visible/);
   assert.match(styles, /\.visually-hidden/);
@@ -160,8 +214,13 @@ test("keeps the room implementation production-owned and state-driven", async ()
   assert.match(styles, /\.brief-audit/);
   assert.match(styles, /\.message-context-warning/);
   assert.doesNotMatch(styles, /\.agent-stack\s*\{\s*display:\s*none/);
-  assert.doesNotMatch(page, /Faithful agent summaries|completed with no concerns/i);
-  await assert.rejects(access(new URL("../app/_sites-preview", import.meta.url)));
+  assert.doesNotMatch(
+    page,
+    /Faithful agent summaries|completed with no concerns/i,
+  );
+  await assert.rejects(
+    access(new URL("../app/_sites-preview", import.meta.url)),
+  );
   await access(new URL("../public/og.png", import.meta.url));
   await access(new URL("../scripts/bridge.mjs", import.meta.url));
   await access(new URL("../scripts/talk.mjs", import.meta.url));

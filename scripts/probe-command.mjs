@@ -53,6 +53,7 @@ export function runBoundedProbe({
   command,
   args = [],
   environment,
+  cwd,
   input = "",
   captureOutput = true,
   timeoutMs = PROBE_TIMEOUT_MS,
@@ -69,6 +70,7 @@ export function runBoundedProbe({
     try {
       child = spawnImpl(command, args, {
         ...(environment ? { env: environment } : {}),
+        ...(cwd ? { cwd } : {}),
         stdio: captureOutput || input ? [input ? "pipe" : "ignore", "pipe", "pipe"] : "ignore",
       });
     } catch {

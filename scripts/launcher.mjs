@@ -1,5 +1,16 @@
 import { spawnSync } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { lstat, readFile, writeFile } from "node:fs/promises";
+import { basename, extname, isAbsolute, resolve } from "node:path";
+
+import {
+  MAX_PROMPT_ATTACHMENTS,
+  MAX_PROMPT_ATTACHMENT_BYTES,
+  MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES,
+} from "./prompt-attachments.mjs";
+import {
+  canonicalReviewConfiguration,
+  reviewConfigurationSha256,
+} from "./review-configuration.mjs";
 
 export const LAUNCHER_STARTUP_TIMEOUT_MS = 180_000;
 export const LAUNCHER_STARTUP_TIMEOUT_MAX_MS = 900_000;
@@ -9,6 +20,7 @@ export const LAUNCHER_STARTUP_TIMEOUT_MAX_MS = 900_000;
 export const LAUNCHER_SHUTDOWN_GRACE_MS = 30_000;
 export const LAUNCHER_FORCE_WAIT_MS = 1_000;
 export const LAUNCHER_TOPIC_MAX_CHARACTERS = 4_000;
+export const LAUNCHER_MAX_ROUNDS = 20;
 export const DEFAULT_LAUNCH_TOPIC =
   "Review this project’s architecture and agree on the highest-leverage next steps.";
 
@@ -24,9 +36,12 @@ export function parseTalkArguments(argv = [], cwd = process.cwd()) {
   const options = {
     help: false,
     start: false,
+    preregisterOnly: false,
     projectPath: "",
     topic: "",
     rounds: null,
+    preregisterOutput: "",
+    attachmentPaths: [],
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -37,6 +52,10 @@ export function parseTalkArguments(argv = [], cwd = process.cwd()) {
     }
     if (option === "--start") {
       options.start = true;
+      continue;
+    }
+    if (option === "--preregister-only") {
+      options.preregisterOnly = true;
       continue;
     }
     if (option === "--project") {
@@ -61,17 +80,85 @@ export function parseTalkArguments(argv = [], cwd = process.cwd()) {
     if (option === "--rounds") {
       const value = requiredArgumentValue(argv, index, option);
       const rounds = Number(value);
-      if (!Number.isInteger(rounds) || rounds < 1 || rounds > 5) {
-        throw new Error("--rounds must be an integer from 1 through 5.");
+      if (
+        !Number.isInteger(rounds) ||
+        rounds < 1 ||
+        rounds > LAUNCHER_MAX_ROUNDS
+      ) {
+        throw new Error(
+          `--rounds must be an integer from 1 through ${LAUNCHER_MAX_ROUNDS}.`,
+        );
       }
       options.rounds = rounds;
+      index += 1;
+      continue;
+    }
+    if (option === "--preregister-output") {
+      const value = requiredArgumentValue(argv, index, option).trim();
+      if (!value)
+        throw new Error("--preregister-output requires a non-empty path.");
+      options.preregisterOutput = isAbsolute(value)
+        ? value
+        : resolve(cwd, value);
+      index += 1;
+      continue;
+    }
+    if (option === "--attachment") {
+      const value = requiredArgumentValue(argv, index, option).trim();
+      if (!value) throw new Error("--attachment requires a non-empty path.");
+      options.attachmentPaths.push(isAbsolute(value) ? value : resolve(cwd, value));
+      if (options.attachmentPaths.length > MAX_PROMPT_ATTACHMENTS) {
+        throw new Error(`Attach at most ${MAX_PROMPT_ATTACHMENTS} files.`);
+      }
       index += 1;
       continue;
     }
     throw new Error(`Unknown Roundtable option: ${option}`);
   }
 
+  if (options.preregisterOnly && !options.preregisterOutput) {
+    throw new Error("--preregister-only requires --preregister-output.");
+  }
   return options;
+}
+
+function attachmentMediaType(filePath) {
+  const extension = extname(filePath).toLowerCase();
+  if (extension === ".zip" || extension === ".coursemapper") return "application/zip";
+  if (extension === ".json") return "application/json";
+  if (extension === ".pdf") return "application/pdf";
+  if ([".md", ".txt", ".log"].includes(extension)) return "text/plain";
+  return "application/octet-stream";
+}
+
+export async function loadLaunchAttachments(paths = []) {
+  let totalBytes = 0;
+  const names = new Set();
+  const attachments = [];
+  for (const filePath of paths) {
+    const info = await lstat(filePath).catch(() => null);
+    if (!info?.isFile() || info.isSymbolicLink()) {
+      throw new Error(`Roundtable attachment is not a regular file: ${filePath}`);
+    }
+    if (info.size > MAX_PROMPT_ATTACHMENT_BYTES) {
+      throw new Error(`Roundtable attachment exceeds 8 MB: ${filePath}`);
+    }
+    totalBytes += info.size;
+    if (totalBytes > MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES) {
+      throw new Error("Roundtable attachments exceed the 16 MB combined limit.");
+    }
+    const name = basename(filePath);
+    if (names.has(name.toLowerCase())) {
+      throw new Error(`Roundtable attachment names must be unique: ${name}`);
+    }
+    names.add(name.toLowerCase());
+    attachments.push({
+      name,
+      mediaType: attachmentMediaType(filePath),
+      contentBase64: (await readFile(filePath)).toString("base64"),
+    });
+  }
+  return attachments;
 }
 
 export function buildRoundtableUrl({
@@ -94,21 +181,83 @@ export function buildRoundtableUrl({
 }
 
 export function buildAutostartPayload(options, health) {
-  return {
+  const payload = {
     projectPath: options.projectPath || health.defaultProject,
     topic: options.topic || DEFAULT_LAUNCH_TOPIC,
-    attachments: [],
+    attachments: options.attachments || [],
     rounds: options.rounds ?? 3,
     codexModel: health.models.codex.configured,
     claudeModel: health.models.claude.configured,
     antigravityModel: health.models.antigravity.configured,
+    fableModel: "claude-fable-5",
     codexEffort: health.models.codex.effort,
     claudeEffort: health.models.claude.effort,
     antigravityEffort: health.models.antigravity.effort,
+    fableEffort: "high",
     fableFinalAudit: true,
     keepHistory: false,
     reviewDissent: false,
   };
+  return {
+    ...payload,
+    reviewConfigurationSha256: reviewConfigurationSha256(payload),
+  };
+}
+
+export function buildReviewPreregistration(
+  options,
+  health,
+  preregisteredAt = new Date().toISOString(),
+) {
+  const autostartPayload = buildAutostartPayload(options, health);
+  const reviewConfiguration = canonicalReviewConfiguration(autostartPayload);
+  const fingerprint = String(
+    health?.messageAttestation?.publicKeyFingerprintSha256 || "",
+  );
+  if (!/^[a-f0-9]{64}$/.test(fingerprint)) {
+    throw new Error(
+      "Roundtable bridge health has no valid signing fingerprint.",
+    );
+  }
+  return {
+    schemaVersion: 1,
+    protocol: "roundtable-review-preregistration-v1",
+    preregisteredAt,
+    bridgeAttestation: {
+      protocol: health.messageAttestation.protocol,
+      algorithm: health.messageAttestation.algorithm,
+      publicKeySpkiBase64: health.messageAttestation.publicKeySpkiBase64,
+      publicKeyFingerprintSha256: fingerprint,
+    },
+    participantAvailability: {
+      codex: Boolean(health?.codex?.available),
+      claude: Boolean(health?.claude?.available),
+      antigravity: Boolean(health?.antigravity?.available),
+      fable: Boolean(health?.fable?.available ?? health?.claude?.available),
+    },
+    reviewConfiguration,
+    reviewConfigurationSha256:
+      autostartPayload.reviewConfigurationSha256,
+    claimBoundary:
+      "This fail-closed record freezes the bridge signing identity, participant availability snapshot, and exact auto-start payload before Roundtable creates the review room. When the final auditor is required, Roundtable performs an exact-model provider preflight before the first discussion turn.",
+  };
+}
+
+export async function preregisterRoundtableReview({
+  outputPath,
+  options,
+  health,
+  preregisteredAt,
+  writeFileImpl = writeFile,
+}) {
+  if (!outputPath)
+    throw new Error("A preregistration output path is required.");
+  const record = buildReviewPreregistration(options, health, preregisteredAt);
+  await writeFileImpl(outputPath, `${JSON.stringify(record, null, 2)}\n`, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  return record;
 }
 
 export async function startRoundtableSession({
@@ -220,7 +369,6 @@ function delay(milliseconds, signal) {
       resolve();
     };
     const timer = setTimeout(finish, milliseconds);
-    timer.unref?.();
     const onAbort = () => {
       clearTimeout(timer);
       reject(abortError(signal));
@@ -426,7 +574,6 @@ export async function waitForLauncherReadiness({
             ),
           timeoutMs,
         );
-        timeout.unref?.();
       }),
     ]);
     onReady();

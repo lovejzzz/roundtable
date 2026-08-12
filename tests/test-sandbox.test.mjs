@@ -12,6 +12,7 @@ import {
   realpath,
   rm,
   symlink,
+  truncate,
   unlink,
   utimes,
   writeFile,
@@ -30,6 +31,7 @@ import {
   cleanupTestSandboxesSync,
   clonePreparedTestSandbox,
   createDisposableTestSandbox,
+  ensurePreparedTestSandboxSource,
   ensureTestSandbox,
   isolatedGitEnvironment,
   cloneBrokerNodeModules,
@@ -162,6 +164,28 @@ test("a nested Claude config home does not inherit a write denial from its ances
   );
 });
 
+test("Claude may refresh only its own persisted session state", () => {
+  const home = "/Users/example";
+  const statePath = join(home, ".claude.json");
+  const credentialPath = join(home, ".claude", ".credentials.json");
+  const profile = buildClaudeSandboxProfile({
+    home,
+    homeEntries: [".claude", ".claude.json", "Documents"],
+    claudeHomeEntries: ["cache", "settings.json"],
+    writableCredentialStatePaths: [statePath, credentialPath],
+    projectPath: join(home, "project"),
+  });
+
+  assert.doesNotMatch(profile, /deny file-write\* \(subpath "\/Users\/example\/\.claude\.json"\)/);
+  assert.match(
+    profile,
+    /allow file-write\* \(regex #"\^\/Users\/example\/\\\.claude\/\\\.credentials\\\.json\(\?:\\\.\[\^\/\]\*\)\?\$"\)/,
+  );
+  assert.match(profile, /deny file-write\* \(subpath "\/Users\/example\/\.claude\/settings\.json"\)/);
+  assert.match(profile, /deny file-write\* \(subpath "\/Users\/example\/Documents"\)/);
+  assert.match(profile, /allow file-write\* \(regex #"\^\/Users\/example\/\\\.claude\/cache/);
+});
+
 test("collects every nested config-home ancestor for sibling write isolation", async () => {
   const home = "/Users/example";
   const target = join(home, ".config", "vendor", "claude");
@@ -243,15 +267,20 @@ test("creates isolated per-agent project copies and removes them after the room 
 
   try {
     await Promise.all([
+      mkdir(join(projectPath, ".audit-work"), { recursive: true }),
       mkdir(join(projectPath, ".git"), { recursive: true }),
       mkdir(join(projectPath, ".next"), { recursive: true }),
       mkdir(join(projectPath, ".wrangler"), { recursive: true }),
       mkdir(join(projectPath, "dist"), { recursive: true }),
       mkdir(join(projectPath, "verification-output"), { recursive: true }),
       mkdir(join(projectPath, "node_modules", "fixture"), { recursive: true }),
+      mkdir(join(projectPath, "packages", "worker", "node_modules", "fixture"), { recursive: true }),
+      mkdir(join(projectPath, "models"), { recursive: true }),
+      mkdir(join(projectPath, "tmp"), { recursive: true }),
       mkdir(temporaryDirectory, { recursive: true }),
     ]);
     await Promise.all([
+      writeFile(join(projectPath, ".audit-work", "old-package.zip"), "generated\n"),
       writeFile(join(projectPath, "source.txt"), "original\n"),
       writeFile(join(projectPath, ".git", "config"), "private metadata\n"),
       writeFile(join(projectPath, ".next", "cache"), "generated\n"),
@@ -259,7 +288,12 @@ test("creates isolated per-agent project copies and removes them after the room 
       writeFile(join(projectPath, "dist", "bundle.js"), "generated\n"),
       writeFile(join(projectPath, "verification-output", "old-report.json"), "generated\n"),
       writeFile(join(projectPath, "node_modules", "fixture", "index.js"), "dependency\n"),
+      writeFile(join(projectPath, "packages", "worker", "node_modules", "fixture", "index.js"), "nested dependency\n"),
+      writeFile(join(projectPath, "models", "tiny-fixture.safetensors"), "small fixture\n"),
+      writeFile(join(projectPath, "models", "runtime-weights.safetensors"), ""),
+      writeFile(join(projectPath, "tmp", "scratch.bin"), "generated\n"),
     ]);
+    await truncate(join(projectPath, "models", "runtime-weights.safetensors"), 17 * 1024 * 1024);
 
     const codexWorkspace = await ensureTestSandbox(session, "codex", {
       temporaryDirectory,
@@ -274,12 +308,20 @@ test("creates isolated per-agent project copies and removes them after the room 
     assert.equal(reusedCodexWorkspace, codexWorkspace);
     assert.notEqual(claudeWorkspace, codexWorkspace);
     assert.equal(await readFile(join(codexWorkspace, "source.txt"), "utf8"), "original\n");
+    await assert.rejects(access(join(codexWorkspace, ".audit-work")));
     await assert.rejects(access(join(codexWorkspace, "node_modules")));
     await assert.rejects(access(join(codexWorkspace, ".git")));
     await assert.rejects(access(join(codexWorkspace, ".next")));
     await assert.rejects(access(join(codexWorkspace, ".wrangler")));
     await assert.rejects(access(join(codexWorkspace, "dist")));
     await assert.rejects(access(join(codexWorkspace, "verification-output")));
+    await assert.rejects(access(join(codexWorkspace, "tmp")));
+    await assert.rejects(access(join(codexWorkspace, "packages", "worker", "node_modules")));
+    await assert.rejects(access(join(codexWorkspace, "models", "runtime-weights.safetensors")));
+    assert.equal(
+      await readFile(join(codexWorkspace, "models", "tiny-fixture.safetensors"), "utf8"),
+      "small fixture\n",
+    );
 
     await writeFile(join(codexWorkspace, "source.txt"), "sandbox change\n");
     assert.equal(await readFile(join(projectPath, "source.txt"), "utf8"), "original\n");
@@ -334,26 +376,19 @@ test("validates one preparation source while keeping role and broker freshness c
         },
       });
 
-    assert.equal(copyCalls.length, 5);
+    assert.equal(copyCalls.length, 4);
     assert.equal(copyCalls[0][0], projectPath);
-    assert.equal(copyCalls[1][0], await realpath(join(projectPath, "node_modules")));
-    assert.ok(copyCalls.slice(2).every(([source]) => source === session.testSandboxSource.workspace));
-    assert.equal(validationCalls, 2);
+    assert.ok(copyCalls.slice(1).every(([source]) => source === session.testSandboxSource.workspace));
+    assert.equal(validationCalls, 1);
     assert.equal(materializationCalls, 1);
     assert.equal(
       await readFile(join(codexWorkspace, ".roundtable-context", "metadata.json"), "utf8"),
       '{"snapshot":"session-start"}\n',
     );
-    assert.equal(
-      await readFile(join(session.testSandboxSource.workspace, "node_modules", "fixture", "index.js"), "utf8"),
-      "dependency\n",
-    );
-    assert.equal(await readFile(join(codexWorkspace, "node_modules", "fixture", "index.js"), "utf8"), "dependency\n");
-    assert.equal(await readFile(join(claudeWorkspace, "node_modules", "fixture", "index.js"), "utf8"), "dependency\n");
-    assert.equal(
-      await readFile(join(antigravityWorkspace, "node_modules", "fixture", "index.js"), "utf8"),
-      "dependency\n",
-    );
+    await assert.rejects(access(join(session.testSandboxSource.workspace, "node_modules")));
+    await assert.rejects(access(join(codexWorkspace, "node_modules")));
+    await assert.rejects(access(join(claudeWorkspace, "node_modules")));
+    await assert.rejects(access(join(antigravityWorkspace, "node_modules")));
 
     await writeFile(join(projectPath, "source.txt"), "host changed\n");
     const broker = await createDisposableTestSandbox(session, "claude-broker", {
@@ -367,6 +402,69 @@ test("validates one preparation source while keeping role and broker freshness c
     const sourceRoot = session.testSandboxSource.root;
     await cleanupTestSandboxes(session);
     await assert.rejects(access(sourceRoot));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("does not clone dependencies into ordinary reviewer workspaces", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-dependency-timeout-fixture-"));
+  const projectPath = join(fixtureRoot, "project");
+  const temporaryDirectory = join(fixtureRoot, "sandboxes");
+  const session = { projectPath };
+  let cloneCalls = 0;
+  try {
+    await Promise.all([mkdir(projectPath), mkdir(temporaryDirectory)]);
+    await writeFile(join(projectPath, "source.txt"), "source\n");
+    await ensurePreparedTestSandboxSource(session, {
+      temporaryDirectory,
+      copyTimeoutMs: 123_456,
+      cloneDependencies: async () => {
+        cloneCalls += 1;
+        return null;
+      },
+    });
+    assert.equal(cloneCalls, 0);
+    await cleanupTestSandboxes(session);
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test("keeps package build output and valid bin links in the offline dependency clone", async () => {
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "roundtable-dependency-bin-fixture-"));
+  const projectPath = join(fixtureRoot, "project");
+  const workspacePath = join(fixtureRoot, "workspace");
+  try {
+    await Promise.all([
+      mkdir(join(projectPath, "node_modules", ".bin"), { recursive: true }),
+      mkdir(join(projectPath, "node_modules", "example-cli", "dist"), { recursive: true }),
+      mkdir(workspacePath, { recursive: true }),
+    ]);
+    const workspace = await realpath(workspacePath);
+    await writeFile(
+      join(projectPath, "node_modules", "example-cli", "dist", "cli.js"),
+      "console.log('ok');\n",
+    );
+    await symlink(
+      "../example-cli/dist/cli.js",
+      join(projectPath, "node_modules", ".bin", "example-cli"),
+    );
+
+    await cloneBrokerNodeModules(projectPath, workspace);
+
+    assert.equal(
+      await readFile(join(workspace, "node_modules", "example-cli", "dist", "cli.js"), "utf8"),
+      "console.log('ok');\n",
+    );
+    assert.equal(
+      await readlink(join(workspace, "node_modules", ".bin", "example-cli")),
+      "../example-cli/dist/cli.js",
+    );
+    assert.equal(
+      await realpath(join(workspace, "node_modules", ".bin", "example-cli")),
+      await realpath(join(workspace, "node_modules", "example-cli", "dist", "cli.js")),
+    );
   } finally {
     await rm(fixtureRoot, { recursive: true, force: true });
   }
@@ -683,6 +781,7 @@ test("materializes sanitized Git evidence plus a remote-free disposable snapshot
       join(projectPath, "verification-output", "quality", "local-only.json"),
       '{"status":"untracked"}\n',
     );
+    await writeFile(join(projectPath, ".roundtable-context"), "stale legacy marker\n");
     await unlink(join(projectPath, "removed.txt"));
     await execFileAsync("git", ["mv", "renamed-old.txt", "renamed-new.txt"], {
       cwd: projectPath,
@@ -717,6 +816,7 @@ test("materializes sanitized Git evidence plus a remote-free disposable snapshot
     assert.match(headPatch, /branch change/);
     assert.doesNotMatch(headPatch, /working change/);
     assert.doesNotMatch(headPatch, /new-module\.mjs/);
+    assert.doesNotMatch(patch, /stale legacy marker/);
     assert.match(headPatch, new RegExp(`# Parent ${metadata.parentCommit}`));
     await access(join(workspace, ".git"));
     assert.equal(
@@ -1108,15 +1208,18 @@ test(
       await Promise.all([
         mkdir(workspace),
         mkdir(join(protectedProject, "node_modules", "offline-fixture"), { recursive: true }),
+        mkdir(join(protectedProject, "node_modules", ".vite"), { recursive: true }),
       ]);
       const marker = join(protectedProject, "marker");
       const dependencyMarker = join(protectedProject, "node_modules", "offline-fixture", "index.js");
       await Promise.all([
         writeFile(marker, "protected\n"),
         writeFile(dependencyMarker, "module.exports = 'offline';\n"),
+        writeFile(join(protectedProject, "node_modules", ".vite", "cache.bin"), "generated\n"),
       ]);
       const dependencyMount = await cloneBrokerNodeModules(protectedProject, workspace);
       assert.ok(dependencyMount);
+      await assert.rejects(access(join(workspace, "node_modules", ".vite")));
       const args = [
         "sandbox",
         "-P",

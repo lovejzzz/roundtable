@@ -14,8 +14,20 @@ export function antigravityModelEffort(model = "") {
   return String(model).toLowerCase().match(/-(low|medium|high)$/)?.[1] || "";
 }
 
-export function buildAntigravityInvocationArgs({ model = "", effort = "medium", prompt = "" } = {}) {
-  const normalizedEffort = SUPPORTED_EFFORTS.has(effort) ? effort : "medium";
+export function parseAntigravityModels(output = "") {
+  return String(output)
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-*]\s*/, "").split(/\s+/)[0] || "")
+    .filter(
+      (model) =>
+        model.includes("-") && /^[A-Za-z0-9][A-Za-z0-9._:/\[\]-]*$/.test(model),
+    );
+}
+
+export function buildAntigravityInvocationArgs({ model = "", effort = "high", prompt = "" } = {}) {
+  // Antigravity's current CLI-default model accepts low/high, not medium.
+  // High is the safe fallback when model discovery is unavailable.
+  const normalizedEffort = SUPPORTED_EFFORTS.has(effort) ? effort : "high";
   const encodedEffort = antigravityModelEffort(model);
   if (encodedEffort && encodedEffort !== normalizedEffort) {
     throw new Error(

@@ -424,8 +424,8 @@ const DEFAULT_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"];
 const DEFAULT_TOPIC =
   "Review this project’s architecture and agree on the highest-leverage next steps.";
 const MAX_PROMPT_ATTACHMENTS = 5;
-const MAX_PROMPT_ATTACHMENT_BYTES = 3 * 1024 * 1024;
-const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 3 * 1024 * 1024;
+const MAX_PROMPT_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES = 16 * 1024 * 1024;
 
 function normalizedLaunchRounds(value: string) {
   return ["1", "2", "3", "4", "5"].includes(value) ? value : "3";
@@ -1574,7 +1574,7 @@ export default function Home() {
       }
       if (file.size > MAX_PROMPT_ATTACHMENT_BYTES) {
         setAttachmentError(
-          `“${file.name}” is larger than the 3 MB attachment limit.`,
+          `“${file.name}” is larger than the 8 MB attachment limit.`,
         );
         return;
       }
@@ -1585,7 +1585,7 @@ export default function Home() {
       0,
     );
     if (nextTotal > MAX_PROMPT_ATTACHMENTS_TOTAL_BYTES) {
-      setAttachmentError("Prompt attachments exceed the 3 MB combined limit.");
+      setAttachmentError("Prompt attachments exceed the 16 MB combined limit.");
       return;
     }
 
@@ -2498,8 +2498,8 @@ export default function Home() {
                         />
                       </label>
                       <small>
-                        {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 3
-                        MB each · 3 MB total
+                        {promptAttachments.length}/{MAX_PROMPT_ATTACHMENTS} · 8
+                        MB each · 16 MB total
                       </small>
                     </div>
                   </div>
@@ -2966,7 +2966,7 @@ export default function Home() {
                         ? "Extends this room without losing its transcript."
                         : status === "running"
                           ? "The final audit has begun. Start a new discussion for more rounds."
-                        : "Available as soon as the room is live."}
+                          : "Available as soon as the room is live."}
                     </small>
                   </form>
                 )}

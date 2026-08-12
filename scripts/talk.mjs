@@ -8,9 +8,11 @@ import {
   createDeferred,
   LAUNCHER_SHUTDOWN_GRACE_MS,
   parseTalkArguments,
+  loadLaunchAttachments,
   resolveBridgePort,
   resolveLauncherStartupTimeout,
   resolveWebPort,
+  preregisterRoundtableReview,
   startRoundtableSession,
   stopStartedProcesses,
   unexpectedChildExitError,
@@ -36,10 +38,30 @@ if (launchOptions.help) {
 Options:
   --project <path>  Prefill the project folder (relative paths use the caller's directory)
   --topic <text>    Prefill the discussion goal
-  --rounds <1-5>    Prefill the number of rounds
+  --rounds <1-20>   Prefill the number of rounds
+  --preregister-output <path>
+                    Write a no-replace bridge/config record before creating the room
+  --preregister-only
+                    Write the signed bridge/config record and exit before room creation
+  --attachment <path>
+                    Attach a local evidence file (repeatable, at most five)
   --start           Start immediately with the configured CLI defaults
   --help            Show this help`);
   process.exit(0);
+}
+
+// Attachment validation is a launch precondition. Resolve and hash every file
+// before opening ports or starting child processes so duplicate basenames,
+// unsafe file types, or size failures cannot leave an orphaned bridge/web app.
+try {
+  launchOptions.attachments = await loadLaunchAttachments(
+    launchOptions.attachmentPaths,
+  );
+} catch (error) {
+  console.error(
+    `Roundtable: ${error instanceof Error ? error.message : "Attachment preflight failed."}`,
+  );
+  process.exit(1);
 }
 
 const token = randomBytes(24).toString("base64url");
@@ -144,6 +166,19 @@ try {
     },
   });
   const health = await bridgeReady;
+  if (launchOptions.start && launchOptions.preregisterOutput) {
+    await preregisterRoundtableReview({
+      outputPath: launchOptions.preregisterOutput,
+      options: launchOptions,
+      health,
+    });
+    console.log(
+      `  Roundtable preregistration: ${launchOptions.preregisterOutput}`,
+    );
+  }
+  if (launchOptions.preregisterOnly) {
+    await shutdown(0);
+  }
   const sessionId = launchOptions.start
     ? await startRoundtableSession({
         bridgeUrl,

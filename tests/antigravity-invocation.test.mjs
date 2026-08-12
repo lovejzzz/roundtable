@@ -4,6 +4,7 @@ import {
   ANTIGRAVITY_REQUIRED_FLAGS,
   antigravityModelEffort,
   buildAntigravityInvocationArgs,
+  parseAntigravityModels,
 } from "../scripts/antigravity-invocation.mjs";
 
 test("builds a plan-mode sandboxed Antigravity print invocation", () => {
@@ -48,12 +49,22 @@ test("extracts an encoded model effort and rejects contradictory routing", () =>
   );
 });
 
-test("falls back to medium effort and keeps an empty model on the CLI default", () => {
+test("falls back to high effort and keeps an empty model on the CLI default", () => {
   const args = buildAntigravityInvocationArgs({
     effort: "unsupported",
     prompt: "Review this.",
   });
 
   assert.equal(args.includes("--model"), false);
-  assert.deepEqual(args.slice(-4), ["--effort", "medium", "--print", "Review this."]);
+  assert.deepEqual(args.slice(-4), ["--effort", "high", "--print", "Review this."]);
+});
+
+test("parses current Antigravity model listings with display labels", () => {
+  assert.deepEqual(
+    parseAntigravityModels(`Fetching available models...\n\
+gemini-3.6-flash-high\tGemini 3.6 Flash (High)\n\
+gemini-3.1-pro-low Gemini 3.1 Pro (Low)\n\
+claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)`),
+    ["gemini-3.6-flash-high", "gemini-3.1-pro-low", "claude-opus-4-6-thinking"],
+  );
 });

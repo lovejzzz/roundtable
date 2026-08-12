@@ -1,12 +1,16 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import {
   buildAutostartPayload,
+  buildReviewPreregistration,
   buildRoundtableUrl,
   buildWebDevArgs,
   createDeferred,
+  loadLaunchAttachments,
   parseTalkArguments,
+  preregisterRoundtableReview,
   resolveBridgePort,
   resolveLauncherStartupTimeout,
   resolveWebPort,
@@ -19,6 +23,7 @@ import {
   waitForLauncherReadiness,
   waitForWebHealth,
 } from "../scripts/launcher.mjs";
+import { canonicalReviewConfiguration } from "../scripts/review-configuration.mjs";
 
 test("launcher startup patience defaults to three minutes and supports a bounded override", () => {
   assert.equal(resolveLauncherStartupTimeout({}), 180_000);
@@ -50,6 +55,8 @@ test("talk launch options prefill another project without changing the caller cw
         "Audit release readiness",
         "--rounds",
         "2",
+        "--preregister-output",
+        "../evidence/review.json",
         "--start",
       ],
       "/Users/example/current",
@@ -57,9 +64,12 @@ test("talk launch options prefill another project without changing the caller cw
     {
       help: false,
       start: true,
+      preregisterOnly: false,
       projectPath: "/Users/example/other-project",
       topic: "Audit release readiness",
       rounds: 2,
+      preregisterOutput: "/Users/example/evidence/review.json",
+      attachmentPaths: [],
     },
   );
 });
@@ -67,11 +77,55 @@ test("talk launch options prefill another project without changing the caller cw
 test("talk launch options reject missing, unknown, and unsafe values", () => {
   assert.throws(() => parseTalkArguments(["--project"]), /requires a value/);
   assert.throws(() => parseTalkArguments(["--topic", "  "]), /non-empty text/);
-  assert.throws(() => parseTalkArguments(["--rounds", "6"]), /1 through 5/);
+  assert.throws(
+    () => parseTalkArguments(["--preregister-output"]),
+    /requires a value/,
+  );
+  assert.throws(
+    () => parseTalkArguments(["--preregister-only"]),
+    /requires --preregister-output/,
+  );
+  assert.equal(
+    parseTalkArguments([
+      "--preregister-output",
+      "/tmp/review.json",
+      "--preregister-only",
+    ]).preregisterOnly,
+    true,
+  );
+  assert.equal(parseTalkArguments(["--rounds", "6"]).rounds, 6);
+  assert.deepEqual(
+    parseTalkArguments([
+      "--attachment",
+      "../evidence/package.zip",
+      "--attachment",
+      "/tmp/audit.json",
+    ], "/Users/example/current").attachmentPaths,
+    ["/Users/example/evidence/package.zip", "/tmp/audit.json"],
+  );
+  assert.throws(() => parseTalkArguments(["--rounds", "21"]), /1 through 20/);
   assert.throws(
     () => parseTalkArguments(["--autostart"]),
     /Unknown Roundtable option/,
   );
+});
+
+test("CLI attachments are bounded, encoded, and media typed before preregistration", async () => {
+  const root = await mkdtemp("/tmp/roundtable-launch-attachment-");
+  const filePath = `${root}/evidence.json`;
+  try {
+    await writeFile(filePath, '{"status":"pass"}\n');
+    const attachments = await loadLaunchAttachments([filePath]);
+    assert.deepEqual(attachments, [
+      {
+        name: "evidence.json",
+        mediaType: "application/json",
+        contentBase64: Buffer.from('{"status":"pass"}\n').toString("base64"),
+      },
+    ]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("connected room URL carries encoded launch context", () => {
@@ -122,9 +176,11 @@ test("auto-start uses the requested launch context and configured CLI defaults",
   const options = {
     help: false,
     start: true,
+    preregisterOnly: false,
     projectPath: "/Users/example/EDUTOOL",
     topic: "Review product readiness",
     rounds: 3,
+    preregisterOutput: "",
   };
   const health = {
     defaultProject: "/Users/example/fallback",
@@ -134,7 +190,8 @@ test("auto-start uses the requested launch context and configured CLI defaults",
       antigravity: { configured: "gemini-3.6-flash-high", effort: "high" },
     },
   };
-  assert.deepEqual(buildAutostartPayload(options, health), {
+  const payload = buildAutostartPayload(options, health);
+  assert.deepEqual(payload, {
     projectPath: "/Users/example/EDUTOOL",
     topic: "Review product readiness",
     attachments: [],
@@ -142,13 +199,17 @@ test("auto-start uses the requested launch context and configured CLI defaults",
     codexModel: "gpt-5.6-sol",
     claudeModel: "opus[1m]",
     antigravityModel: "gemini-3.6-flash-high",
+    fableModel: "claude-fable-5",
     codexEffort: "high",
     claudeEffort: "high",
     antigravityEffort: "high",
+    fableEffort: "high",
     fableFinalAudit: true,
     keepHistory: false,
     reviewDissent: false,
+    reviewConfigurationSha256: payload.reviewConfigurationSha256,
   });
+  assert.match(payload.reviewConfigurationSha256, /^[a-f0-9]{64}$/);
 
   let request;
   const sessionId = await startRoundtableSession({
@@ -172,6 +233,75 @@ test("auto-start uses the requested launch context and configured CLI defaults",
     JSON.parse(request.init.body),
     buildAutostartPayload(options, health),
   );
+});
+
+test("review preregistration freezes bridge identity and exact auto-start payload before room creation", async () => {
+  const options = {
+    help: false,
+    start: true,
+    preregisterOnly: false,
+    projectPath: "/Users/example/EDUTOOL",
+    topic: "Audit the frozen release evidence",
+    rounds: 6,
+    preregisterOutput: "/tmp/review.json",
+    attachments: [
+      {
+        name: "evidence.json",
+        mediaType: "application/json",
+        contentBase64: Buffer.from('{"status":"pass"}\n').toString("base64"),
+      },
+    ],
+  };
+  const health = {
+    defaultProject: "/Users/example/fallback",
+    messageAttestation: {
+      protocol: "roundtable-message-attestation-v1",
+      algorithm: "Ed25519",
+      publicKeySpkiBase64: "MCowBQYDK2VwAyEAexample",
+      publicKeyFingerprintSha256: "a".repeat(64),
+    },
+    codex: { available: true },
+    claude: { available: true },
+    antigravity: { available: true },
+    models: {
+      codex: { configured: "gpt-5.6-sol", effort: "high" },
+      claude: { configured: "opus[1m]", effort: "high" },
+      antigravity: { configured: "gemini-3.6-flash-high", effort: "high" },
+    },
+  };
+  const expected = buildReviewPreregistration(
+    options,
+    health,
+    "2026-08-06T08:00:00.000Z",
+  );
+  let write;
+  const actual = await preregisterRoundtableReview({
+    outputPath: options.preregisterOutput,
+    options,
+    health,
+    preregisteredAt: "2026-08-06T08:00:00.000Z",
+    writeFileImpl: async (path, contents, fileOptions) => {
+      write = { path, contents, fileOptions };
+    },
+  });
+  assert.deepEqual(actual, expected);
+  assert.equal(write.path, "/tmp/review.json");
+  assert.equal(write.fileOptions.flag, "wx");
+  assert.equal(write.fileOptions.mode, 0o600);
+  assert.deepEqual(JSON.parse(write.contents), expected);
+  assert.deepEqual(
+    expected.reviewConfiguration,
+    canonicalReviewConfiguration(buildAutostartPayload(options, health)),
+  );
+  assert.equal("contentBase64" in expected.reviewConfiguration.attachments[0], false);
+  assert.match(expected.reviewConfiguration.attachments[0].sha256, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(write.contents, /eyJzdGF0dXMiOiJwYXNzIn0K/);
+  assert.deepEqual(expected.participantAvailability, {
+    codex: true,
+    claude: true,
+    antigravity: true,
+    fable: true,
+  });
 });
 
 test("launcher bridge port follows the configured environment", () => {

@@ -3,7 +3,7 @@
 Roundtable gives Codex CLI, Claude CLI, and Antigravity CLI one visible,
 steerable project discussion.
 
-Current release: **v0.0.0.49**
+Current release: **v0.0.0.51**
 
 Roundtable uses four-part development versions. Each completed agent
 conversation plus its implemented improvement increments the final field:
@@ -120,7 +120,7 @@ whole-process-tree cleanup.
 ## How a discussion works
 
 1. Choose an absolute project folder and a discussion goal.
-2. Optionally attach up to five prompt files (3 MB each, 3 MB combined).
+2. Optionally attach up to five prompt files (8 MB each, 16 MB combined).
    Roundtable copies them into every disposable agent workspace and lists their
    generated relative paths in the control prompt. File bytes never enter the
    visible transcript or local history. A canonical content manifest identifies
@@ -153,13 +153,13 @@ whole-process-tree cleanup.
    then records a strict fix-or-ship judgment before synthesis. Adding rounds
    extends the regular discussion without duplicating this final audit.
 10. Only after the final agent turn, Roundtable asks Codex for a structured
-   Completion Brief and falls back to Claude, then Antigravity, if a participant
-   fails or returns invalid structure. The two non-synthesizing participants
-   independently audit the draft against labeled transcript evidence. Material
-   concerns permit exactly one fallback-capable revision; the room preserves
-   the original draft, audits, attempts, and final brief. The persisted audit
-   state closes as complete or stopped rather than retaining a stale running
-   marker after the room ends.
+    Completion Brief and falls back to Claude, then Antigravity, if a participant
+    fails or returns invalid structure. The two non-synthesizing participants
+    independently audit the draft against labeled transcript evidence. Material
+    concerns permit exactly one fallback-capable revision; the room preserves
+    the original draft, audits, attempts, and final brief. The persisted audit
+    state closes as complete or stopped rather than retaining a stale running
+    marker after the room ends.
 11. Optionally enable **Dissent check**. After the audited brief is frozen,
     each agent gets one separate review pass and can identify labeled positions
     the brief missed or flattened. Mark each item **Represented** or **Missed**;
@@ -262,13 +262,13 @@ change, not a discussion, message, token, commit, or line of code.
 
 Published results differ sharply by task and setting:
 
-| Study | Setting and result | Design lesson for Roundtable |
-| --- | --- | --- |
-| [Peng et al. (2023)](https://www.microsoft.com/en-us/research/publication/the-impact-of-ai-on-developer-productivity-evidence-from-github-copilot/) | In a controlled JavaScript HTTP-server task, developers with GitHub Copilot completed the task 55.8% faster. | Bounded implementation tasks can show large gains, but do not represent mature product work by themselves. |
-| [Cui et al. (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4945566) | Three randomized field experiments at Microsoft, Accenture, and a Fortune 100 company covered 4,867 developers. Pooled access to a coding assistant increased completed tasks by 26.08% (standard error 10.3%), with noisy and varying individual experiments. | Use real work and enough repeated tasks; report uncertainty and differences by task and developer experience. |
-| [Becker et al. (2025)](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/) | Sixteen experienced developers completed 246 randomized issues in their own mature repositories. Allowing early-2025 AI tools increased completion time by 19%, even though participants believed the tools made them faster. | Do not use satisfaction or estimated time saved as the efficiency result. Measure actual time and accepted output. |
-| [METR design update (2026)](https://metr.org/blog/2026-02-24-uplift-update/) | A follow-up produced raw estimates consistent with roughly 4–18% speedup, but the authors judged the signal unreliable because participation selection changed and parallel-agent use made time tracking difficult. | Measure the complete orchestrated workflow and publish unusable or biased data as such. |
-| [Demirer, Musolff, and Yang (2026)](https://www.nber.org/papers/w35275) | A matched event study of more than 100,000 GitHub developers associated autonomous agents with 180% more commits, but only 30% more releases and no increase in app usage. | Count merge-ready, released, and used improvements. Activity is a diagnostic, not the product outcome. |
+| Study                                                                                                                                               | Setting and result                                                                                                                                                                                                                                             | Design lesson for Roundtable                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| [Peng et al. (2023)](https://www.microsoft.com/en-us/research/publication/the-impact-of-ai-on-developer-productivity-evidence-from-github-copilot/) | In a controlled JavaScript HTTP-server task, developers with GitHub Copilot completed the task 55.8% faster.                                                                                                                                                   | Bounded implementation tasks can show large gains, but do not represent mature product work by themselves.         |
+| [Cui et al. (2025)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4945566)                                                                    | Three randomized field experiments at Microsoft, Accenture, and a Fortune 100 company covered 4,867 developers. Pooled access to a coding assistant increased completed tasks by 26.08% (standard error 10.3%), with noisy and varying individual experiments. | Use real work and enough repeated tasks; report uncertainty and differences by task and developer experience.      |
+| [Becker et al. (2025)](https://metr.org/blog/2025-07-10-early-2025-ai-experienced-os-dev-study/)                                                    | Sixteen experienced developers completed 246 randomized issues in their own mature repositories. Allowing early-2025 AI tools increased completion time by 19%, even though participants believed the tools made them faster.                                  | Do not use satisfaction or estimated time saved as the efficiency result. Measure actual time and accepted output. |
+| [METR design update (2026)](https://metr.org/blog/2026-02-24-uplift-update/)                                                                        | A follow-up produced raw estimates consistent with roughly 4–18% speedup, but the authors judged the signal unreliable because participation selection changed and parallel-agent use made time tracking difficult.                                            | Measure the complete orchestrated workflow and publish unusable or biased data as such.                            |
+| [Demirer, Musolff, and Yang (2026)](https://www.nber.org/papers/w35275)                                                                             | A matched event study of more than 100,000 GitHub developers associated autonomous agents with 180% more commits, but only 30% more releases and no increase in app usage.                                                                                     | Count merge-ready, released, and used improvements. Activity is a diagnostic, not the product outcome.             |
 
 [SWE-bench](https://arxiv.org/abs/2310.06770) demonstrates a useful task
 shape—2,294 issue-and-pull-request problems from 12 repositories with executable
@@ -299,10 +299,10 @@ a race against human active hours.
 
 Use three primary arms:
 
-| Arm | Workflow |
-| --- | --- |
-| Human + Codex | The user works with Codex alone to decide, implement, test, repair, and prepare the change. |
-| Human + Claude | The user works with Claude Code alone through the same delivery boundary. |
+| Arm                               | Workflow                                                                                                                                                                          |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Human + Codex                     | The user works with Codex alone to decide, implement, test, repair, and prepare the change.                                                                                       |
+| Human + Claude                    | The user works with Claude Code alone through the same delivery boundary.                                                                                                         |
 | Human + Codex butler + Roundtable | The user delegates to Codex; Codex launches and steers the multi-model room, consolidates its audited Completion Brief, then manages implementation, tests, repair, and delivery. |
 
 An optional fourth **parallel answers + Codex** ablation gives Codex the same
@@ -448,7 +448,7 @@ small bug fix and an architectural decision into an unexplained headline.
 
 ### Roundtable-specific diagnostics
 
-These explain *why* the workflow won or lost but are not substitutes for the
+These explain _why_ the workflow won or lost but are not substitutes for the
 primary outcome:
 
 - **opening divergence:** materially different proposals in the sealed round;

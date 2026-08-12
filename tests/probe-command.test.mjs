@@ -40,6 +40,17 @@ test("can provide bounded stdin to probes that require a live request", async ()
   assert.equal(result.output, "AUTH_OK");
 });
 
+test("can run a probe from the same isolated working-directory boundary as a real turn", async () => {
+  const temporaryDirectory = process.cwd();
+  const result = await runBoundedProbe({
+    command: process.execPath,
+    args: ["-e", "process.stdout.write(process.cwd())"],
+    cwd: temporaryDirectory,
+  });
+  assert.equal(result.success, true);
+  assert.equal(result.output, temporaryDirectory);
+});
+
 test("times out a probe and returns no captured output", async () => {
   const result = await runNode(
     'process.stdout.write("fixture-secret"); setInterval(() => {}, 1_000)',

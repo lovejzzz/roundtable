@@ -12,6 +12,7 @@ import {
   extractReportedChecks,
   verifyRoundtableMessageAttestation,
 } from "../scripts/bridge-core.mjs";
+import { reviewConfigurationSha256 } from "../scripts/review-configuration.mjs";
 
 const token = "test-bridge-token";
 const health = {
@@ -123,6 +124,105 @@ test("bridge shutdown stops sessions and cleans disposable workspaces before clo
     "cleanup",
   ]);
   assert.equal(bridge.sessions.get(id).clients.size, 0);
+});
+
+test("starts a six-round room without requiring an immediate extension", async () => {
+  let releaseTurn;
+  const agentRunner = {
+    prepare: async () => {},
+    run: () =>
+      new Promise((resolve) => {
+        releaseTurn = resolve;
+      }),
+    stop: async () => releaseTurn?.("stopped"),
+    cleanup: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Six-round audit",
+        rounds: 6,
+      }),
+    });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    await waitFor(() => releaseTurn);
+    assert.equal(bridge.sessions.get(id).discussionTurns, 18);
+    assert.equal(bridge.sessions.get(id).totalTurns, 18);
+  } finally {
+    await bridge.shutdown("test_shutdown");
+    await bridge.close();
+  }
+});
+
+test("continues the core discussion while preserving a failed Fable exact-model preflight", async () => {
+  let discussionCalls = 0;
+  const agentRunner = {
+    prepare: async () => {},
+    preflight: async (_session, requirement) => {
+      assert.deepEqual(requirement, {
+        role: "fable",
+        model: "claude-fable-5",
+        effort: "high",
+      });
+      const error = new Error(
+        "Fable 5 persisted authentication was rejected by the provider.",
+      );
+      error.code = "AUTHENTICATION_UNAVAILABLE";
+      throw error;
+    },
+    run: async ({ purpose }) => {
+      discussionCalls += 1;
+      if (purpose === "synthesis") {
+        return '{"decision":"Core review complete; final audit missing","rationale":"The available participants completed the review.","actions":[],"openQuestions":["Fable final audit remains unavailable."],"consensus":false}';
+      }
+      if (purpose === "brief-audit") return '{"revise":false,"concerns":[]}';
+      return "available participant inspected the project";
+    },
+    stop: async () => {},
+    cleanup: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+
+  try {
+    const response = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        projectPath: "/test/project",
+        topic: "Strict final audit",
+        rounds: 6,
+        fableFinalAudit: true,
+      }),
+    });
+    assert.equal(response.status, 201);
+    const { id } = await response.json();
+    const completed = await waitFor(async () => {
+      const snapshotResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
+        headers: authHeaders(),
+      });
+      const snapshot = await snapshotResponse.json();
+      return snapshot.phase === "complete" ? snapshot : null;
+    });
+
+    assert.ok(discussionCalls > 0);
+    assert.equal(completed.messages.some((message) => message.role === "fable"), false);
+    assert.equal(completed.messages.filter((message) => message.role !== "fable").length, 18);
+    assert.equal(
+      completed.preflightFailure.code,
+      "required-final-auditor-unavailable",
+    );
+    assert.equal(completed.preflightFailure.stage, "preflight");
+    assert.equal(completed.participantIssues[0].role, "fable");
+    assert.equal(completed.sealedBatch.roles.fable, undefined);
+  } finally {
+    await bridge.close();
+  }
 });
 
 test("rejects an Antigravity model and effort combination the CLI cannot run", async () => {
@@ -749,6 +849,68 @@ test("keeps attachment bytes private while listing disposable paths in every pro
   }
 });
 
+test("recomputes and enforces the preregistered review configuration fingerprint", async () => {
+  const agentRunner = {
+    run: async ({ purpose }) =>
+      purpose === "synthesis"
+        ? '{"decision":"Bound","rationale":"The payload matched.","actions":[],"openQuestions":[],"consensus":true}'
+        : "Bound review contribution.",
+    stop: async () => {},
+  };
+  const bridge = await startTestBridge(agentRunner);
+  const payload = {
+    projectPath: "/test/project",
+    topic: "Verify preregistration binding",
+    attachments: [],
+    rounds: 1,
+    codexModel: "codex-test",
+    claudeModel: "claude-test",
+    antigravityModel: "gemini-test",
+    fableModel: "claude-fable-5",
+    codexEffort: "high",
+    claudeEffort: "high",
+    antigravityEffort: "high",
+    fableEffort: "high",
+    fableFinalAudit: false,
+    keepHistory: false,
+    reviewDissent: false,
+  };
+
+  try {
+    const rejected = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        ...payload,
+        reviewConfigurationSha256: "0".repeat(64),
+      }),
+    });
+    assert.equal(rejected.status, 409);
+    assert.match((await rejected.json()).error, /does not match/i);
+    assert.equal(bridge.sessions.size, 0);
+
+    const expectedSha256 = reviewConfigurationSha256(payload);
+    const accepted = await fetch(`${bridge.baseUrl}/sessions`, {
+      method: "POST",
+      headers: authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        ...payload,
+        reviewConfigurationSha256: expectedSha256,
+      }),
+    });
+    assert.equal(accepted.status, 201);
+    const created = await accepted.json();
+    assert.equal(created.reviewConfigurationSha256, expectedSha256);
+    const snapshot = await fetch(`${bridge.baseUrl}/sessions/${created.id}`, {
+      headers: authHeaders(),
+    }).then((response) => response.json());
+    assert.equal(snapshot.reviewConfigurationSha256, expectedSha256);
+    assert.equal(snapshot.reviewConfiguration.topic, payload.topic);
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("keeps steering sealed from opening peers and includes it once in cross-examination", async () => {
   let releaseFirstTurn;
   const prompts = [];
@@ -1126,7 +1288,8 @@ test("rejects phantom round extensions after the final participant turn", async 
     async run({ role, purpose }) {
       if (role === "fable") {
         return new Promise((resolve) => {
-          releaseFable = () => resolve("Fable audited the completed participant rounds.");
+          releaseFable = () =>
+            resolve("Fable audited the completed participant rounds.");
         });
       }
       if (purpose === "synthesis") {
@@ -1161,13 +1324,19 @@ test("rejects phantom round extensions after the final participant turn", async 
     const { id } = await createResponse.json();
     await waitFor(() => releaseFable);
 
-    const extendResponse = await fetch(`${bridge.baseUrl}/sessions/${id}/extend`, {
-      method: "POST",
-      headers: authHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ rounds: 1 }),
-    });
+    const extendResponse = await fetch(
+      `${bridge.baseUrl}/sessions/${id}/extend`,
+      {
+        method: "POST",
+        headers: authHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ rounds: 1 }),
+      },
+    );
     assert.equal(extendResponse.status, 409);
-    assert.match((await extendResponse.json()).error, /final audit or completion brief/i);
+    assert.match(
+      (await extendResponse.json()).error,
+      /final audit or completion brief/i,
+    );
 
     const liveResponse = await fetch(`${bridge.baseUrl}/sessions/${id}`, {
       headers: authHeaders(),

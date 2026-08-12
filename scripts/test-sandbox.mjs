@@ -2,17 +2,23 @@ import { constants, rmSync } from "node:fs";
 import { execFile, spawn } from "node:child_process";
 import { cp, lstat, mkdtemp, readdir, readlink, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { materializeGitContext } from "./git-context.mjs";
+import {
+  preparePromptAttachmentsForRemoval,
+  preparePromptAttachmentsForRemovalSync,
+} from "./prompt-attachments.mjs";
 
 const GENERATED_DIRECTORIES = new Set([
+  ".audit-work",
   ".git",
   ".next",
   ".pnpm-store",
   ".wrangler",
   ".yarn",
   ".venv",
+  ".vite",
   "__pycache__",
   "build",
   ".cache",
@@ -22,9 +28,35 @@ const GENERATED_DIRECTORIES = new Set([
   "playwright-report",
   "target",
   "test-results",
+  "tmp",
   "venv",
   "verification-output",
 ]);
+// A dependency tree is already generated content, so source-tree directory
+// names such as dist, build, target, tmp, and nested node_modules are runtime
+// payloads there, not disposable project output. Removing them can strand
+// package-manager .bin links and silently make broker checks incomplete.
+const DEPENDENCY_TRANSIENT_DIRECTORIES = new Set([
+  ".cache",
+  ".next",
+  ".pnpm-store",
+  ".vite",
+  ".wrangler",
+  ".yarn",
+  "coverage",
+  "playwright-report",
+  "test-results",
+]);
+const NON_SOURCE_MODEL_EXTENSIONS = new Set([
+  ".ckpt",
+  ".gguf",
+  ".onnx",
+  ".pt",
+  ".pth",
+  ".safetensors",
+]);
+const MAX_DISPOSABLE_MODEL_BYTES = 16 * 1024 * 1024;
+const MAX_DISPOSABLE_FILE_BYTES = 512 * 1024 * 1024;
 const SANDBOX_REMOVE_OPTIONS = Object.freeze({
   recursive: true,
   force: true,
@@ -168,9 +200,28 @@ async function shouldCopyWithPolicy(
 ) {
   const relativePath = relative(projectPath, sourcePath);
   if (!relativePath) return true;
-  const [topLevel] = relativePath.split(sep);
+  const pathParts = relativePath.split(sep);
+  const [topLevel] = pathParts;
   if (GENERATED_DIRECTORIES.has(topLevel) && !trackedGeneratedPaths.has(relativePath)) return false;
   const metadata = await lstat(sourcePath);
+  // Generated caches frequently appear below a tool or monorepo folder
+  // rather than at the selected project root. Never multiply those nested
+  // trees across every reviewer workspace.
+  if (metadata.isDirectory() && pathParts.slice(1).some((part) => GENERATED_DIRECTORIES.has(part))) {
+    return false;
+  }
+  // Model weights are runtime payloads, not reviewable source. A real EDUTOOL
+  // room previously copied multi-gigabyte safetensors into every seat and
+  // exhausted the host disk before the first turn. Keep small fixtures, but
+  // omit heavyweight weights and any single pathological payload.
+  if (
+    metadata.isFile() &&
+    (metadata.size > MAX_DISPOSABLE_FILE_BYTES ||
+      (metadata.size > MAX_DISPOSABLE_MODEL_BYTES &&
+        NON_SOURCE_MODEL_EXTENSIONS.has(extname(relativePath).toLowerCase())))
+  ) {
+    return false;
+  }
   if (!metadata.isSymbolicLink()) return true;
   const [linkTarget, resolvedSourceTarget] = await Promise.all([
     readlink(sourcePath).catch(() => ""),
@@ -560,9 +611,21 @@ export async function cloneBrokerNodeModules(
     mode: constants.COPYFILE_FICLONE,
     dereference: false,
     verbatimSymlinks: true,
-    filter: () => {
+    filter: (sourcePath) => {
       if (clock() - startedAt > copyTimeoutMs) {
-        throw new Error("The offline dependency clone exceeded its 60-second safety limit.");
+        const limitSeconds = Math.ceil(copyTimeoutMs / 1000);
+        const error = new Error(
+          `The offline dependency clone exceeded its ${limitSeconds}-second safety limit.`,
+        );
+        error.code = "TIMEOUT";
+        throw error;
+      }
+      const relativePath = relative(dependencyRoot, sourcePath);
+      if (
+        relativePath &&
+        relativePath.split(sep).some((part) => DEPENDENCY_TRANSIENT_DIRECTORIES.has(part))
+      ) {
+        return false;
       }
       return true;
     },
@@ -748,7 +811,6 @@ export async function ensurePreparedTestSandboxSource(
     materializeContext = materializeGitContext,
     materializeSnapshot = materializeSyntheticGitSnapshot,
     validateSymlinks = validateCopiedSymlinks,
-    cloneDependencies = cloneBrokerNodeModules,
     onStage = () => {},
   } = {},
 ) {
@@ -771,11 +833,6 @@ export async function ensurePreparedTestSandboxSource(
           error.code = "USER_STOP";
           throw error;
         }
-        onStage({ stage: "cloning-dependencies" });
-        await cloneDependencies(session.projectPath, source.workspace, {
-          copy,
-          validateSymlinks,
-        });
         session.testSandboxSource = source;
         onStage({ stage: "source-ready" });
         return source;
@@ -844,6 +901,7 @@ async function removeSandboxRoots(roots, removeRoot = rm) {
   const results = [];
   for (const root of new Set(roots.filter(Boolean))) {
     try {
+      await preparePromptAttachmentsForRemoval(join(root, "workspace"));
       await removeRoot(root, SANDBOX_REMOVE_OPTIONS);
       results.push({ root, removed: true });
     } catch (error) {
@@ -915,6 +973,7 @@ export function cleanupTestSandboxesSync(session, { removeRootSync = rmSync } = 
   for (const root of roots) {
     if (!root) continue;
     try {
+      preparePromptAttachmentsForRemovalSync(join(root, "workspace"));
       removeRootSync(root, SANDBOX_REMOVE_OPTIONS);
       session.testSandboxRoots?.delete(root);
     } catch {
@@ -975,6 +1034,7 @@ export function buildClaudeSandboxProfile({
   claudeHome = join(home, ".claude"),
   claudeHomeAliases = [claudeHome],
   additionalProtectedPaths = [],
+  writableCredentialStatePaths = [],
   projectPath,
   siblingRoot = "",
   siblingRoots = [],
@@ -988,7 +1048,12 @@ export function buildClaudeSandboxProfile({
     ...claudeHomeAliases.map((path) => `(deny file-write* (literal "${sandboxLiteral(path)}"))`),
     ...[...protectedPaths].map((path) => `(deny file-read* (subpath "${sandboxLiteral(path)}"))`),
     ...homeEntries
-      .filter((name) => name && !pathIsInside(join(home, name), claudeHome))
+      .filter(
+        (name) =>
+          name &&
+          !pathIsInside(join(home, name), claudeHome) &&
+          !writableCredentialStatePaths.some((statePath) => pathIsInside(join(home, name), statePath)),
+      )
       .map((name) => `(deny file-write* (subpath "${sandboxLiteral(join(home, name))}"))`),
     ...claudeHomeAncestorEntries.flatMap(
       ({ path, pathAliases = [path], entries = [], siblingPaths = [] }) => [
@@ -1015,6 +1080,14 @@ export function buildClaudeSandboxProfile({
       CLAUDE_WRITABLE_RUNTIME_PATHS.map(
         (name) => `(allow file-write* (regex #"^${sandboxRegexLiteral(join(path, name))}($|/)"))`,
       ),
+    ),
+    // Claude Code may rotate or refresh its persisted OAuth credential during
+    // a real inference. Permit only the exact credential-state files (and the
+    // temporary siblings used for atomic replacement); settings, plugins,
+    // other applications, and every sibling agent credential remain denied.
+    ...writableCredentialStatePaths.map(
+      (statePath) =>
+        `(allow file-write* (regex #"^${sandboxRegexLiteral(statePath)}(?:\\.[^/]*)?$"))`,
     ),
     `(deny file-read* (subpath "${sandboxLiteral(projectPath)}"))`,
     `(deny file-write* (subpath "${sandboxLiteral(projectPath)}"))`,

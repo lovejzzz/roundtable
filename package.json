@@ -1,6 +1,6 @@
 {
   "name": "roundtable-cli-room",
-  "version": "0.0.0.49",
+  "version": "0.0.0.51",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -12,16 +12,17 @@
     "bridge": "node scripts/bridge.mjs",
     "talk": "node scripts/talk.mjs",
     "test": "npm run test:bridge && npm run build && node --test tests/rendered-html.test.mjs",
-    "test:bridge": "node --test tests/agent-environment.test.mjs tests/antigravity-invocation.test.mjs tests/antigravity-prompt-file.test.mjs tests/bridge-core.test.mjs tests/broker-controller.test.mjs tests/claude-invocation.test.mjs tests/history-store.test.mjs tests/launcher.test.mjs tests/live-status.test.mjs tests/managed-process-policy.test.mjs tests/probe-command.test.mjs tests/prompt-attachments.test.mjs tests/stream-recovery.test.mjs tests/test-broker.test.mjs tests/test-sandbox.test.mjs",
+    "test:bridge": "node --test tests/agent-environment.test.mjs tests/antigravity-invocation.test.mjs tests/antigravity-prompt-file.test.mjs tests/bridge-core.test.mjs tests/broker-controller.test.mjs tests/claude-invocation.test.mjs tests/history-store.test.mjs tests/launcher.test.mjs tests/live-status.test.mjs tests/managed-process-policy.test.mjs tests/message-attestation-identity.test.mjs tests/probe-command.test.mjs tests/prompt-attachments.test.mjs tests/stream-recovery.test.mjs tests/test-broker.test.mjs tests/test-sandbox.test.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
     "drizzle-orm": "0.45.2",
     "lucide-react": "^1.27.0",
-    "next": "16.2.6",
+    "next": "^16.3.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6"
+    "react-dom": "19.2.6",
+    "yauzl": "^3.4.0"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -33,13 +34,14 @@
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
     "eslint": "9.39.4",
-    "eslint-config-next": "16.2.6",
+    "eslint-config-next": "^16.3.0",
     "react-server-dom-webpack": "19.2.6",
     "tailwindcss": "4.2.1",
     "typescript": "5.9.3",
     "vinext": "0.0.50",
     "vite": "8.0.13",
-    "wrangler": "4.92.0"
+    "wrangler": "4.92.0",
+    "yazl": "^3.3.1"
   },
   "type": "module"
 }

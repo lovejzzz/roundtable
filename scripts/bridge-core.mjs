@@ -13,6 +13,10 @@ import {
   promptAttachmentsSection,
 } from "./prompt-attachments.mjs";
 import { redactVisibleString } from "./redaction.mjs";
+import {
+  canonicalReviewConfiguration,
+  reviewConfigurationSha256 as calculateReviewConfigurationSha256,
+} from "./review-configuration.mjs";
 
 export const TERMINAL_PHASES = new Set([
   "complete",
@@ -86,9 +90,7 @@ export function verifyRoundtableMessageAttestation(message) {
       attestation.publicKeySpkiBase64,
       "base64",
     );
-    if (
-      attestation.publicKeyFingerprintSha256 !== sha256Hex(publicKeyBytes)
-    ) {
+    if (attestation.publicKeyFingerprintSha256 !== sha256Hex(publicKeyBytes)) {
       return false;
     }
     const publicKey = createPublicKey({
@@ -853,10 +855,10 @@ export function createBridge({
   sessionTtlMs = 60 * 60 * 1000,
   failedTurnTtlMs = 15 * 60 * 1000,
   maxSessions = 20,
+  messageAttestationKeys = generateKeyPairSync("ed25519"),
 }) {
   const sessions = new Map();
   const tickets = new Map();
-  const messageAttestationKeys = generateKeyPairSync("ed25519");
   const messageAttestationPublicKey = messageAttestationKeys.publicKey.export({
     format: "der",
     type: "spki",
@@ -1471,6 +1473,40 @@ export function createBridge({
           });
         },
       });
+      if (
+        session.fableFinalAudit &&
+        typeof agentRunner.preflight === "function"
+      ) {
+        setPhase(session, "preparing", {
+          stage: "validating-final-auditor",
+          note: "Verifying that the required final auditor can answer before discussion begins.",
+        });
+        try {
+          await agentRunner.preflight(session, {
+            role: FINAL_AUDITOR_ROLE,
+            model: session.fableModel,
+            effort: session.fableEffort,
+          });
+        } catch (error) {
+          const reason = safeVisibleError(error);
+          session.participantIssues[FINAL_AUDITOR_ROLE] = {
+            role: FINAL_AUDITOR_ROLE,
+            status: "unavailable",
+            reason,
+            detectedAt: now().toISOString(),
+          };
+          session.preflightFailure = {
+            code: "required-final-auditor-unavailable",
+            role: FINAL_AUDITOR_ROLE,
+            stage: "preflight",
+            reason,
+          };
+          setPhase(session, "preparing", {
+            stage: "validating-final-auditor",
+            note: `Final auditor unavailable; the core discussion will continue and the missing boss audit will remain explicit: ${reason}`,
+          });
+        }
+      }
       setPhase(session, session.stopRequested ? "stopping" : "running", {
         stage: session.stopRequested ? "stopping" : "ready",
         note: session.stopRequested
@@ -1879,6 +1915,8 @@ export function createBridge({
       topic: session.topic,
       attachments: session.attachments,
       attachmentManifestId: session.attachmentManifestId,
+      reviewConfiguration: session.reviewConfiguration,
+      reviewConfigurationSha256: session.reviewConfigurationSha256,
       createdAt: session.createdAt,
       codexModel: session.codexModel,
       claudeModel: session.claudeModel,
@@ -1902,6 +1940,7 @@ export function createBridge({
       dissentReviews: session.dissentReviews,
       dissentJudgments: session.dissentJudgments,
       failedTurn: session.failedTurn,
+      preflightFailure: session.preflightFailure,
       participantIssues: Object.values(session.participantIssues || {}),
       liveness: session.liveness,
       historyWarning: session.historyWarning,
@@ -2015,11 +2054,9 @@ export function createBridge({
             protocol: ROUNDTABLE_MESSAGE_ATTESTATION_PROTOCOL,
             algorithm: "Ed25519",
             publicKeySpkiBase64: messageAttestationPublicKey.toString("base64"),
-            publicKeyFingerprintSha256: sha256Hex(
-              messageAttestationPublicKey,
-            ),
+            publicKeyFingerprintSha256: sha256Hex(messageAttestationPublicKey),
             claimBoundary:
-              "Pre-register this bridge fingerprint before a review if its signed messages will control an external admission gate.",
+              "This installation identity persists across bridge restarts. Pre-register its fingerprint before a review if signed messages will control an external admission gate.",
           },
           history: {
             available: Boolean(historyStore.enabled),
@@ -2189,9 +2226,15 @@ export function createBridge({
           });
           return;
         }
-        const payload = await readJson(request, 4_500_000);
+        // Five base64-encoded prompt attachments can represent up to 16 MiB
+        // of verified source bytes. Allow the encoding overhead plus the
+        // small discussion payload while keeping a hard request ceiling.
+        const payload = await readJson(request, 24 * 1024 * 1024);
         const topic = String(payload.topic || "").trim();
-        const rounds = Math.max(1, Math.min(5, Number(payload.rounds) || 3));
+        const rounds = Math.max(
+          1,
+          Math.min(MAX_SESSION_ROUNDS, Number(payload.rounds) || 3),
+        );
         const codexModel = String(
           payload.codexModel || health.models.codex.configured,
         ).trim();
@@ -2211,8 +2254,10 @@ export function createBridge({
           payload.antigravityEffort || health.models.antigravity.effort,
         ).trim();
         const fableFinalAudit = Boolean(payload.fableFinalAudit);
-        const fableModel = "claude-fable-5";
-        const fableEffort = "high";
+        const fableModel = String(
+          payload.fableModel || "claude-fable-5",
+        ).trim();
+        const fableEffort = String(payload.fableEffort || "high").trim();
         const keepHistory = Boolean(
           payload.keepHistory && historyStore.enabled,
         );
@@ -2263,7 +2308,8 @@ export function createBridge({
         if (
           (codexModel && !modelPattern.test(codexModel)) ||
           (claudeModel && !modelPattern.test(claudeModel)) ||
-          (antigravityModel && !modelPattern.test(antigravityModel))
+          (antigravityModel && !modelPattern.test(antigravityModel)) ||
+          fableModel !== "claude-fable-5"
         ) {
           sendJson(request, response, 400, {
             error: "Model names contain unsupported characters.",
@@ -2292,6 +2338,51 @@ export function createBridge({
           return;
         }
 
+        const effectiveReviewPayload = {
+          projectPath: String(
+            payload.projectPath || defaultProject,
+          ).trim(),
+          topic,
+          attachments: payload.attachments,
+          rounds,
+          codexModel,
+          claudeModel,
+          antigravityModel,
+          fableModel,
+          codexEffort,
+          claudeEffort,
+          antigravityEffort,
+          fableEffort,
+          fableFinalAudit,
+          keepHistory,
+          reviewDissent,
+        };
+        const reviewConfiguration = canonicalReviewConfiguration(
+          effectiveReviewPayload,
+          normalizedAttachments,
+        );
+        const reviewConfigurationSha256 =
+          calculateReviewConfigurationSha256(
+            effectiveReviewPayload,
+            normalizedAttachments,
+          );
+        const claimedReviewConfigurationSha256 = String(
+          payload.reviewConfigurationSha256 || "",
+        ).trim();
+        if (
+          claimedReviewConfigurationSha256 &&
+          (!/^[a-f0-9]{64}$/.test(claimedReviewConfigurationSha256) ||
+            claimedReviewConfigurationSha256 !==
+              reviewConfigurationSha256)
+        ) {
+          sendJson(request, response, 409, {
+            error:
+              "Review configuration does not match its preregistered fingerprint.",
+            reviewConfigurationSha256,
+          });
+          return;
+        }
+
         evictOverflow();
         if (sessions.size >= maxSessions) {
           sendJson(request, response, 429, {
@@ -2309,6 +2400,8 @@ export function createBridge({
           attachments: normalizedAttachments.attachments,
           attachmentPayloads: normalizedAttachments.payloads,
           attachmentManifestId: normalizedAttachments.attachmentManifestId,
+          reviewConfiguration,
+          reviewConfigurationSha256,
           codexModel,
           claudeModel,
           antigravityModel,
@@ -2342,6 +2435,7 @@ export function createBridge({
           ),
           liveness: null,
           failureGate: null,
+          preflightFailure: null,
           stopRequested: false,
           skipOutcomeRequested: false,
           keepHistory,
@@ -2375,6 +2469,7 @@ export function createBridge({
         sendJson(request, response, 201, {
           id,
           attachmentManifestId: session.attachmentManifestId,
+          reviewConfigurationSha256: session.reviewConfigurationSha256,
           historyWarning: session.historyWarning,
         });
         setImmediate(() => void runSession(session));

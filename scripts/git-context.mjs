@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -42,7 +42,14 @@ async function collectUntrackedDiff(projectPath) {
     "--exclude-standard",
     "-z",
   ]).catch(() => "");
-  const paths = rawPaths.split("\0").filter(Boolean);
+  const paths = rawPaths
+    .split("\0")
+    .filter(Boolean)
+    .filter(
+      (path) =>
+        path !== ROUNDTABLE_GIT_CONTEXT_DIRECTORY &&
+        !path.startsWith(`${ROUNDTABLE_GIT_CONTEXT_DIRECTORY}/`),
+    );
   const included = [];
   const omitted = [];
   const patches = [];
@@ -185,7 +192,15 @@ export async function materializeGitContext(projectPath, workspace) {
     collectUntrackedDiff(projectPath),
   ]);
 
+  if (resolve(projectPath) === resolve(workspace)) {
+    throw new Error("Roundtable Git context must be materialized in a disposable workspace, not the source project.");
+  }
   const contextDirectory = join(workspace, ROUNDTABLE_GIT_CONTEXT_DIRECTORY);
+  // A project may contain a stale marker file from an older Roundtable build.
+  // The disposable copy is ours to normalize; the source project is never
+  // touched. Remove either a file or directory before creating the reserved
+  // context directory so mkdir cannot fail with EEXIST/ENOTDIR.
+  await rm(contextDirectory, { recursive: true, force: true });
   await mkdir(contextDirectory, { recursive: true });
   const metadata = {
     schemaVersion: 1,

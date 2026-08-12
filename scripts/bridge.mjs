@@ -22,6 +22,7 @@ import {
   ANTIGRAVITY_REQUIRED_FLAGS,
   antigravityModelEffort,
   buildAntigravityInvocationArgs,
+  parseAntigravityModels,
 } from "./antigravity-invocation.mjs";
 import { withAntigravityPromptFile } from "./antigravity-prompt-file.mjs";
 import { runBrokerCapableParticipant } from "./broker-controller.mjs";
@@ -65,6 +66,7 @@ import {
   DEFAULT_AGENT_TURN_TIMEOUT_MS,
   managedProcessTimeoutMessage,
 } from "./managed-process-policy.mjs";
+import { loadOrCreateMessageAttestationIdentity } from "./message-attestation-identity.mjs";
 
 const host = "127.0.0.1";
 const port = Number(process.env.ROUNDTABLE_BRIDGE_PORT || 4317);
@@ -73,6 +75,12 @@ const allowedOrigins = roundtableWebOrigins(webPort);
 const token =
   process.env.ROUNDTABLE_BRIDGE_TOKEN || randomBytes(24).toString("base64url");
 const homeDirectory = homedir();
+const messageAttestationIdentity =
+  await loadOrCreateMessageAttestationIdentity({
+    keyPath:
+      process.env.ROUNDTABLE_ATTESTATION_KEY_PATH ||
+      join(homeDirectory, ".roundtable", "message-attestation-ed25519.pem"),
+  });
 const codexHome = process.env.CODEX_HOME
   ? resolve(process.env.CODEX_HOME)
   : join(homeDirectory, ".codex");
@@ -81,11 +89,16 @@ const claudeHome = process.env.CLAUDE_CONFIG_DIR
   : join(homeDirectory, ".claude");
 const antigravityHome = join(homeDirectory, ".antigravity");
 const geminiHome = join(homeDirectory, ".gemini");
-const [codexProtectedPaths, claudeProtectedPaths, antigravityProtectedPaths] =
+const [codexProtectedPaths, claudeProtectedPaths, antigravityProtectedPaths, claudeWritableStatePaths] =
   await Promise.all([
     resolveCredentialPathAliases([codexHome]),
     resolveCredentialPathAliases([claudeHome]),
     resolveCredentialPathAliases([antigravityHome, geminiHome]),
+    resolveCredentialPathAliases([
+      join(homeDirectory, ".claude.json"),
+      join(claudeHome, ".credentials.json"),
+      join(claudeHome, ".claude.json"),
+    ]),
   ]);
 const agentEnvironmentOverrides = {
   codex: process.env.CODEX_HOME ? { CODEX_HOME: codexHome } : {},
@@ -199,21 +212,15 @@ const antigravityVersion = antigravityVersionResult.output;
 const codexHelp = codexHelpResult.output;
 const claudeHelp = claudeHelpResult.output;
 const antigravityHelp = antigravityHelpResult.output;
-const antigravityModels = (
-  antigravityModelsResult.success ? antigravityModelsResult.output : ""
-)
-  .split(/\r?\n/)
-  .map((line) => line.trim().replace(/^[-*]\s*/, ""))
-  .filter((line) =>
-    /^[A-Za-z0-9][A-Za-z0-9._:/[\]-]*-[A-Za-z0-9._:/[\]-]+$/.test(line),
-  );
+const antigravityModels = parseAntigravityModels(
+  antigravityModelsResult.success ? antigravityModelsResult.output : "",
+);
 const antigravityConfiguredModel =
   process.env.ANTIGRAVITY_MODEL || antigravityModels[0] || "";
 const antigravityConfiguredEffort =
   process.env.ANTIGRAVITY_EFFORT ||
   antigravityModelEffort(antigravityConfiguredModel) ||
-  "medium";
-const claudeAuthenticated = Boolean(claudeAuthResult.success);
+  "high";
 const codexCompatible = Boolean(
   codexPath && codexHelp.includes("--output-last-message"),
 );
@@ -222,6 +229,53 @@ const claudeCompatible = Boolean(
   ["--safe-mode", "--strict-mcp-config", "--permission-mode", "--effort"].every(
     (flag) => claudeHelp.includes(flag),
   ),
+);
+async function runClaudeLiveAuthenticationProbe(authenticationResult = claudeAuthResult) {
+  if (!claudePath || !claudeCompatible || !authenticationResult.success) {
+    return { output: "", success: false, reason: "" };
+  }
+  const claudeArgs = buildClaudeInvocationArgs({
+    model: claudeConfiguredModel,
+    effort: claudeConfiguredEffort,
+  });
+  let command = claudePath;
+  let args = claudeArgs;
+  if (sandboxExecPath) {
+    const [homeEntries, claudeHomeEntries] = await Promise.all([
+      readdir(homeDirectory, { withFileTypes: true })
+        .then((entries) => entries.map((entry) => entry.name))
+        .catch(() => []),
+      readdir(claudeHome, { withFileTypes: true })
+        .then((entries) => entries.map((entry) => entry.name))
+        .catch(() => []),
+    ]);
+    const profile = buildClaudeSandboxProfile({
+      home: homeDirectory,
+      claudeHome,
+      claudeHomeAliases: claudeProtectedPaths,
+      homeEntries,
+      claudeHomeEntries,
+      claudeHomeAncestorEntries,
+      additionalProtectedPaths: [...codexProtectedPaths, ...antigravityProtectedPaths],
+      writableCredentialStatePaths: claudeWritableStatePaths,
+      projectPath: process.cwd(),
+    });
+    command = sandboxExecPath;
+    args = ["-p", profile, claudePath, ...claudeArgs];
+  }
+  return runBoundedProbe({
+    command,
+    args,
+    environment: agentEnvironment("claude"),
+    input: "Reply with exactly ROUNDTABLE_READY.",
+    timeoutMs: 30_000,
+    cwd: tmpdir(),
+  });
+}
+
+const claudeLiveAuthResult = await runClaudeLiveAuthenticationProbe();
+const claudeAuthenticated = Boolean(
+  claudeAuthResult.success && claudeLiveAuthResult.success,
 );
 const antigravityCompatible = Boolean(
   antigravityPath &&
@@ -256,10 +310,14 @@ const codexGuardProbe =
       );
 const codexSafeCompatible = Boolean(codexCompatible && codexGuardProbe.success);
 
-function claudeAvailabilityDiagnostic(claudeAuthenticationResult) {
+function claudeAvailabilityDiagnostic(
+  claudeAuthenticationResult,
+  claudeLiveAuthenticationResult = claudeLiveAuthResult,
+) {
   const infrastructureDiagnostic = firstProbeFailureDiagnostic([
     ["Claude capability probe", claudeHelpResult],
     ["Claude authentication metadata probe", claudeAuthenticationResult],
+    ["Claude live authentication probe", claudeLiveAuthenticationResult],
   ]);
   if (infrastructureDiagnostic) return infrastructureDiagnostic;
   const capabilityDiagnostic = availabilityDiagnostic({
@@ -272,6 +330,9 @@ function claudeAvailabilityDiagnostic(claudeAuthenticationResult) {
   if (capabilityDiagnostic) return capabilityDiagnostic;
   if (!claudeAuthenticationResult.success) {
     return "Claude is unavailable for now. Roundtable will continue with the available participants and recheck Claude automatically before the next discussion.";
+  }
+  if (!claudeLiveAuthenticationResult.success) {
+    return "Claude reports a saved login, but a real inference request was rejected. Run `claude auth login`, then start a new discussion; Roundtable will verify the refreshed session before preregistration.";
   }
   return "";
 }
@@ -372,8 +433,14 @@ async function refreshUnavailableParticipantHealth(roles = []) {
     ["auth", "status"],
     "claude",
   );
-  health.claude.available = Boolean(claudeCompatible && refreshedAuth.success);
-  health.claude.diagnostic = claudeAvailabilityDiagnostic(refreshedAuth);
+  const refreshedLiveAuth = await runClaudeLiveAuthenticationProbe(refreshedAuth);
+  health.claude.available = Boolean(
+    claudeCompatible && refreshedAuth.success && refreshedLiveAuth.success,
+  );
+  health.claude.diagnostic = claudeAvailabilityDiagnostic(
+    refreshedAuth,
+    refreshedLiveAuth,
+  );
   return health;
 }
 
@@ -628,9 +695,10 @@ async function runCodex(session, prompt, purpose) {
 }
 
 async function runClaudeModel(session, prompt, role = "claude") {
-  // The real participant request is the only live authentication check. An
-  // extra prompt probe doubled provider traffic and could churn a healthy
-  // persisted session before the discussion even began.
+  // Bridge startup performs one bounded real request before health can mark
+  // Claude available. `claude auth status` can remain green after the OAuth
+  // session has expired server-side, which otherwise invalidates a sealed room
+  // only after another participant has spent minutes producing evidence.
   const workingDirectory = await prepareParticipantInvocation(session, role);
   const args = buildClaudeInvocationArgs({
     model: role === "fable" ? session.fableModel : session.claudeModel,
@@ -661,6 +729,7 @@ async function runClaudeModel(session, prompt, role = "claude") {
         ...codexProtectedPaths,
         ...antigravityProtectedPaths,
       ],
+      writableCredentialStatePaths: claudeWritableStatePaths,
       projectPath: session.projectPath,
       siblingRoots,
     });
@@ -851,6 +920,12 @@ const agentRunner = {
       onStage,
     });
   },
+  // Do not probe Fable with a throwaway model request. Fable and Claude share
+  // one persisted provider session, and a readiness inference can rotate that
+  // session immediately before Claude's sealed opening. The health check owns
+  // CLI authentication readiness; Fable's only model invocation is its final
+  // audit after every discussion round, which also keeps the advertised
+  // "last round only" contract literal.
   run({ session, role, prompt, purpose }) {
     if (role === "codex") return runCodex(session, prompt, purpose);
     if (role === "claude" || role === "fable") {
@@ -919,6 +994,7 @@ const { server, sessions, shutdown } = createBridge({
   resolveProject,
   historyStore,
   allowedOrigins,
+  messageAttestationKeys: messageAttestationIdentity.keys,
 });
 
 let shutdownStarted = false;
